@@ -1,0 +1,35 @@
+{
+  "name": "apnaservo-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Production backend for ApnaServo user and partner apps.",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20 <25"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "check": "powershell -NoProfile -Command \"Get-ChildItem src -Recurse -Filter *.js | ForEach-Object { node --check $_.FullName }\"",
+    "check:unix": "find src -name '*.js' -print0 | xargs -0 -n1 node --check"
+  },
+  "dependencies": {
+    "cloudinary": "^2.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.2.1",
+    "firebase-admin": "^10.3.0",
+    "helmet": "^8.1.0",
+    "mongodb": "^7.2.0",
+    "mongoose": "^8.20.1",
+    "morgan": "^1.10.1",
+    "multer": "^2.0.2",
+    "razorpay": "^2.9.6",
+    "socket.io": "^4.2.0",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}
