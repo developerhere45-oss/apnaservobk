@@ -239,25 +239,41 @@ async function updateStatus(req, res, next) {
     const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
     const user = await User.findOne({ firebaseUid: req.auth.uid });
     const query = { _id: req.params.bookingId };
+    const finalAmount = Number(req.body?.finalAmount || 0);
     if (partner) {
       query.partnerId = partner._id;
-    } else if (user && nextStatus === "cancelled") {
+    } else if (user && ["cancelled", "completed"].includes(nextStatus)) {
       query.userId = user._id;
+      if (nextStatus === "completed") {
+        query.status = "amount_pending";
+      }
     } else {
       return res.status(403).json({ message: "Not allowed to update this booking" });
+    }
+
+    if (nextStatus === "amount_pending") {
+      if (!partner) {
+        return res.status(403).json({ message: "Only partner can request final amount" });
+      }
+      if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
+        return res.status(400).json({ message: "Final amount required" });
+      }
     }
 
     const update = {
       $set: { status: nextStatus },
       $push: { statusTimeline: { status: nextStatus, at: new Date(), by: partner ? "partner" : "user" } }
     };
+    if (nextStatus === "amount_pending") {
+      update.$set.finalAmount = finalAmount;
+      update.$set.paymentStatus = "pending";
+      update.$set.amountRequestedAt = new Date();
+    }
     if (nextStatus === "completed") {
       update.$set.completedAt = new Date();
       update.$set.paymentStatus = "paid";
-      if (partner) {
-        await Partner.findByIdAndUpdate(partner._id, {
-          $inc: { totalJobs: 1, earnings: Number(req.body?.finalAmount || 0) }
-        });
+      if (finalAmount > 0) {
+        update.$set.finalAmount = finalAmount;
       }
     }
 
@@ -266,15 +282,37 @@ async function updateStatus(req, res, next) {
       return res.status(404).json({ message: "Booking not found" });
     }
 
+    if (nextStatus === "completed" && booking.partnerId) {
+      await Partner.findByIdAndUpdate(booking.partnerId, {
+        $inc: { totalJobs: 1, earnings: Number(booking.finalAmount || finalAmount || booking.price || 0) }
+      });
+    }
+
     emitBookingStatusUpdate(booking);
 
     const userForNotification = await User.findById(booking.userId);
-    if (["on_the_way", "completed"].includes(nextStatus)) {
+    if (["on_the_way", "amount_pending", "completed"].includes(nextStatus)) {
       await sendNotification({
         token: userForNotification?.fcmToken,
-        title: nextStatus === "completed" ? "Booking Completed" : "Partner On The Way",
-        body: `${booking.serviceName} is ${nextStatus.replace(/_/g, " ")}`,
+        title: nextStatus === "completed"
+          ? "Booking Completed"
+          : nextStatus === "amount_pending"
+            ? "Confirm Final Amount"
+            : "Partner On The Way",
+        body: nextStatus === "amount_pending"
+          ? `Partner entered Rs ${booking.finalAmount}. Please confirm.`
+          : `${booking.serviceName} is ${nextStatus.replace(/_/g, " ")}`,
         data: { type: "booking:status_update", status: nextStatus, bookingId: booking._id }
+      });
+    }
+
+    if (!partner && nextStatus === "completed" && booking.partnerId) {
+      const partnerForNotification = await Partner.findById(booking.partnerId);
+      await sendNotification({
+        token: partnerForNotification?.fcmToken,
+        title: "Payment Confirmed",
+        body: `Customer confirmed Rs ${booking.finalAmount || booking.price || 0}`,
+        data: { type: "booking:status_update", status: "completed", bookingId: booking._id }
       });
     }
 

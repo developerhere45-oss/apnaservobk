@@ -22,6 +22,7 @@ function serializeBooking(booking) {
     lng: location.coordinates ? location.coordinates[0] : 0,
     status: doc.status,
     price: doc.price,
+    finalAmount: doc.finalAmount || 0,
     paymentStatus: doc.paymentStatus,
     slot: doc.slot,
     userName: doc.userSnapshot?.name || "",

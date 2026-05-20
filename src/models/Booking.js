@@ -8,6 +8,7 @@ const BOOKING_STATUSES = [
   "on_the_way",
   "arrived",
   "started",
+  "amount_pending",
   "completed",
   "cancelled"
 ];
@@ -33,6 +34,7 @@ const bookingSchema = new mongoose.Schema(
     location: { type: pointSchema, default: () => ({ type: "Point", coordinates: [91.7362, 26.1445] }) },
     status: { type: String, enum: BOOKING_STATUSES, default: "pending", index: true },
     price: { type: Number, default: 0 },
+    finalAmount: { type: Number, default: 0 },
     paymentStatus: { type: String, enum: ["pending", "paid", "failed", "refunded"], default: "pending" },
     requestedPartners: [{ type: mongoose.Schema.Types.ObjectId, ref: "Partner" }],
     rejectedPartners: [{ type: mongoose.Schema.Types.ObjectId, ref: "Partner" }],
