@@ -9,5 +9,6 @@ router.post("/fcm-token", controller.saveFcmToken);
 router.post("/online", controller.setOnline);
 router.post("/offline", controller.setOnline);
 router.patch("/location", controller.updateLocation);
+router.get("/statement", controller.statement);
 
 module.exports = router;
