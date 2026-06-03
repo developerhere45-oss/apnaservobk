@@ -3,7 +3,7 @@ const { z } = require("zod");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
 const { Booking, BOOKING_STATUSES } = require("../models/Booking");
-const { normalizeServiceCategory, serviceLabel } = require("../utils/serviceCategory");
+const { normalizeServiceCategory, serviceCategoryVariants, serviceLabel } = require("../utils/serviceCategory");
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const sendNotification = require("../utils/sendNotification");
 const {
@@ -31,6 +31,10 @@ const createBookingSchema = z.object({
 
 function bookingCode() {
   return `AS${Date.now().toString().slice(-8)}`;
+}
+
+function partnerCategoryVariants(partner) {
+  return [...new Set((partner.serviceCategory || []).flatMap(serviceCategoryVariants))];
 }
 
 async function getOrCreateUser(req, body) {
@@ -134,7 +138,7 @@ async function listPartnerBookings(req, res, next) {
     const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
     if (!partner) return res.json({ bookings: [] });
 
-    const categories = partner.serviceCategory || [];
+    const categories = partnerCategoryVariants(partner);
     const bookings = await Booking.find({
       $or: [
         { partnerId: partner._id },
@@ -163,7 +167,7 @@ async function acceptBooking(req, res, next) {
       status: { $in: ["pending", "sent_to_partner"] },
       partnerId: null,
       rejectedPartners: { $ne: partner._id },
-      serviceCategory: { $in: partner.serviceCategory || [] }
+      serviceCategory: { $in: partnerCategoryVariants(partner) }
     };
 
     const booking = await Booking.findOneAndUpdate(
@@ -240,6 +244,7 @@ async function updateStatus(req, res, next) {
     const user = await User.findOne({ firebaseUid: req.auth.uid });
     const query = { _id: req.params.bookingId };
     const finalAmount = Number(req.body?.finalAmount || 0);
+
     if (partner) {
       query.partnerId = partner._id;
     } else if (user && ["cancelled", "completed"].includes(nextStatus)) {
@@ -264,11 +269,13 @@ async function updateStatus(req, res, next) {
       $set: { status: nextStatus },
       $push: { statusTimeline: { status: nextStatus, at: new Date(), by: partner ? "partner" : "user" } }
     };
+
     if (nextStatus === "amount_pending") {
       update.$set.finalAmount = finalAmount;
       update.$set.paymentStatus = "pending";
       update.$set.amountRequestedAt = new Date();
     }
+
     if (nextStatus === "completed") {
       update.$set.completedAt = new Date();
       update.$set.paymentStatus = "paid";
