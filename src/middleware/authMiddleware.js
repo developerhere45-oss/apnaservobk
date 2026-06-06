@@ -2,6 +2,27 @@ const { admin } = require("../config/firebase");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
 
+function getAdminSecret() {
+  return process.env.ADMIN_API_SECRET || (process.env.NODE_ENV !== "production" ? "apnaservo-admin-dev-secret" : "");
+}
+
+function verifyAdminAccess(req, res, next) {
+  const secret = getAdminSecret();
+  const provided =
+    req.headers["x-admin-secret"] ||
+    (req.headers.authorization || "").replace(/^Admin\s+/i, "");
+
+  if (secret && provided && String(provided) === String(secret)) {
+    req.adminAuth = {
+      role: "admin",
+      source: "admin-secret"
+    };
+    return next();
+  }
+
+  return verifyFirebaseToken(req, res, next);
+}
+
 async function verifyFirebaseToken(req, res, next) {
   try {
     const header = req.headers.authorization || "";
@@ -46,6 +67,7 @@ async function attachPartner(req, res, next) {
 
 module.exports = {
   verifyFirebaseToken,
+  verifyAdminAccess,
   attachUser,
   attachPartner
 };

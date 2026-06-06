@@ -1,8 +1,36 @@
 const { admin } = require("../config/firebase");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
+const crypto = require("crypto");
 
 let io;
+
+function getAdminSecret() {
+  return process.env.ADMIN_API_SECRET || (process.env.NODE_ENV !== "production" ? "apnaservo-admin-dev-secret" : "");
+}
+
+function safeEqual(a, b) {
+  const left = Buffer.from(String(a));
+  const right = Buffer.from(String(b));
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function verifyAdminRealtimeToken(token) {
+  const secret = getAdminSecret();
+  if (!secret || !token) return false;
+
+  if (safeEqual(token, secret)) {
+    return process.env.NODE_ENV !== "production";
+  }
+
+  const [expiresAt, signature] = String(token).split(".");
+  const expiry = Number(expiresAt);
+  if (!Number.isFinite(expiry) || expiry < Date.now() || !signature) return false;
+
+  const expected = crypto.createHmac("sha256", secret).update(String(expiresAt)).digest("hex");
+  return safeEqual(signature, expected);
+}
 
 function serializeBooking(booking) {
   const doc = typeof booking.toObject === "function" ? booking.toObject() : booking;
@@ -39,6 +67,16 @@ async function identifySocket(socket, next) {
   try {
     const token = socket.handshake.auth?.token || socket.handshake.headers.authorization?.replace("Bearer ", "");
     const role = socket.handshake.auth?.role || socket.handshake.query?.role || "";
+
+    if (role === "admin") {
+      const adminToken = socket.handshake.auth?.adminToken || socket.handshake.query?.adminToken || "";
+      if (!verifyAdminRealtimeToken(adminToken)) {
+        return next(new Error("Admin realtime token invalid"));
+      }
+      socket.role = "admin";
+      socket.join("admin");
+      return next();
+    }
 
     if (!token) {
       return next(new Error("Firebase token missing"));
@@ -84,6 +122,10 @@ function initBookingSocket(httpServer) {
   io.use(identifySocket);
 
   io.on("connection", (socket) => {
+    if (socket.role === "admin") {
+      socket.emit("admin:connected", { ok: true, at: new Date().toISOString() });
+    }
+
     socket.on("partner:online", async (payload = {}) => {
       if (!socket.partner) return;
       socket.partner.isOnline = true;
@@ -93,6 +135,13 @@ function initBookingSocket(httpServer) {
       await socket.partner.save();
       socket.join(`partner:${socket.partner._id}`);
       socket.emit("partner:online", { ok: true });
+      io.to("admin").emit("partner:online", {
+        partnerId: String(socket.partner._id),
+        name: socket.partner.name,
+        serviceCategory: socket.partner.serviceCategory,
+        city: socket.partner.city,
+        isOnline: true
+      });
     });
 
     socket.on("partner:offline", async () => {
@@ -100,6 +149,11 @@ function initBookingSocket(httpServer) {
       socket.partner.isOnline = false;
       await socket.partner.save();
       socket.emit("partner:offline", { ok: true });
+      io.to("admin").emit("partner:offline", {
+        partnerId: String(socket.partner._id),
+        name: socket.partner.name,
+        isOnline: false
+      });
     });
 
     socket.on("partner:location_update", async (payload = {}) => {
@@ -109,6 +163,12 @@ function initBookingSocket(httpServer) {
       if (Number.isFinite(lat) && Number.isFinite(lng)) {
         socket.partner.location = { type: "Point", coordinates: [lng, lat] };
         await socket.partner.save();
+        io.to("admin").emit("partner:location_update", {
+          partnerId: String(socket.partner._id),
+          name: socket.partner.name,
+          lat,
+          lng
+        });
       }
     });
   });
@@ -124,6 +184,14 @@ function emitNewBookingToPartners(booking, partners) {
   }
   io.to(`service:${booking.serviceCategory}`).emit("booking:new_request", payload);
   io.to(`city:${booking.city}`).emit("booking:new_request", payload);
+  io.to("admin").emit("booking:new_request", payload);
+  io.to("admin").emit("admin:activity", {
+    type: "booking:new_request",
+    title: "New booking created",
+    note: booking.bookingCode || String(booking._id),
+    at: new Date().toISOString(),
+    booking: payload
+  });
 }
 
 function emitBookingAccepted(booking) {
@@ -136,11 +204,14 @@ function emitBookingAccepted(booking) {
   for (const partnerId of booking.requestedPartners || []) {
     io.to(`partner:${partnerId}`).emit("booking:status_update", payload);
   }
+  io.to("admin").emit("booking:accepted", payload);
+  io.to("admin").emit("booking:status_update", payload);
 }
 
 function emitBookingRejected(booking, partnerId) {
   if (!io) return;
   io.to(`partner:${partnerId}`).emit("booking:rejected", serializeBooking(booking));
+  io.to("admin").emit("booking:rejected", serializeBooking(booking));
 }
 
 function emitBookingStatusUpdate(booking) {
@@ -150,6 +221,7 @@ function emitBookingStatusUpdate(booking) {
   if (booking.partnerId) {
     io.to(`partner:${booking.partnerId}`).emit("booking:status_update", payload);
   }
+  io.to("admin").emit("booking:status_update", payload);
 }
 
 function getIO() {

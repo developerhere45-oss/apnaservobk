@@ -39,6 +39,7 @@ NODE_ENV=production
 PORT=5000
 CLIENT_ORIGIN=*
 MONGODB_URI=mongodb+srv://...
+ADMIN_API_SECRET=use-the-same-secret-as-admin-panel-ADMIN_BACKEND_SECRET
 FIREBASE_PROJECT_ID=apna-servo
 FIREBASE_SERVICE_ACCOUNT_JSON={...one-line firebase admin json...}
 DEFAULT_PARTNER_RADIUS_KM=25

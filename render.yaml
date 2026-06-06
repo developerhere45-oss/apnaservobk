@@ -15,6 +15,8 @@ services:
         value: "*"
       - key: DEFAULT_PARTNER_RADIUS_KM
         value: "25"
+      - key: ADMIN_API_SECRET
+        sync: false
       - key: MONGODB_URI
         sync: false
       - key: FIREBASE_PROJECT_ID
