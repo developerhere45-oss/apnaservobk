@@ -20,13 +20,9 @@ copy .env.example .env
 npm start
 ```
 
-For a physical Android phone connected by USB during local testing:
+For a physical Android phone connected by USB during local testing, expose the backend with HTTPS tunneling or a cloud dev URL, then rebuild the apps with that HTTPS URL.
 
-```powershell
-adb reverse tcp:5000 tcp:5000
-```
-
-The debug apps default to `http://127.0.0.1:5000`, which works through `adb reverse`.
+Production builds reject cleartext `http://` traffic.
 
 ## Cloud Setup
 
@@ -37,11 +33,13 @@ Required environment variables on the cloud host:
 ```text
 NODE_ENV=production
 PORT=5000
-CLIENT_ORIGIN=*
+CLIENT_ORIGIN=https://your-admin-domain.example
 MONGODB_URI=mongodb+srv://...
-ADMIN_API_SECRET=use-the-same-secret-as-admin-panel-ADMIN_BACKEND_SECRET
 FIREBASE_PROJECT_ID=apna-servo
 FIREBASE_SERVICE_ACCOUNT_JSON={...one-line firebase admin json...}
+ENCRYPTION_KEY=base64-32-byte-key
+ADMIN_FIREBASE_UIDS=comma,separated,uids
+ADMIN_EMAILS=admin@example.com
 DEFAULT_PARTNER_RADIUS_KM=25
 CLOUDINARY_CLOUD_NAME=
 CLOUDINARY_API_KEY=
@@ -51,6 +49,13 @@ RAZORPAY_KEY_SECRET=
 ```
 
 Do not use `FIREBASE_SERVICE_ACCOUNT_PATH` in cloud hosting because the cloud server cannot read files from your laptop.
+Do not use `CLIENT_ORIGIN=*` in production. Set it to your exact admin/web origins as a comma-separated allow-list.
+
+Generate `ENCRYPTION_KEY` once and keep it safely backed up:
+
+```powershell
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
 
 Generate `FIREBASE_SERVICE_ACCOUNT_JSON` from your Firebase admin SDK file:
 

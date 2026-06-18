@@ -2,25 +2,14 @@ const { admin } = require("../config/firebase");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
 
-function getAdminSecret() {
-  return process.env.ADMIN_API_SECRET || (process.env.NODE_ENV !== "production" ? "apnaservo-admin-dev-secret" : "");
-}
-
-function verifyAdminAccess(req, res, next) {
-  const secret = getAdminSecret();
-  const provided =
-    req.headers["x-admin-secret"] ||
-    (req.headers.authorization || "").replace(/^Admin\s+/i, "");
-
-  if (secret && provided && String(provided) === String(secret)) {
-    req.adminAuth = {
-      role: "admin",
-      source: "admin-secret"
-    };
-    return next();
-  }
-
-  return verifyFirebaseToken(req, res, next);
+function csvSet(value, options = {}) {
+  return new Set(String(value || "")
+    .split(",")
+    .map((item) => {
+      const trimmed = item.trim();
+      return options.lowercase ? trimmed.toLowerCase() : trimmed;
+    })
+    .filter(Boolean));
 }
 
 async function verifyFirebaseToken(req, res, next) {
@@ -31,11 +20,19 @@ async function verifyFirebaseToken(req, res, next) {
       return res.status(401).json({ message: "Firebase ID token missing" });
     }
 
-    const decoded = await admin.auth().verifyIdToken(token);
+    const decoded = await admin.auth().verifyIdToken(token, true);
+    if (!decoded.uid) {
+      return res.status(401).json({ message: "Invalid Firebase token" });
+    }
     req.auth = decoded;
+    req.authType = "firebase_jwt";
     return next();
   } catch (error) {
-    return res.status(401).json({ message: "Invalid Firebase token", detail: error.message });
+    const payload = { message: "Invalid Firebase token" };
+    if (process.env.NODE_ENV !== "production") {
+      payload.detail = error.message;
+    }
+    return res.status(401).json(payload);
   }
 }
 
@@ -65,9 +62,55 @@ async function attachPartner(req, res, next) {
   }
 }
 
+function requireAdmin(req, res, next) {
+  const allowedUids = csvSet(process.env.ADMIN_FIREBASE_UIDS);
+  const allowedEmails = csvSet(process.env.ADMIN_EMAILS, { lowercase: true });
+  if (!allowedUids.size && !allowedEmails.size) {
+    return res.status(403).json({ message: "Admin access is not configured" });
+  }
+  const uidAllowed = allowedUids.has(req.auth.uid);
+  const emailAllowed = req.auth.email_verified === true
+    && req.auth.email
+    && allowedEmails.has(String(req.auth.email).toLowerCase());
+
+  if (!uidAllowed && !emailAllowed) {
+    return res.status(403).json({ message: "Admin access required" });
+  }
+  return next();
+}
+
+function timingSafeEqualString(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""));
+  const rightBuffer = Buffer.from(String(right || ""));
+  if (!leftBuffer.length || leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+  return require("crypto").timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function verifyAdminSecret(req, res, next) {
+  const configured = String(process.env.ADMIN_API_SECRET || "").trim();
+  const supplied = String(req.headers["x-admin-secret"] || "").trim();
+  if (configured && timingSafeEqualString(supplied, configured)) {
+    req.auth = {
+      uid: "admin-dashboard",
+      email: "admin-dashboard@apnaservo.internal",
+      email_verified: true
+    };
+    req.authType = "admin_secret";
+    return next();
+  }
+
+  return verifyFirebaseToken(req, res, (error) => {
+    if (error) return next(error);
+    return requireAdmin(req, res, next);
+  });
+}
+
 module.exports = {
   verifyFirebaseToken,
-  verifyAdminAccess,
+  verifyAdminSecret,
+  requireAdmin,
   attachUser,
   attachPartner
 };

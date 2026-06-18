@@ -2,11 +2,13 @@ require("dotenv").config();
 
 const http = require("http");
 const express = require("express");
+const mongoose = require("mongoose");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 
+const { allowedCorsOrigins, validateEnv } = require("./config/env");
 const connectDb = require("./config/db");
 const { initFirebase } = require("./config/firebase");
 const { initCloudinary } = require("./config/cloudinary");
@@ -15,20 +17,51 @@ const partnerRoutes = require("./routes/partnerRoutes");
 const bookingRoutes = require("./routes/bookingRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
+const reviewRoutes = require("./routes/reviewRoutes");
 const { initBookingSocket } = require("./sockets/bookingSocket");
+const cache = require("./config/cache");
+const { cdnFriendlyHeaders } = require("./middleware/cdnHeaders");
+const { requireHttpsInProduction } = require("./middleware/httpsOnly");
+const { rejectPlainSensitiveFields } = require("./middleware/securityGuard");
 const { notFound, errorHandler } = require("./middleware/errorHandler");
 
 const app = express();
 const server = http.createServer(app);
 
+validateEnv();
 initFirebase();
 initCloudinary();
 initBookingSocket(server);
 
-app.use(helmet());
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || "*" }));
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
+server.keepAliveTimeout = Number(process.env.SERVER_KEEP_ALIVE_TIMEOUT_MS || 65000);
+server.headersTimeout = Number(process.env.SERVER_HEADERS_TIMEOUT_MS || 66000);
+server.requestTimeout = Number(process.env.SERVER_REQUEST_TIMEOUT_MS || 30000);
+app.use(requireHttpsInProduction);
+app.use(helmet({
+  hsts: process.env.NODE_ENV === "production"
+    ? { maxAge: 15552000, includeSubDomains: true, preload: true }
+    : false
+}));
+app.use(cdnFriendlyHeaders);
+app.use(cors({
+  origin(origin, callback) {
+    const allowed = allowedCorsOrigins();
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (allowed.includes("*") && process.env.NODE_ENV !== "production") {
+      return callback(null, true);
+    }
+    return callback(null, allowed.includes(origin));
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
+app.use(rejectPlainSensitiveFields);
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 app.use(
   rateLimit({
@@ -48,11 +81,22 @@ app.get("/health", (req, res) => {
   });
 });
 
+app.get("/ready", (req, res) => {
+  const mongoReady = mongoose.connection.readyState === 1;
+  res.status(mongoReady ? 200 : 503).json({
+    ok: mongoReady,
+    mongo: mongoReady ? "connected" : "not_ready",
+    cache: cache.status()
+  });
+});
+
 app.use("/api/users", userRoutes);
 app.use("/api/partner", partnerRoutes);
 app.use("/api/partners", partnerRoutes);
 app.use("/api/bookings", bookingRoutes);
 app.use("/api/payments", paymentRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/reviews", reviewRoutes);
 app.use("/api/admin", adminRoutes);
 
 app.use(notFound);
@@ -71,6 +115,18 @@ if (require.main === module) {
     console.error("Failed to start ApnaServo backend:", error);
     process.exit(1);
   });
+
+  const shutdown = async (signal) => {
+    console.log(`${signal} received, closing ApnaServo backend`);
+    server.close(async () => {
+      await mongoose.connection.close(false);
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10000).unref();
+  };
+
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
 }
 
 module.exports = {

@@ -1,220 +1,268 @@
 const User = require("../models/User");
 const Partner = require("../models/Partner");
-const Service = require("../models/Service");
-const Payment = require("../models/Payment");
-const Review = require("../models/Review");
 const { Booking } = require("../models/Booking");
+const Service = require("../models/Service");
+const Review = require("../models/Review");
+const ReviewDispute = require("../models/ReviewDispute");
+const InAppNotification = require("../models/InAppNotification");
+const cache = require("../config/cache");
+const { recomputePartnerRating } = require("../utils/ratingAggregation");
 
-const STATUS_LABELS = {
-  pending: "Pending",
-  sent_to_partner: "Sent To Partner",
-  accepted: "Confirmed",
-  on_the_way: "On The Way",
-  arrived: "Arrived",
-  started: "Work Started",
-  amount_pending: "Payment Pending",
-  completed: "Completed",
-  cancelled: "Cancelled",
-  rejected: "Rejected"
-};
-
-function formatStatus(status) {
-  return STATUS_LABELS[status] || String(status || "Pending");
+function iso(value) {
+  return value ? new Date(value).toISOString() : "";
 }
 
-function serviceLabel(category) {
-  const map = {
-    ac: "AC Repair",
-    ac_repair: "AC Repair",
-    electrician: "Electrician",
-    plumber: "Plumbing",
-    plumbing: "Plumbing",
-    cleaning: "Home Cleaning",
-    pest_control: "Pest Control",
-    roadside: "Roadside Assistance",
-    carpenter: "Carpenter",
-    painting: "Painting",
-    interior: "Interior Design"
-  };
-  return map[category] || category || "Service";
+function money(value) {
+  return Number(value || 0);
 }
 
-function bookingAmount(booking) {
-  return Number(booking.finalAmount || booking.price || 0);
-}
-
-function bookingRow(booking) {
-  return {
-    id: booking.bookingCode || `#${String(booking._id).slice(-6).toUpperCase()}`,
-    customer: booking.userSnapshot?.name || "Customer",
-    service: booking.serviceName || serviceLabel(booking.serviceCategory),
-    partner: booking.partnerSnapshot?.name || "Unassigned",
-    status: formatStatus(booking.status),
-    amount: bookingAmount(booking),
-    time: booking.createdAt ? booking.createdAt.toISOString() : "",
-    city: booking.city || "Guwahati"
-  };
-}
-
-function partnerRow(partner) {
-  return {
-    id: partner.partnerCode || String(partner._id).slice(-8).toUpperCase(),
-    name: partner.name,
-    phone: partner.phone,
-    skills: (partner.serviceCategory || []).map(serviceLabel).join(", "),
-    status: partner.isVerified ? "Approved" : "Pending",
-    online: partner.isOnline ? "Online" : "Offline",
-    rating: Number(partner.rating || 0).toFixed(1),
-    jobs: partner.totalJobs || 0,
-    earnings: partner.earnings || 0
-  };
+function id(value) {
+  return value ? String(value) : "";
 }
 
 async function dashboard(req, res, next) {
   try {
-    const since = new Date();
-    since.setDate(since.getDate() - 7);
+    const cached = await cache.getJson("admin:dashboard:v1");
+    if (cached) {
+      res.setHeader("X-Cache", "HIT");
+      return res.json(cached);
+    }
 
-    const [
-      users,
-      partners,
-      activePartners,
-      bookings,
-      activeBookings,
-      completedBookings,
-      cancelledBookings,
-      pendingVerifications,
-      paidPayments,
-      recentBookings,
-      pendingPartners,
-      serviceAgg,
-      trendAgg
-    ] = await Promise.all([
+    const [users, partners, bookings, pendingBookings] = await Promise.all([
       User.countDocuments(),
       Partner.countDocuments(),
-      Partner.countDocuments({ isOnline: true }),
       Booking.countDocuments(),
-      Booking.countDocuments({ status: { $in: ["pending", "sent_to_partner", "accepted", "on_the_way", "arrived", "started"] } }),
-      Booking.countDocuments({ status: "completed" }),
-      Booking.countDocuments({ status: "cancelled" }),
-      Partner.countDocuments({ isVerified: false }),
-      Payment.aggregate([{ $match: { status: "paid" } }, { $group: { _id: null, total: { $sum: "$amount" } } }]),
-      Booking.find().sort({ createdAt: -1 }).limit(8).lean(),
-      Partner.find({ isVerified: false }).sort({ createdAt: -1 }).limit(5).lean(),
-      Booking.aggregate([{ $group: { _id: "$serviceCategory", value: { $sum: 1 } } }, { $sort: { value: -1 } }, { $limit: 7 }]),
-      Booking.aggregate([
-        { $match: { createdAt: { $gte: since } } },
-        { $group: { _id: { $dateToString: { format: "%d %b", date: "$createdAt" } }, bookings: { $sum: 1 }, revenue: { $sum: { $ifNull: ["$finalAmount", "$price"] } } } },
-        { $sort: { _id: 1 } }
-      ])
+      Booking.countDocuments({ status: { $in: ["pending", "sent_to_partner"] } })
     ]);
 
-    const revenue = Number(paidPayments[0]?.total || recentBookings.reduce((sum, booking) => sum + bookingAmount(booking), 0));
-    const totalCategory = serviceAgg.reduce((sum, item) => sum + item.value, 0) || 1;
-    const palette = ["#f92b74", "#8b5cf6", "#22b8cf", "#35d39b", "#f6c85f", "#f59e8b", "#fac8d7"];
+    const payload = {
+      users,
+      partners,
+      bookings,
+      pendingBookings
+    };
+    await cache.setJson("admin:dashboard:v1", payload, 10);
+    res.setHeader("X-Cache", "MISS");
+    return res.json(payload);
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function listResourceRows(req, res, next) {
+  try {
+    const resource = String(req.params.resource || "").trim().toLowerCase();
+    const limit = Math.min(Number(req.query.limit || 100), 250);
+    let rows = [];
+
+    if (resource === "users") {
+      const users = await User.find().sort({ createdAt: -1 }).limit(limit);
+      rows = users.map((user) => ({
+        id: id(user._id),
+        name: user.name,
+        phone: user.phone,
+        email: user.email,
+        city: user.city,
+        status: user.accountStatus || "active",
+        risk: user.bookingRiskStatus,
+        createdAt: iso(user.createdAt)
+      }));
+    } else if (resource === "partners") {
+      const partners = await Partner.find().sort({ createdAt: -1 }).limit(limit);
+      rows = partners.map((partner) => ({
+        id: id(partner._id),
+        code: partner.partnerCode || "",
+        name: partner.name,
+        phone: partner.phone,
+        services: (partner.serviceCategory || []).join(", "),
+        online: Boolean(partner.isOnline),
+        kyc: partner.kycStatus,
+        trust: partner.trustStatus,
+        status: partner.accountStatus || "active",
+        rating: Number(partner.rating || 0)
+      }));
+    } else if (resource === "bookings" || resource === "quotes") {
+      const bookings = await Booking.find().sort({ createdAt: -1 }).limit(limit);
+      rows = bookings.map((booking) => ({
+        id: id(booking._id),
+        bookingCode: booking.bookingCode,
+        service: booking.serviceName || booking.serviceCategory,
+        customer: booking.userSnapshot?.name || "",
+        partner: booking.partnerSnapshot?.name || "",
+        status: booking.status,
+        quoteStatus: booking.quoteStatus || "none",
+        amount: money(booking.finalAmount || booking.quoteAmount || booking.price),
+        city: booking.city,
+        createdAt: iso(booking.createdAt)
+      }));
+    } else if (resource === "services") {
+      const services = await Service.find().sort({ createdAt: -1 }).limit(limit);
+      rows = services.map((service) => ({
+        id: id(service._id),
+        name: service.name,
+        category: service.serviceCategory || "",
+        active: service.isActive !== false,
+        status: service.status || "active",
+        createdAt: iso(service.createdAt)
+      }));
+    } else if (resource === "complaints") {
+      const disputes = await ReviewDispute.find().sort({ createdAt: -1 }).limit(limit);
+      rows = disputes.map((dispute) => ({
+        id: id(dispute._id),
+        bookingCode: dispute.bookingCode || "",
+        reason: dispute.reason,
+        status: dispute.status,
+        priority: "review",
+        createdAt: iso(dispute.createdAt)
+      }));
+    } else if (resource === "notifications") {
+      const notifications = await InAppNotification.find().sort({ createdAt: -1 }).limit(limit);
+      rows = notifications.map((notification) => ({
+        id: id(notification._id),
+        title: notification.title,
+        role: notification.recipientRole,
+        category: notification.category,
+        priority: notification.priority,
+        status: notification.readAt ? "read" : "unread",
+        createdAt: iso(notification.createdAt)
+      }));
+    } else if (["banners", "analytics", "audit-logs", "settings"].includes(resource)) {
+      rows = [];
+    } else {
+      return res.status(404).json({ message: "Resource not found" });
+    }
+
+    return res.json({ resource, rows });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function performAdminAction(req, res, next) {
+  try {
+    const action = String(req.body?.action || "").trim();
+    const targetId = String(req.body?.targetId || "").trim();
+    if (!action || !targetId) {
+      return res.status(400).json({ message: "action and targetId are required" });
+    }
+
+    if (action === "approve-technician") {
+      const partner = await Partner.findByIdAndUpdate(
+        targetId,
+        { $set: { isVerified: true, trustStatus: "trusted", kycStatus: "verified" } },
+        { new: true }
+      );
+      if (!partner) return res.status(404).json({ message: "Partner not found" });
+      await cache.del("admin:dashboard:v1");
+      return res.json({ ok: true, action, targetId, status: partner.kycStatus });
+    }
+
+    if (action === "reject-technician" || action === "suspend-technician") {
+      const partner = await Partner.findByIdAndUpdate(
+        targetId,
+        { $set: { isOnline: false, trustStatus: action === "suspend-technician" ? "suspended" : "review_required" } },
+        { new: true }
+      );
+      if (!partner) return res.status(404).json({ message: "Partner not found" });
+      await cache.del("admin:dashboard:v1");
+      return res.json({ ok: true, action, targetId, status: partner.trustStatus });
+    }
 
     return res.json({
-      stats: [
-        { label: "Total Users", value: users, delta: "+live", hint: "from MongoDB", icon: "users" },
-        { label: "Total Service Partners", value: partners, delta: `${activePartners} online`, hint: "active right now", icon: "partners" },
-        { label: "Active Bookings", value: activeBookings, delta: "+live", hint: "open jobs", icon: "calendar" },
-        { label: "Completed Bookings", value: completedBookings, delta: "+live", hint: "all time", icon: "check" },
-        { label: "Total Revenue", value: revenue, delta: "+live", hint: "paid/quoted total", icon: "rupee", currency: true },
-        { label: "Pending Verifications", value: pendingVerifications, delta: cancelledBookings ? `${cancelledBookings} cancelled` : "0 cancelled", hint: "needs review", icon: "hourglass", negative: true }
-      ],
-      bookingTrend: trendAgg.length
-        ? trendAgg.map((item) => ({ day: item._id, bookings: item.bookings, revenue: item.revenue || 0 }))
-        : [{ day: "Today", bookings, revenue }],
-      categories: serviceAgg.length
-        ? serviceAgg.map((item, index) => ({
-            name: serviceLabel(item._id),
-            value: Math.round((item.value / totalCategory) * 100),
-            color: palette[index % palette.length]
-          }))
-        : [{ name: "No bookings yet", value: 100, color: "#fac8d7" }],
-      recentActivity: recentBookings.slice(0, 5).map((booking) => ({
-        title: `Booking ${formatStatus(booking.status).toLowerCase()}`,
-        note: booking.bookingCode || String(booking._id),
-        time: booking.createdAt ? booking.createdAt.toISOString() : "",
-        type: booking.status
-      })),
-      recentBookings: recentBookings.map(bookingRow),
-      pendingVerifications: pendingPartners.map((partner) => ({
-        name: partner.name,
-        skill: (partner.serviceCategory || []).map(serviceLabel).join(", ") || "Service Partner",
-        city: partner.serviceArea || partner.city || "Assam",
-        applied: partner.createdAt ? new Date(partner.createdAt).toLocaleDateString("en-IN") : "",
-        avatar: (partner.name || "AS").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()
-      }))
+      ok: true,
+      action,
+      targetId,
+      message: "Action accepted for audit; no state transition was required."
     });
   } catch (error) {
     return next(error);
   }
 }
 
-async function resource(req, res, next) {
+function serializeDispute(dispute) {
+  return {
+    id: String(dispute._id),
+    reviewId: String(dispute.reviewId),
+    bookingId: String(dispute.bookingId),
+    bookingCode: dispute.bookingCode || "",
+    partnerId: String(dispute.partnerId),
+    userId: String(dispute.userId),
+    reason: dispute.reason,
+    details: dispute.details || "",
+    status: dispute.status,
+    resolutionNote: dispute.resolutionNote || "",
+    resolvedBy: dispute.resolvedBy || "",
+    createdAt: dispute.createdAt ? dispute.createdAt.toISOString() : "",
+    resolvedAt: dispute.resolvedAt ? dispute.resolvedAt.toISOString() : ""
+  };
+}
+
+async function listReviewDisputes(req, res, next) {
   try {
-    const resourceName = req.params.resource;
-    let rows = [];
-
-    if (resourceName === "users") {
-      const users = await User.find().sort({ createdAt: -1 }).limit(100).lean();
-      const bookingCounts = await Booking.aggregate([{ $group: { _id: "$userId", total: { $sum: 1 } } }]);
-      const countMap = new Map(bookingCounts.map((item) => [String(item._id), item.total]));
-      rows = users.map((user) => ({
-        id: String(user._id).slice(-8).toUpperCase(),
-        name: user.name,
-        phone: user.phone,
-        email: user.email || "-",
-        bookings: countMap.get(String(user._id)) || 0,
-        status: "Active",
-        city: user.city || "Guwahati"
-      }));
-    } else if (resourceName === "partners") {
-      rows = (await Partner.find().sort({ createdAt: -1 }).limit(100).lean()).map(partnerRow);
-    } else if (resourceName === "bookings") {
-      rows = (await Booking.find().sort({ createdAt: -1 }).limit(100).lean()).map(bookingRow);
-    } else if (resourceName === "services") {
-      rows = (await Service.find().sort({ createdAt: -1 }).limit(100).lean()).map((service) => ({
-        id: service.serviceCategory,
-        name: service.name,
-        category: service.serviceCategory,
-        basePrice: service.basePrice || 0,
-        status: service.isActive ? "Active" : "Inactive"
-      }));
-    } else if (resourceName === "analytics") {
-      const reviews = await Review.aggregate([{ $group: { _id: null, avg: { $avg: "$rating" }, total: { $sum: 1 } } }]);
-      rows = [
-        { id: "REVIEWS", metric: "Average Rating", share: Number(reviews[0]?.avg || 0).toFixed(1), status: `${reviews[0]?.total || 0} reviews` },
-        { id: "ACTIVE_PARTNERS", metric: "Online Partners", share: await Partner.countDocuments({ isOnline: true }), status: "Live" },
-        { id: "OPEN_BOOKINGS", metric: "Open Bookings", share: await Booking.countDocuments({ status: { $nin: ["completed", "cancelled"] } }), status: "Live" }
-      ];
-    } else {
-      rows = [];
-    }
-
-    return res.json({ resource: resourceName, rows });
+    const status = String(req.query.status || "open").toLowerCase();
+    const query = status === "all" ? {} : { status };
+    const disputes = await ReviewDispute.find(query).sort({ createdAt: -1 }).limit(100);
+    return res.json({ disputes: disputes.map(serializeDispute) });
   } catch (error) {
     return next(error);
   }
 }
 
-async function action(req, res, next) {
+async function resolveReviewDispute(req, res, next) {
   try {
-    const { action: actionName, targetId, payload = {} } = req.body || {};
-    if (!actionName || !targetId) {
-      return res.status(400).json({ message: "action and targetId are required" });
+    const action = String(req.body?.action || "").toLowerCase();
+    if (!["reviewing", "accept", "reject"].includes(action)) {
+      return res.status(400).json({ message: "action must be reviewing, accept, or reject" });
     }
 
-    if (actionName === "approve-technician") {
-      await Partner.findByIdAndUpdate(targetId, { isVerified: true });
-    } else if (actionName === "reject-technician" || actionName === "suspend-technician") {
-      await Partner.findByIdAndUpdate(targetId, { isVerified: false, isOnline: false });
-    } else if (actionName === "assign-booking") {
-      await Booking.findByIdAndUpdate(targetId, { partnerId: payload.partnerId, status: "accepted", acceptedAt: new Date() });
+    const dispute = await ReviewDispute.findById(req.params.disputeId);
+    if (!dispute) {
+      return res.status(404).json({ message: "Dispute not found" });
+    }
+    const review = await Review.findById(dispute.reviewId);
+    if (!review) {
+      return res.status(404).json({ message: "Review not found" });
     }
 
-    return res.json({ ok: true, action: actionName, targetId });
+    if (action === "reviewing") {
+      dispute.status = "reviewing";
+    } else if (action === "accept") {
+      dispute.status = "accepted";
+      dispute.resolvedAt = new Date();
+      review.status = "hidden";
+      review.disputeStatus = "resolved";
+      review.resolvedAt = dispute.resolvedAt;
+    } else {
+      dispute.status = "rejected";
+      dispute.resolvedAt = new Date();
+      review.status = "published";
+      review.disputeStatus = "resolved";
+      review.resolvedAt = dispute.resolvedAt;
+    }
+
+    const note = String(req.body?.resolutionNote || "").slice(0, 1000);
+    dispute.resolutionNote = note;
+    dispute.resolvedBy = req.auth.email || req.auth.uid || "admin";
+    review.adminResolution = note;
+    await Promise.all([dispute.save(), review.save()]);
+
+    await Booking.findByIdAndUpdate(review.bookingId, {
+      $set: {
+        "reviewSnapshot.status": review.status,
+        "reviewSnapshot.disputeStatus": review.disputeStatus
+      }
+    });
+    const ratingSummary = await recomputePartnerRating(review.partnerId);
+
+    return res.json({
+      dispute: serializeDispute(dispute),
+      review: {
+        id: String(review._id),
+        status: review.status,
+        disputeStatus: review.disputeStatus
+      },
+      partnerRating: ratingSummary
+    });
   } catch (error) {
     return next(error);
   }
@@ -222,6 +270,8 @@ async function action(req, res, next) {
 
 module.exports = {
   dashboard,
-  resource,
-  action
+  listResourceRows,
+  performAdminAction,
+  listReviewDisputes,
+  resolveReviewDispute
 };

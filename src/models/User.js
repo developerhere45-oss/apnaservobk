@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const encryptedFieldsPlugin = require("../utils/encryptedFieldsPlugin");
 
 const pointSchema = new mongoose.Schema(
   {
@@ -17,11 +18,25 @@ const userSchema = new mongoose.Schema(
     address: { type: String, trim: true, default: "" },
     city: { type: String, trim: true, default: "Guwahati" },
     location: { type: pointSchema, default: () => ({ type: "Point", coordinates: [0, 0] }) },
-    fcmToken: { type: String, default: "" }
+    phoneVerified: { type: Boolean, default: false, index: true },
+    phoneVerifiedAt: { type: Date, default: null },
+    bookingRiskStatus: { type: String, enum: ["unknown", "trusted", "otp_required", "review"], default: "unknown", index: true },
+    fakeBookingWarningCount: { type: Number, default: 0 },
+    lastBookingAt: { type: Date, default: null },
+    fcmToken: { type: String, default: "" },
+    accountStatus: { type: String, enum: ["active", "deletion_requested", "deleted"], default: "active", index: true },
+    deletionRequestedAt: { type: Date, default: null },
+    deletionReason: { type: String, trim: true, default: "" }
   },
   { timestamps: true }
 );
 
 userSchema.index({ location: "2dsphere" });
+userSchema.index({ city: 1, createdAt: -1 });
+userSchema.index({ bookingRiskStatus: 1, lastBookingAt: -1 });
+userSchema.index({ accountStatus: 1, deletionRequestedAt: -1 });
+userSchema.plugin(encryptedFieldsPlugin, {
+  fields: ["name", "phone", "email", "address", "fcmToken", "deletionReason"]
+});
 
 module.exports = mongoose.model("User", userSchema);

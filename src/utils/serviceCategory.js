@@ -15,7 +15,9 @@ const SERVICE_ALIASES = {
 
 function normalizeServiceCategory(value) {
   const raw = String(value || "").trim().toLowerCase().replace(/[-_]+/g, " ");
-  if (!raw) return "service";
+  if (!raw) {
+    return "service";
+  }
 
   for (const [key, aliases] of Object.entries(SERVICE_ALIASES)) {
     if (aliases.some((alias) => raw === alias || raw.includes(alias))) {
@@ -30,14 +32,15 @@ function serviceCategoryVariants(value) {
   const key = normalizeServiceCategory(value);
   const variants = new Set([key]);
   const aliases = SERVICE_ALIASES[key] || [];
-
   for (const alias of aliases) {
     variants.add(String(alias).trim().toLowerCase().replace(/[-\s]+/g, "_"));
   }
-
-  if (key === "plumbing") variants.add("plumber");
-  if (key === "appliances") variants.add("appliance");
-
+  if (key === "plumbing") {
+    variants.add("plumber");
+  }
+  if (key === "appliances") {
+    variants.add("appliance");
+  }
   return [...variants].filter(Boolean);
 }
 
@@ -57,7 +60,6 @@ function serviceLabel(value) {
     pest: "Pest Control",
     ro: "RO Service"
   };
-
   return labels[key] || key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 

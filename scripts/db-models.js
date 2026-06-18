@@ -1,0 +1,22 @@
+module.exports = {
+  Booking: require("../src/models/Booking").Booking,
+  BookingMessage: require("../src/models/BookingMessage"),
+  CallLog: require("../src/models/CallLog"),
+  CommissionLedger: require("../src/models/CommissionLedger"),
+  CustomerNoResponseReport: require("../src/models/CustomerNoResponseReport"),
+  FraudAlert: require("../src/models/FraudAlert"),
+  InAppNotification: require("../src/models/InAppNotification"),
+  JobProofPhoto: require("../src/models/JobProofPhoto"),
+  LocationLog: require("../src/models/LocationLog"),
+  OtpChallenge: require("../src/models/OtpChallenge"),
+  Partner: require("../src/models/Partner"),
+  PartnerDocument: require("../src/models/PartnerDocument"),
+  Payment: require("../src/models/Payment"),
+  Review: require("../src/models/Review"),
+  ReviewDispute: require("../src/models/ReviewDispute"),
+  RevisitRequest: require("../src/models/RevisitRequest"),
+  Service: require("../src/models/Service"),
+  SmsDeliveryLog: require("../src/models/SmsDeliveryLog"),
+  TechnicianSos: require("../src/models/TechnicianSos"),
+  User: require("../src/models/User")
+};

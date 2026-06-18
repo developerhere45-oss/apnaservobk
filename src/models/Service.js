@@ -11,4 +11,7 @@ const serviceSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+serviceSchema.index({ isActive: 1, name: 1 });
+serviceSchema.index({ isActive: 1, serviceCategory: 1 });
+
 module.exports = mongoose.model("Service", serviceSchema);

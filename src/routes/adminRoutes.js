@@ -1,10 +1,12 @@
 const router = require("express").Router();
-const { verifyAdminAccess } = require("../middleware/authMiddleware");
+const { verifyAdminSecret } = require("../middleware/authMiddleware");
 const controller = require("../controllers/adminController");
 
-router.use(verifyAdminAccess);
+router.use(verifyAdminSecret);
 router.get("/dashboard", controller.dashboard);
-router.get("/:resource", controller.resource);
-router.post("/actions", controller.action);
+router.post("/actions", controller.performAdminAction);
+router.get("/review-disputes", controller.listReviewDisputes);
+router.patch("/review-disputes/:disputeId", controller.resolveReviewDispute);
+router.get("/:resource", controller.listResourceRows);
 
 module.exports = router;

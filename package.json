@@ -11,7 +11,13 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "check": "powershell -NoProfile -Command \"Get-ChildItem src -Recurse -Filter *.js | ForEach-Object { node --check $_.FullName }\"",
-    "check:unix": "find src -name '*.js' -print0 | xargs -0 -n1 node --check"
+    "check:unix": "find src -name '*.js' -print0 | xargs -0 -n1 node --check",
+    "audit:e2e": "node scripts/e2e-workflow-audit.js",
+    "db:audit": "node scripts/db-audit.js",
+    "db:audit:schema": "node scripts/db-audit.js --schema-only",
+    "db:migrate": "node scripts/db-migrate-fixes.js",
+    "scale:simulate": "node scripts/scale-simulation.js",
+    "security:audit": "node scripts/security-audit.js"
   },
   "dependencies": {
     "cloudinary": "^2.8.0",
@@ -19,15 +25,15 @@
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "express-rate-limit": "^8.2.1",
-    "firebase-admin": "^10.3.0",
+    "firebase-admin": "^13.10.0",
     "helmet": "^8.1.0",
     "mongodb": "^7.2.0",
     "mongoose": "^8.20.1",
     "morgan": "^1.10.1",
-    "multer": "^2.0.2",
+    "multer": "^2.2.0",
     "pdfkit": "^0.18.0",
     "razorpay": "^2.9.6",
-    "socket.io": "^4.2.0",
+    "socket.io": "^4.8.3",
     "zod": "^4.1.13"
   },
   "devDependencies": {

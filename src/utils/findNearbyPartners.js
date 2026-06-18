@@ -15,8 +15,7 @@ function distanceMeters(latA, lngA, latB, lngB) {
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(toRad(latA)) * Math.cos(toRad(latB)) *
-      Math.sin(dLng / 2) * Math.sin(dLng / 2);
-
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
   return EARTH_RADIUS_M * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
@@ -25,16 +24,15 @@ async function findNearbyPartners({ serviceCategory, city, lat, lng, radiusKm })
   const categories = serviceCategoryVariants(category);
   const latitude = safeNumber(lat, 26.1445);
   const longitude = safeNumber(lng, 91.7362);
-  const maxDistance =
-    safeNumber(radiusKm, Number(process.env.DEFAULT_PARTNER_RADIUS_KM || 25)) * 1000;
+  const maxDistance = safeNumber(radiusKm, Number(process.env.DEFAULT_PARTNER_RADIUS_KM || 25)) * 1000;
+  const trustFilter = { trustStatus: { $ne: "suspended" } };
 
   let partners = [];
-
   try {
     partners = await Partner.find({
       serviceCategory: { $in: categories },
       isOnline: true,
-      isVerified: true,
+      ...trustFilter,
       location: {
         $near: {
           $geometry: { type: "Point", coordinates: [longitude, latitude] },
@@ -46,25 +44,25 @@ async function findNearbyPartners({ serviceCategory, city, lat, lng, radiusKm })
     partners = await Partner.find({
       serviceCategory: { $in: categories },
       isOnline: true,
-      isVerified: true,
+      ...trustFilter,
       city: new RegExp(city || "Guwahati", "i")
     }).limit(30);
   }
 
   return partners
-    .map((partner) => ({
-      partner,
-      distanceMeters: distanceMeters(
-        latitude,
-        longitude,
-        partner.location.coordinates[1] || latitude,
-        partner.location.coordinates[0] || longitude
-      )
-    }))
-    .filter((entry) =>
-      entry.distanceMeters <=
-      Math.max(maxDistance, (entry.partner.serviceRadiusKm || 25) * 1000)
-    )
+    .map((partner) => {
+      const coordinates = partner.location?.coordinates || [longitude, latitude];
+      return {
+        partner,
+        distanceMeters: distanceMeters(
+          latitude,
+          longitude,
+          safeNumber(coordinates[1], latitude),
+          safeNumber(coordinates[0], longitude)
+        )
+      };
+    })
+    .filter((entry) => entry.distanceMeters <= Math.max(maxDistance, (entry.partner.serviceRadiusKm || 25) * 1000))
     .sort((left, right) => left.distanceMeters - right.distanceMeters)
     .map((entry) => entry.partner);
 }

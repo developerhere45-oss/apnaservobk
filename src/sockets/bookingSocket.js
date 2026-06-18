@@ -1,40 +1,76 @@
 const { admin } = require("../config/firebase");
+const crypto = require("crypto");
+const { allowedCorsOrigins } = require("../config/env");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
-const crypto = require("crypto");
+const LocationLog = require("../models/LocationLog");
+const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
+const { lifecycleLabel, lifecycleStatusForBooking } = require("../utils/bookingLifecycle");
 
 let io;
 
-function getAdminSecret() {
-  return process.env.ADMIN_API_SECRET || (process.env.NODE_ENV !== "production" ? "apnaservo-admin-dev-secret" : "");
+function maskPhone(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (digits.length < 4) return "Protected";
+  const last = digits.slice(-4);
+  const prefix = digits.length > 10 ? `+${digits.slice(0, digits.length - 10)} ` : "";
+  return `${prefix}******${last}`;
 }
 
-function safeEqual(a, b) {
-  const left = Buffer.from(String(a));
-  const right = Buffer.from(String(b));
-  if (left.length !== right.length) return false;
-  return crypto.timingSafeEqual(left, right);
+function virtualCallingEnabled() {
+  return Boolean(String(process.env.VIRTUAL_CALL_NUMBER || process.env.APNA_SERVO_VIRTUAL_CALL_NUMBER || "").trim());
+}
+
+function millis(value) {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function quoteExpired(doc) {
+  const expiresAt = millis(doc.quoteExpiresAt);
+  return (doc.quoteStatus || "") === "pending" && expiresAt > 0 && expiresAt <= Date.now();
+}
+
+function allowSocketEvent(socket, key, limit, windowMs) {
+  const now = Date.now();
+  socket.rateLimits = socket.rateLimits || {};
+  const bucket = socket.rateLimits[key] || { count: 0, resetAt: now + windowMs };
+  if (bucket.resetAt <= now) {
+    bucket.count = 0;
+    bucket.resetAt = now + windowMs;
+  }
+  bucket.count += 1;
+  socket.rateLimits[key] = bucket;
+  return bucket.count <= limit;
 }
 
 function verifyAdminRealtimeToken(token) {
-  const secret = getAdminSecret();
-  if (!secret || !token) return false;
-
-  if (safeEqual(token, secret)) {
-    return process.env.NODE_ENV !== "production";
+  const secret = String(process.env.ADMIN_API_SECRET || "").trim();
+  const value = String(token || "").trim();
+  if (!secret || !value.includes(".")) {
+    return false;
   }
-
-  const [expiresAt, signature] = String(token).split(".");
-  const expiry = Number(expiresAt);
-  if (!Number.isFinite(expiry) || expiry < Date.now() || !signature) return false;
-
-  const expected = crypto.createHmac("sha256", secret).update(String(expiresAt)).digest("hex");
-  return safeEqual(signature, expected);
+  const [expiresAtRaw, signature] = value.split(".");
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    return false;
+  }
+  const expected = crypto.createHmac("sha256", secret).update(String(expiresAtRaw)).digest("hex");
+  const left = Buffer.from(signature || "");
+  const right = Buffer.from(expected);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
 function serializeBooking(booking) {
   const doc = typeof booking.toObject === "function" ? booking.toObject() : booking;
   const location = doc.location || { coordinates: [0, 0] };
+  const rawQuoteStatus = doc.quoteStatus || "";
+  const quoteStatus = rawQuoteStatus && rawQuoteStatus !== "none"
+    ? rawQuoteStatus
+    : (doc.status === "amount_pending" ? "pending" : "none");
+  const quoteAmount = Number(doc.quoteAmount || doc.finalAmount || 0);
+  const lifecycleStatus = lifecycleStatusForBooking(doc);
   return {
     _id: String(doc._id),
     bookingId: String(doc._id),
@@ -49,17 +85,70 @@ function serializeBooking(booking) {
     lat: location.coordinates ? location.coordinates[1] : 0,
     lng: location.coordinates ? location.coordinates[0] : 0,
     status: doc.status,
+    legacyStatus: doc.status,
+    lifecycleStatus,
+    lifecycleLabel: lifecycleLabel(lifecycleStatus),
+    emergency: doc.emergency || {},
+    isEmergency: Boolean(doc.emergency?.isEmergency),
+    emergencyType: doc.emergency?.type || "none",
+    emergencyPriority: doc.emergency?.priority || "normal",
     price: doc.price,
     finalAmount: doc.finalAmount || 0,
     paymentStatus: doc.paymentStatus,
+    customerVerification: doc.customerVerification || {},
+    customerPhoneVerified: Boolean(doc.customerVerification?.phoneVerified),
+    customerOtpRequired: Boolean(doc.customerVerification?.otpRequired),
+    amountRequestedAt: doc.amountRequestedAt,
+    amountRequestedAtMillis: millis(doc.amountRequestedAt),
+    quoteAmount,
+    quoteStatus,
+    quoteRequestedAt: doc.quoteRequestedAt || doc.amountRequestedAt || null,
+    quoteRequestedAtMillis: millis(doc.quoteRequestedAt || doc.amountRequestedAt),
+    quoteExpiresAt: doc.quoteExpiresAt || null,
+    quoteExpiresAtMillis: millis(doc.quoteExpiresAt),
+    quoteApprovedAt: doc.quoteApprovedAt || null,
+    quoteApprovedAtMillis: millis(doc.quoteApprovedAt),
+    quoteExpired: quoteExpired({ ...doc, quoteStatus }),
+    quoteCounterAmount: doc.quoteCounterAmount || 0,
+    quoteCounterMessage: doc.quoteCounterMessage || "",
+    quoteCounterAt: doc.quoteCounterAt || null,
+    quoteCounterAtMillis: millis(doc.quoteCounterAt),
+    noResponseReport: doc.noResponseReport || {},
+    noResponseReported: Boolean(doc.noResponseReport?.reported),
+    noResponseReportedAtMillis: millis(doc.noResponseReport?.reportedAt),
+    warranty: doc.warranty || {},
+    warrantyEligible: Boolean(doc.warranty?.eligible),
+    warrantyEndDate: doc.warranty?.warrantyEndDate || null,
+    warrantyEndDateMillis: millis(doc.warranty?.warrantyEndDate),
+    revisitRequested: Boolean(doc.warranty?.revisitRequested),
+    proofSummary: doc.proofSummary || {},
     slot: doc.slot,
+    partnerArrivalEstimateMinutes: doc.partnerArrivalEstimateMinutes || 0,
+    partnerArrivalEstimateLabel: doc.partnerArrivalEstimateLabel || "",
+    expectedArrivalAt: doc.expectedArrivalAt || null,
+    expectedArrivalAtMillis: millis(doc.expectedArrivalAt),
     userName: doc.userSnapshot?.name || "",
     userPhone: doc.userSnapshot?.phone || "",
     partnerName: doc.partnerSnapshot?.name || "",
     partnerPhone: doc.partnerSnapshot?.phone || "",
     createdAt: doc.createdAt,
+    createdAtMillis: millis(doc.createdAt),
     acceptedAt: doc.acceptedAt,
-    completedAt: doc.completedAt
+    acceptedAtMillis: millis(doc.acceptedAt),
+    completedAt: doc.completedAt,
+    completedAtMillis: millis(doc.completedAt)
+  };
+}
+
+function partnerBookingPayload(booking) {
+  const payload = serializeBooking(booking);
+  const doc = typeof booking.toObject === "function" ? booking.toObject() : booking;
+  return {
+    ...payload,
+    userPhone: maskPhone(doc.userSnapshot?.phone || payload.userPhone),
+    customerPhoneMasked: maskPhone(doc.userSnapshot?.phone || payload.userPhone),
+    phoneProtected: true,
+    virtualCalling: virtualCallingEnabled()
   };
 }
 
@@ -73,6 +162,7 @@ async function identifySocket(socket, next) {
       if (!verifyAdminRealtimeToken(adminToken)) {
         return next(new Error("Admin realtime token invalid"));
       }
+      socket.auth = { uid: "admin-dashboard", email: "admin-dashboard@apnaservo.internal" };
       socket.role = "admin";
       socket.join("admin");
       return next();
@@ -82,7 +172,7 @@ async function identifySocket(socket, next) {
       return next(new Error("Firebase token missing"));
     }
 
-    const decoded = await admin.auth().verifyIdToken(token);
+    const decoded = await admin.auth().verifyIdToken(token, true);
     socket.auth = decoded;
     socket.role = role;
 
@@ -91,10 +181,6 @@ async function identifySocket(socket, next) {
       if (partner) {
         socket.partner = partner;
         socket.join(`partner:${partner._id}`);
-        socket.join(`city:${partner.city}`);
-        for (const category of partner.serviceCategory || []) {
-          socket.join(`service:${category}`);
-        }
       }
     } else {
       const user = await User.findOne({ firebaseUid: decoded.uid });
@@ -113,7 +199,9 @@ async function identifySocket(socket, next) {
 function initBookingSocket(httpServer) {
   io = require("socket.io")(httpServer, {
     cors: {
-      origin: process.env.CLIENT_ORIGIN || "*",
+      origin: allowedCorsOrigins().includes("*") && process.env.NODE_ENV !== "production"
+        ? "*"
+        : allowedCorsOrigins(),
       methods: ["GET", "POST", "PATCH"]
     },
     pingTimeout: 30000
@@ -122,54 +210,62 @@ function initBookingSocket(httpServer) {
   io.use(identifySocket);
 
   io.on("connection", (socket) => {
-    if (socket.role === "admin") {
-      socket.emit("admin:connected", { ok: true, at: new Date().toISOString() });
-    }
-
     socket.on("partner:online", async (payload = {}) => {
       if (!socket.partner) return;
+      if (!allowSocketEvent(socket, "partner:online", 20, 60 * 1000)) {
+        socket.emit("rate_limited", { event: "partner:online" });
+        return;
+      }
       socket.partner.isOnline = true;
-      if (payload.lat && payload.lng) {
-        socket.partner.location = { type: "Point", coordinates: [Number(payload.lng), Number(payload.lat)] };
+      if (payload.lat && payload.lng && payload.accuracy) {
+        const validation = validatePartnerLocation({ partner: socket.partner, payload });
+        if (validation.valid) {
+          socket.partner.set(partnerLocationUpdate(validation));
+        }
       }
       await socket.partner.save();
       socket.join(`partner:${socket.partner._id}`);
       socket.emit("partner:online", { ok: true });
-      io.to("admin").emit("partner:online", {
-        partnerId: String(socket.partner._id),
-        name: socket.partner.name,
-        serviceCategory: socket.partner.serviceCategory,
-        city: socket.partner.city,
-        isOnline: true
-      });
     });
 
     socket.on("partner:offline", async () => {
       if (!socket.partner) return;
+      if (!allowSocketEvent(socket, "partner:offline", 20, 60 * 1000)) {
+        socket.emit("rate_limited", { event: "partner:offline" });
+        return;
+      }
       socket.partner.isOnline = false;
       await socket.partner.save();
       socket.emit("partner:offline", { ok: true });
-      io.to("admin").emit("partner:offline", {
-        partnerId: String(socket.partner._id),
-        name: socket.partner.name,
-        isOnline: false
-      });
     });
 
     socket.on("partner:location_update", async (payload = {}) => {
       if (!socket.partner) return;
-      const lat = Number(payload.lat);
-      const lng = Number(payload.lng);
-      if (Number.isFinite(lat) && Number.isFinite(lng)) {
-        socket.partner.location = { type: "Point", coordinates: [lng, lat] };
-        await socket.partner.save();
-        io.to("admin").emit("partner:location_update", {
-          partnerId: String(socket.partner._id),
-          name: socket.partner.name,
-          lat,
-          lng
-        });
+      if (!allowSocketEvent(socket, "partner:location_update", 90, 60 * 1000)) {
+        socket.emit("rate_limited", { event: "partner:location_update" });
+        return;
       }
+      const validation = validatePartnerLocation({ partner: socket.partner, payload });
+      await LocationLog.create({
+        partnerId: socket.partner._id,
+        lat: Number.isFinite(validation.lat) ? validation.lat : 0,
+        lng: Number.isFinite(validation.lng) ? validation.lng : 0,
+        accuracy: validation.accuracy,
+        provider: validation.provider,
+        isMock: validation.isMock,
+        validationStatus: validation.valid ? "accepted" : "rejected",
+        reason: validation.reason,
+        speedMps: validation.speedMps,
+        distanceToCustomerM: validation.distanceToCustomerM,
+        recordedAt: validation.recordedAt
+      });
+      if (!validation.valid) {
+        socket.emit("partner:location_rejected", { message: validation.reason });
+        return;
+      }
+      socket.partner.set(partnerLocationUpdate(validation));
+      await socket.partner.save();
+      socket.emit("partner:location_ok", { ok: true });
     });
   });
 
@@ -178,50 +274,82 @@ function initBookingSocket(httpServer) {
 
 function emitNewBookingToPartners(booking, partners) {
   if (!io) return;
-  const payload = serializeBooking(booking);
-  for (const partner of partners) {
+  const payload = partnerBookingPayload(booking);
+  const targetPartners = Array.isArray(partners) ? partners : [];
+  io.to("admin").emit("booking:new_request", serializeBooking(booking));
+  for (const partner of targetPartners) {
     io.to(`partner:${partner._id}`).emit("booking:new_request", payload);
   }
-  io.to(`service:${booking.serviceCategory}`).emit("booking:new_request", payload);
-  io.to(`city:${booking.city}`).emit("booking:new_request", payload);
-  io.to("admin").emit("booking:new_request", payload);
-  io.to("admin").emit("admin:activity", {
-    type: "booking:new_request",
-    title: "New booking created",
-    note: booking.bookingCode || String(booking._id),
-    at: new Date().toISOString(),
-    booking: payload
-  });
 }
 
-function emitBookingAccepted(booking) {
+function emitBookingAccepted(booking, acceptedPartner = null) {
   if (!io) return;
-  const payload = serializeBooking(booking);
-  io.to(`user:${booking.userId}`).emit("booking:accepted", payload);
-  if (booking.partnerId) {
-    io.to(`partner:${booking.partnerId}`).emit("booking:accepted", payload);
+  const userPayload = serializeBooking(booking);
+  const partnerPayload = partnerBookingPayload(booking);
+  const winnerPartnerId = booking.partnerId ? String(booking.partnerId) : "";
+  const winnerFirebaseUid = acceptedPartner?.firebaseUid || "";
+  const unavailablePayload = {
+    _id: String(booking._id),
+    bookingId: String(booking._id),
+    bookingCode: booking.bookingCode || "",
+    serviceCategory: booking.serviceCategory || "",
+    city: booking.city || "",
+    status: "accepted",
+    removeFromQueue: true,
+    unavailableReason: "accepted_by_other_partner",
+    acceptedByPartnerId: winnerPartnerId,
+    acceptedByFirebaseUid: winnerFirebaseUid,
+    updatedAtMillis: Date.now()
+  };
+  io.to(`user:${booking.userId}`).emit("booking:accepted", userPayload);
+  if (winnerPartnerId) {
+    io.to(`partner:${winnerPartnerId}`).emit("booking:accepted", partnerPayload);
   }
+  io.to("admin").emit("booking:accepted", userPayload);
   for (const partnerId of booking.requestedPartners || []) {
-    io.to(`partner:${partnerId}`).emit("booking:status_update", payload);
+    const targetPartnerId = String(partnerId);
+    if (targetPartnerId === winnerPartnerId) {
+      continue;
+    }
+    io.to(`partner:${targetPartnerId}`).emit("booking:unavailable", unavailablePayload);
   }
-  io.to("admin").emit("booking:accepted", payload);
-  io.to("admin").emit("booking:status_update", payload);
 }
 
 function emitBookingRejected(booking, partnerId) {
   if (!io) return;
-  io.to(`partner:${partnerId}`).emit("booking:rejected", serializeBooking(booking));
-  io.to("admin").emit("booking:rejected", serializeBooking(booking));
+  io.to(`partner:${partnerId}`).emit("booking:rejected", partnerBookingPayload(booking));
 }
 
 function emitBookingStatusUpdate(booking) {
   if (!io) return;
-  const payload = serializeBooking(booking);
-  io.to(`user:${booking.userId}`).emit("booking:status_update", payload);
+  const userPayload = serializeBooking(booking);
+  const partnerPayload = partnerBookingPayload(booking);
+  io.to(`user:${booking.userId}`).emit("booking:status_update", userPayload);
+  io.to("admin").emit("booking:status_update", userPayload);
   if (booking.partnerId) {
-    io.to(`partner:${booking.partnerId}`).emit("booking:status_update", payload);
+    io.to(`partner:${booking.partnerId}`).emit("booking:status_update", partnerPayload);
   }
-  io.to("admin").emit("booking:status_update", payload);
+}
+
+function emitBookingChatMessage(booking, message) {
+  if (!io || !booking || !message) return;
+  const payload = {
+    ...message,
+    bookingId: String(booking._id),
+    bookingCode: booking.bookingCode || message.bookingCode || ""
+  };
+  io.to(`user:${booking.userId}`).emit("booking:chat_message", payload);
+  if (booking.partnerId) {
+    io.to(`partner:${booking.partnerId}`).emit("booking:chat_message", payload);
+  }
+}
+
+function emitBookingChatSeen(booking, payload) {
+  if (!io || !booking || !payload) return;
+  io.to(`user:${booking.userId}`).emit("booking:chat_seen", payload);
+  if (booking.partnerId) {
+    io.to(`partner:${booking.partnerId}`).emit("booking:chat_seen", payload);
+  }
 }
 
 function getIO() {
@@ -234,6 +362,9 @@ module.exports = {
   emitBookingAccepted,
   emitBookingRejected,
   emitBookingStatusUpdate,
+  emitBookingChatMessage,
+  emitBookingChatSeen,
   serializeBooking,
+  partnerBookingPayload,
   getIO
 };

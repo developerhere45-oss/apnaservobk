@@ -1,3 +1,8 @@
 node_modules/
 .env
 npm-debug.log*
+*.log
+launch.json
+coverage/
+.DS_Store
+database-audit-report.json

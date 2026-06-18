@@ -12,16 +12,24 @@ services:
       - key: NODE_ENV
         value: production
       - key: CLIENT_ORIGIN
-        value: "*"
+        sync: false
       - key: DEFAULT_PARTNER_RADIUS_KM
         value: "25"
-      - key: ADMIN_API_SECRET
-        sync: false
+      - key: REQUIRE_CUSTOMER_PHONE_OTP
+        value: "false"
       - key: MONGODB_URI
         sync: false
       - key: FIREBASE_PROJECT_ID
         sync: false
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: ADMIN_API_SECRET
+        sync: false
+      - key: ADMIN_FIREBASE_UIDS
+        sync: false
+      - key: ADMIN_EMAILS
         sync: false
       - key: CLOUDINARY_CLOUD_NAME
         sync: false
