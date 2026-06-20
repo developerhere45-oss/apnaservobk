@@ -83,12 +83,34 @@ function identityHash(value) {
   return crypto.createHmac("sha256", secret).update(normalized).digest("hex");
 }
 
-async function ensureUniquePartnerIdentity({ uid, phoneHash, emailHash }) {
+function tokenHasVerifiedEmail(req, email) {
+  return Boolean(
+    email
+      && req.auth?.email_verified === true
+      && normalizeEmail(req.auth?.email || "") === email
+  );
+}
+
+async function findVerifiedEmailPartner(req, email, emailHash) {
+  if (!emailHash || !tokenHasVerifiedEmail(req, email)) return null;
+  return Partner.findOne({ firebaseUid: { $ne: req.auth.uid }, emailHash })
+    .select("_id firebaseUid phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus fcmToken")
+    .lean();
+}
+
+function isEmptyIdentityPartner(partner) {
+  return Boolean(partner && !partner.phoneHash && !partner.emailHash);
+}
+
+async function ensureUniquePartnerIdentity({ uid, partnerId, phoneHash, emailHash }) {
   const checks = [];
   if (phoneHash) checks.push({ phoneHash });
   if (emailHash) checks.push({ emailHash });
   if (!checks.length) return;
-  const existing = await Partner.findOne({ firebaseUid: { $ne: uid }, $or: checks }).select("_id phoneHash emailHash").lean();
+  const query = { $or: checks };
+  if (uid) query.firebaseUid = { $ne: uid };
+  if (partnerId) query._id = { $ne: partnerId };
+  const existing = await Partner.findOne(query).select("_id phoneHash emailHash").lean();
   if (existing) {
     const error = new Error("Partner with this phone or email already exists");
     error.status = 409;
@@ -177,9 +199,13 @@ async function upsertProfile(req, res, next) {
     }
     const phoneHash = identityHash(phone);
     const emailHash = identityHash(email);
-    await ensureUniquePartnerIdentity({ uid: req.auth.uid, phoneHash, emailHash });
-    const existingPartner = await Partner.findOne({ firebaseUid: req.auth.uid }).select("faceVerified selfieVerified aadhaarStatus kycStatus").lean();
-    const faceTrusted = existingPartner?.faceVerified === true || existingPartner?.selfieVerified === true;
+    const existingPartner = await Partner.findOne({ firebaseUid: req.auth.uid })
+      .select("_id phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus fcmToken")
+      .lean();
+    const emailPartner = await findVerifiedEmailPartner(req, email, emailHash);
+    const targetPartner = emailPartner || existingPartner;
+    await ensureUniquePartnerIdentity({ uid: req.auth.uid, partnerId: targetPartner?._id, phoneHash, emailHash });
+    const faceTrusted = targetPartner?.faceVerified === true || targetPartner?.selfieVerified === true;
     const update = {
       firebaseUid: req.auth.uid,
       name: body.name || req.auth.name || "ApnaServo Partner",
@@ -207,8 +233,17 @@ async function upsertProfile(req, res, next) {
     if (Number.isFinite(body.lat) && Number.isFinite(body.lng)) {
       update.location = { type: "Point", coordinates: [body.lng, body.lat] };
     }
+    if (emailPartner && existingPartner && String(emailPartner._id) !== String(existingPartner._id)) {
+      if (!update.fcmToken && existingPartner.fcmToken) {
+        update.fcmToken = existingPartner.fcmToken;
+      }
+      if (isEmptyIdentityPartner(existingPartner)) {
+        await Partner.deleteOne({ _id: existingPartner._id });
+      }
+    }
+    const filter = targetPartner?._id ? { _id: targetPartner._id } : { firebaseUid: req.auth.uid };
     const partner = await Partner.findOneAndUpdate(
-      { firebaseUid: req.auth.uid },
+      filter,
       { $set: update, $setOnInsert: { partnerCode: `ASP${Date.now().toString().slice(-6)}${crypto.randomBytes(2).toString("hex").toUpperCase()}` } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
@@ -221,7 +256,29 @@ async function upsertProfile(req, res, next) {
 
 async function me(req, res, next) {
   try {
-    const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    let partner = await Partner.findOne({ firebaseUid: req.auth.uid })
+      .select("_id firebaseUid phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus fcmToken");
+    if (req.auth.email_verified === true && req.auth.email) {
+      const email = normalizeEmail(req.auth.email);
+      const emailHash = identityHash(email);
+      if (emailHash) {
+        const emailPartner = await Partner.findOne({ emailHash, firebaseUid: { $ne: req.auth.uid } });
+        const canRelink = !partner || (
+          String(partner._id) !== String(emailPartner?._id)
+          && isEmptyIdentityPartner(partner)
+        );
+        if (emailPartner && canRelink) {
+          if (partner && !emailPartner.fcmToken && partner.fcmToken) {
+            emailPartner.fcmToken = partner.fcmToken;
+          }
+          if (partner) {
+            await Partner.deleteOne({ _id: partner._id });
+          }
+          emailPartner.firebaseUid = req.auth.uid;
+          partner = await emailPartner.save();
+        }
+      }
+    }
     return res.json({ partner });
   } catch (error) {
     return next(error);

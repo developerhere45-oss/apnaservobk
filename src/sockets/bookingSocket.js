@@ -21,6 +21,21 @@ function virtualCallingEnabled() {
   return Boolean(String(process.env.VIRTUAL_CALL_NUMBER || process.env.APNA_SERVO_VIRTUAL_CALL_NUMBER || "").trim());
 }
 
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function identityHash(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  const secret = process.env.IDENTITY_HASH_PEPPER || process.env.ENCRYPTION_KEY || "apnaservo-dev-identity-hash";
+  return crypto.createHmac("sha256", secret).update(normalized).digest("hex");
+}
+
+function isEmptyIdentityPartner(partner) {
+  return Boolean(partner && !partner.phoneHash && !partner.emailHash);
+}
+
 function millis(value) {
   if (!value) return 0;
   const time = new Date(value).getTime();
@@ -177,13 +192,43 @@ async function identifySocket(socket, next) {
     socket.role = role;
 
     if (role === "partner") {
-      const partner = await Partner.findOne({ firebaseUid: decoded.uid });
+      let partner = await Partner.findOne({ firebaseUid: decoded.uid });
+      if ((!partner || isEmptyIdentityPartner(partner)) && decoded.email_verified === true && decoded.email) {
+        const emailHash = identityHash(normalizeEmail(decoded.email));
+        if (emailHash) {
+          const emailPartner = await Partner.findOne({ emailHash, firebaseUid: { $ne: decoded.uid } });
+          if (emailPartner) {
+            if (partner && !emailPartner.fcmToken && partner.fcmToken) {
+              emailPartner.fcmToken = partner.fcmToken;
+            }
+            if (partner && String(partner._id) !== String(emailPartner._id)) {
+              await Partner.deleteOne({ _id: partner._id });
+            }
+            emailPartner.firebaseUid = decoded.uid;
+            await emailPartner.save();
+            partner = emailPartner;
+          }
+        }
+      }
       if (partner) {
         socket.partner = partner;
         socket.join(`partner:${partner._id}`);
+      } else {
+        socket.emit("realtime:identity_missing", { role: "partner" });
       }
     } else {
-      const user = await User.findOne({ firebaseUid: decoded.uid });
+      const user = await User.findOneAndUpdate(
+        { firebaseUid: decoded.uid },
+        {
+          $setOnInsert: {
+            firebaseUid: decoded.uid,
+            name: decoded.name || "ApnaServo Customer",
+            phone: decoded.phone_number || "",
+            email: normalizeEmail(decoded.email || "")
+          }
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
       if (user) {
         socket.user = user;
         socket.join(`user:${user._id}`);
@@ -204,7 +249,10 @@ function initBookingSocket(httpServer) {
         : allowedCorsOrigins(),
       methods: ["GET", "POST", "PATCH"]
     },
-    pingTimeout: 30000
+    transports: ["websocket", "polling"],
+    allowEIO3: true,
+    pingInterval: 25000,
+    pingTimeout: 45000
   });
 
   io.use(identifySocket);
@@ -352,6 +400,15 @@ function emitBookingChatSeen(booking, payload) {
   }
 }
 
+function emitAdminEvent(eventName, payload = {}) {
+  if (!io || !eventName) return;
+  io.to("admin").emit(eventName, {
+    ...payload,
+    eventName,
+    emittedAt: new Date().toISOString()
+  });
+}
+
 function getIO() {
   return io;
 }
@@ -364,6 +421,7 @@ module.exports = {
   emitBookingStatusUpdate,
   emitBookingChatMessage,
   emitBookingChatSeen,
+  emitAdminEvent,
   serializeBooking,
   partnerBookingPayload,
   getIO
