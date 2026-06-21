@@ -324,7 +324,6 @@ function emitNewBookingToPartners(booking, partners) {
   if (!io) return;
   const payload = partnerBookingPayload(booking);
   const targetPartners = Array.isArray(partners) ? partners : [];
-  io.to("admin").emit("booking:new_request", serializeBooking(booking));
   for (const partner of targetPartners) {
     io.to(`partner:${partner._id}`).emit("booking:new_request", payload);
   }

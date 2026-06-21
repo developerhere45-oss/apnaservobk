@@ -27,6 +27,7 @@ const {
   emitBookingAccepted,
   emitBookingRejected,
   emitBookingStatusUpdate,
+  emitAdminEvent,
   serializeBooking
 } = require("../sockets/bookingSocket");
 
@@ -423,12 +424,24 @@ function emergencyPayload(body) {
 }
 
 async function dispatchBookingToPartners(booking, category, lat, lng) {
-  const partners = await findNearbyPartners({
-    serviceCategory: category,
-    city: booking.city,
-    lat,
-    lng
-  });
+  emitAdminEvent("booking:new_request", serializeBooking(booking));
+  let partners = [];
+  try {
+    partners = await findNearbyPartners({
+      serviceCategory: category,
+      city: booking.city,
+      lat,
+      lng
+    });
+  } catch (error) {
+    console.error("Partner matching failed", {
+      bookingId: String(booking._id),
+      bookingCode: booking.bookingCode,
+      message: error.message
+    });
+    emitNewBookingToPartners(booking, []);
+    return partners;
+  }
 
   if (!partners.length) {
     emitNewBookingToPartners(booking, []);
