@@ -9,6 +9,7 @@ const { cloudinary } = require("../config/cloudinary");
 const { normalizeServiceCategory } = require("../utils/serviceCategory");
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
 const { validateDocumentUpload } = require("../utils/documentValidation");
+const { emitAdminEvent } = require("../sockets/bookingSocket");
 
 const profileSchema = z.object({
   name: z.string().trim().min(2).max(80).regex(/^[A-Za-z][A-Za-z .'-]+$/).optional(),
@@ -247,6 +248,16 @@ async function upsertProfile(req, res, next) {
       { $set: update, $setOnInsert: { partnerCode: `ASP${Date.now().toString().slice(-6)}${crypto.randomBytes(2).toString("hex").toUpperCase()}` } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    emitAdminEvent(targetPartner ? "partner:updated" : "partner:registered", {
+      partnerId: String(partner._id),
+      partnerCode: partner.partnerCode || "",
+      partnerName: partner.name || "",
+      partnerPhone: partner.phone || "",
+      email: partner.email || "",
+      serviceCategory: partner.serviceCategory || [],
+      status: partner.accountStatus || "active",
+      isOnline: Boolean(partner.isOnline)
+    });
 
     return res.json({ partner });
   } catch (error) {

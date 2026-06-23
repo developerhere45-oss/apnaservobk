@@ -63,6 +63,18 @@ ADMIN_EMAILS=comma-separated-verified-admin-emails
 
 If the admin website is not deployed yet, `CLIENT_ORIGIN` can temporarily be the Render backend URL. Replace it with the real admin/website origin before browser-based admin access.
 
+The admin panel must use the same secret:
+
+```text
+ADMIN_BACKEND_SECRET=SAME_VALUE_AS_THIS_BACKEND_ADMIN_API_SECRET
+```
+
+After the admin Render service is live, update this backend service:
+
+```text
+CLIENT_ORIGIN=https://YOUR-ADMIN-SERVICE.onrender.com
+```
+
 Generate secure values locally:
 
 ```powershell

@@ -12,15 +12,45 @@ function csvSet(value, options = {}) {
     .filter(Boolean));
 }
 
+function developmentDeviceAuth(req) {
+  if (process.env.NODE_ENV === "production" || process.env.ALLOW_DEV_DEVICE_AUTH !== "true") {
+    return null;
+  }
+
+  const uid = String(req.headers["x-apnaservo-dev-uid"] || "").trim();
+  const role = String(req.headers["x-apnaservo-dev-role"] || "").trim().toLowerCase();
+  if (!/^(local-user|local-partner)-[a-zA-Z0-9._:-]{6,160}$/.test(uid)) {
+    return null;
+  }
+  if (!["user", "partner"].includes(role) || !uid.startsWith(`local-${role}-`)) {
+    return null;
+  }
+
+  return {
+    uid,
+    role,
+    email_verified: false,
+    development_device: true
+  };
+}
+
 async function verifyFirebaseToken(req, res, next) {
   try {
+    const developmentAuth = developmentDeviceAuth(req);
+    if (developmentAuth) {
+      req.auth = developmentAuth;
+      req.authType = "development_device";
+      return next();
+    }
+
     const header = req.headers.authorization || "";
     const token = header.startsWith("Bearer ") ? header.slice(7) : "";
     if (!token) {
       return res.status(401).json({ message: "Firebase ID token missing" });
     }
 
-    const decoded = await admin.auth().verifyIdToken(token, true);
+    const checkRevoked = process.env.NODE_ENV === "production";
+    const decoded = await admin.auth().verifyIdToken(token, checkRevoked);
     if (!decoded.uid) {
       return res.status(401).json({ message: "Invalid Firebase token" });
     }

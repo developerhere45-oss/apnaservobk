@@ -4,6 +4,7 @@ const { allowedCorsOrigins } = require("../config/env");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
 const LocationLog = require("../models/LocationLog");
+const AdminActivity = require("../models/AdminActivity");
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
 const { lifecycleLabel, lifecycleStatusForBooking } = require("../utils/bookingLifecycle");
 
@@ -58,6 +59,18 @@ function allowSocketEvent(socket, key, limit, windowMs) {
   bucket.count += 1;
   socket.rateLimits[key] = bucket;
   return bucket.count <= limit;
+}
+
+function handleSocketEvent(socket, event, handler) {
+  socket.on(event, (...args) => {
+    Promise.resolve(handler(...args)).catch((error) => {
+      console.error(`Socket event ${event} failed:`, error);
+      socket.emit("realtime:error", {
+        event,
+        message: "Realtime update failed. The app will retry automatically."
+      });
+    });
+  });
 }
 
 function verifyAdminRealtimeToken(token) {
@@ -171,6 +184,7 @@ async function identifySocket(socket, next) {
   try {
     const token = socket.handshake.auth?.token || socket.handshake.headers.authorization?.replace("Bearer ", "");
     const role = socket.handshake.auth?.role || socket.handshake.query?.role || "";
+    const devUid = String(socket.handshake.auth?.devUid || "").trim();
 
     if (role === "admin") {
       const adminToken = socket.handshake.auth?.adminToken || socket.handshake.query?.adminToken || "";
@@ -183,11 +197,26 @@ async function identifySocket(socket, next) {
       return next();
     }
 
-    if (!token) {
-      return next(new Error("Firebase token missing"));
-    }
+    let decoded;
+    const developmentDeviceAuth = process.env.NODE_ENV !== "production"
+      && process.env.ALLOW_DEV_DEVICE_AUTH === "true"
+      && ["user", "partner"].includes(role)
+      && devUid.startsWith(`local-${role}-`)
+      && /^(local-user|local-partner)-[a-zA-Z0-9._:-]{6,160}$/.test(devUid);
 
-    const decoded = await admin.auth().verifyIdToken(token, true);
+    if (developmentDeviceAuth) {
+      decoded = {
+        uid: devUid,
+        role,
+        email_verified: false,
+        development_device: true
+      };
+    } else {
+      if (!token) {
+        return next(new Error("Firebase token missing"));
+      }
+      decoded = await admin.auth().verifyIdToken(token, process.env.NODE_ENV === "production");
+    }
     socket.auth = decoded;
     socket.role = role;
 
@@ -258,44 +287,51 @@ function initBookingSocket(httpServer) {
   io.use(identifySocket);
 
   io.on("connection", (socket) => {
-    socket.on("partner:online", async (payload = {}) => {
+    handleSocketEvent(socket, "partner:online", async (payload = {}) => {
       if (!socket.partner) return;
       if (!allowSocketEvent(socket, "partner:online", 20, 60 * 1000)) {
         socket.emit("rate_limited", { event: "partner:online" });
         return;
       }
-      socket.partner.isOnline = true;
+      const partner = await Partner.findById(socket.partner._id);
+      if (!partner) return;
+      const update = { isOnline: true };
       if (payload.lat && payload.lng && payload.accuracy) {
-        const validation = validatePartnerLocation({ partner: socket.partner, payload });
+        const validation = validatePartnerLocation({ partner, payload });
         if (validation.valid) {
-          socket.partner.set(partnerLocationUpdate(validation));
+          Object.assign(update, partnerLocationUpdate(validation));
         }
       }
-      await socket.partner.save();
-      socket.join(`partner:${socket.partner._id}`);
+      socket.partner = await Partner.findByIdAndUpdate(partner._id, { $set: update }, { new: true });
+      socket.join(`partner:${partner._id}`);
       socket.emit("partner:online", { ok: true });
     });
 
-    socket.on("partner:offline", async () => {
+    handleSocketEvent(socket, "partner:offline", async () => {
       if (!socket.partner) return;
       if (!allowSocketEvent(socket, "partner:offline", 20, 60 * 1000)) {
         socket.emit("rate_limited", { event: "partner:offline" });
         return;
       }
-      socket.partner.isOnline = false;
-      await socket.partner.save();
+      socket.partner = await Partner.findByIdAndUpdate(
+        socket.partner._id,
+        { $set: { isOnline: false } },
+        { new: true }
+      );
       socket.emit("partner:offline", { ok: true });
     });
 
-    socket.on("partner:location_update", async (payload = {}) => {
+    handleSocketEvent(socket, "partner:location_update", async (payload = {}) => {
       if (!socket.partner) return;
       if (!allowSocketEvent(socket, "partner:location_update", 90, 60 * 1000)) {
         socket.emit("rate_limited", { event: "partner:location_update" });
         return;
       }
-      const validation = validatePartnerLocation({ partner: socket.partner, payload });
+      const partner = await Partner.findById(socket.partner._id);
+      if (!partner) return;
+      const validation = validatePartnerLocation({ partner, payload });
       await LocationLog.create({
-        partnerId: socket.partner._id,
+        partnerId: partner._id,
         lat: Number.isFinite(validation.lat) ? validation.lat : 0,
         lng: Number.isFinite(validation.lng) ? validation.lng : 0,
         accuracy: validation.accuracy,
@@ -311,8 +347,11 @@ function initBookingSocket(httpServer) {
         socket.emit("partner:location_rejected", { message: validation.reason });
         return;
       }
-      socket.partner.set(partnerLocationUpdate(validation));
-      await socket.partner.save();
+      socket.partner = await Partner.findByIdAndUpdate(
+        partner._id,
+        { $set: partnerLocationUpdate(validation) },
+        { new: true }
+      );
       socket.emit("partner:location_ok", { ok: true });
     });
   });
@@ -321,6 +360,7 @@ function initBookingSocket(httpServer) {
 }
 
 function emitNewBookingToPartners(booking, partners) {
+  emitAdminEvent("booking:new_request", serializeBooking(booking));
   if (!io) return;
   const payload = partnerBookingPayload(booking);
   const targetPartners = Array.isArray(partners) ? partners : [];
@@ -330,11 +370,12 @@ function emitNewBookingToPartners(booking, partners) {
 }
 
 function emitBookingAccepted(booking, acceptedPartner = null) {
-  if (!io) return;
   const userPayload = serializeBooking(booking);
   const partnerPayload = partnerBookingPayload(booking);
   const winnerPartnerId = booking.partnerId ? String(booking.partnerId) : "";
   const winnerFirebaseUid = acceptedPartner?.firebaseUid || "";
+  emitAdminEvent("booking:accepted", userPayload);
+  if (!io) return;
   const unavailablePayload = {
     _id: String(booking._id),
     bookingId: String(booking._id),
@@ -352,7 +393,6 @@ function emitBookingAccepted(booking, acceptedPartner = null) {
   if (winnerPartnerId) {
     io.to(`partner:${winnerPartnerId}`).emit("booking:accepted", partnerPayload);
   }
-  io.to("admin").emit("booking:accepted", userPayload);
   for (const partnerId of booking.requestedPartners || []) {
     const targetPartnerId = String(partnerId);
     if (targetPartnerId === winnerPartnerId) {
@@ -363,16 +403,20 @@ function emitBookingAccepted(booking, acceptedPartner = null) {
 }
 
 function emitBookingRejected(booking, partnerId) {
+  emitAdminEvent("booking:rejected", {
+    ...serializeBooking(booking),
+    rejectedByPartnerId: String(partnerId || "")
+  });
   if (!io) return;
   io.to(`partner:${partnerId}`).emit("booking:rejected", partnerBookingPayload(booking));
 }
 
 function emitBookingStatusUpdate(booking) {
-  if (!io) return;
   const userPayload = serializeBooking(booking);
   const partnerPayload = partnerBookingPayload(booking);
+  emitAdminEvent("booking:status_update", userPayload);
+  if (!io) return;
   io.to(`user:${booking.userId}`).emit("booking:status_update", userPayload);
-  io.to("admin").emit("booking:status_update", userPayload);
   if (booking.partnerId) {
     io.to(`partner:${booking.partnerId}`).emit("booking:status_update", partnerPayload);
   }
@@ -399,13 +443,148 @@ function emitBookingChatSeen(booking, payload) {
   }
 }
 
+function mongoId(value) {
+  const text = String(value || "").trim();
+  return /^[a-f0-9]{24}$/i.test(text) ? text : null;
+}
+
+function eventCategory(eventName) {
+  return String(eventName || "").split(":")[0] || "system";
+}
+
+function eventTitle(eventName, payload) {
+  const status = String(payload.status || "").toLowerCase();
+  const quoteStatus = String(payload.quoteStatus || "").toLowerCase();
+  const titles = {
+    "user:registered": "New user registered",
+    "user:updated": "User account updated",
+    "booking:new_request": "New booking created",
+    "booking:accepted": "Partner assigned",
+    "booking:rejected": "Partner rejected booking",
+    "booking:quote_sent": "Partner sent final amount",
+    "booking:quote_countered": "Customer sent counter offer",
+    "booking:quote_expired": "Final amount approval expired",
+    "booking:payment_accepted": "Customer accepted amount",
+    "booking:completed": "Booking completed",
+    "booking:cancelled": "Booking cancelled",
+    "booking:disputed": "Booking disputed",
+    "booking:customer_no_response": "Customer no-response reported",
+    "booking:technician_sos": "Technician SOS raised",
+    "booking:proof_photo_uploaded": "Job proof photo uploaded",
+    "booking:revisit_requested": "Warranty revisit requested",
+    "booking:call_log": "Partner call activity",
+    "payment:created": "Payment order created",
+    "payment:confirmed": "Payment confirmed",
+    "complaint:submitted": "New complaint submitted",
+    "complaint:updated": "Complaint updated",
+    "support:ticket_created": "New support ticket",
+    "support:ticket_updated": "Support ticket updated",
+    "partner:registered": "New partner registered",
+    "partner:updated": "Partner profile updated",
+    "partner:online": "Partner came online",
+    "partner:offline": "Partner went offline",
+    "partner:location_update": "Partner location updated"
+  };
+  if (eventName === "booking:status_update") {
+    if (status === "sent_to_partner") return "Booking sent to partners";
+    if (status === "accepted") return "Partner assigned";
+    if (status === "on_the_way") return "Partner on the way";
+    if (status === "arrived") return "Partner arrived";
+    if (status === "started") return "Job started";
+    if (status === "amount_pending" && quoteStatus === "countered") return "Customer sent counter offer";
+    if (status === "amount_pending") return "Partner sent final amount";
+    if (status === "completed") return "Booking completed";
+    if (status === "cancelled" || status === "canceled") return "Booking cancelled";
+    if (status === "disputed") return "Booking disputed";
+    if (status === "customer_no_response") return "Customer no-response reported";
+  }
+  return titles[eventName] || String(eventName || "Admin activity").replace(/[:_]/g, " ");
+}
+
+function eventDetail(eventName, payload) {
+  const bookingCode = payload.bookingCode || payload.bookingId || "";
+  const userName = payload.userName || payload.name || "";
+  const partnerName = payload.partnerName || "";
+  const amount = Number(payload.finalAmount || payload.quoteAmount || payload.amount || 0);
+  const status = payload.status ? String(payload.status).replace(/_/g, " ") : "";
+  if (eventName.startsWith("booking:")) {
+    const parts = [
+      bookingCode ? `Booking ${bookingCode}` : "Booking",
+      payload.serviceName || payload.serviceCategory || "",
+      userName ? `Customer ${userName}` : "",
+      partnerName ? `Partner ${partnerName}` : "",
+      amount ? `Rs ${amount}` : "",
+      status ? `Status ${status}` : ""
+    ].filter(Boolean);
+    return parts.join(" - ");
+  }
+  if (eventName.startsWith("payment:")) {
+    return [
+      bookingCode ? `Booking ${bookingCode}` : "Payment",
+      amount ? `Rs ${amount}` : "",
+      payload.paymentStatus || payload.status || ""
+    ].filter(Boolean).join(" - ");
+  }
+  if (eventName.startsWith("support:")) {
+    return [
+      payload.ticketId || payload.supportTicketId || "Support ticket",
+      payload.userName || "",
+      payload.priority || "",
+      payload.status || ""
+    ].filter(Boolean).join(" - ");
+  }
+  if (eventName.startsWith("complaint:")) {
+    return [
+      payload.complaintId || payload.disputeId || "Complaint",
+      bookingCode ? `Booking ${bookingCode}` : "",
+      payload.reason || "",
+      payload.status || ""
+    ].filter(Boolean).join(" - ");
+  }
+  if (eventName.startsWith("user:")) {
+    return [userName || payload.phone || payload.userId || "User", payload.email || ""].filter(Boolean).join(" - ");
+  }
+  return status || "Live backend event received";
+}
+
+async function recordAdminActivity(eventName, payload) {
+  const bookingId = mongoId(payload.bookingId || payload._id);
+  await AdminActivity.create({
+    eventName,
+    category: eventCategory(eventName),
+    title: eventTitle(eventName, payload),
+    detail: eventDetail(eventName, payload),
+    bookingId,
+    bookingCode: String(payload.bookingCode || "").trim(),
+    userId: mongoId(payload.userId),
+    partnerId: mongoId(payload.partnerId || payload.acceptedByPartnerId || payload.rejectedByPartnerId),
+    ticketId: String(payload.ticketId || payload.supportTicketId || "").trim(),
+    complaintId: String(payload.complaintId || payload.disputeId || "").trim(),
+    status: String(payload.status || payload.paymentStatus || "").trim(),
+    amount: Number(payload.finalAmount || payload.quoteAmount || payload.amount || 0),
+    actorRole: String(payload.actorRole || payload.by || "").trim(),
+    actorName: String(payload.actorName || payload.userName || payload.partnerName || payload.name || "").trim(),
+    source: String(payload.source || "backend").trim(),
+    payload
+  });
+}
+
 function emitAdminEvent(eventName, payload = {}) {
-  if (!io || !eventName) return;
-  io.to("admin").emit(eventName, {
+  if (!eventName) return;
+  const eventPayload = {
     ...payload,
     eventName,
     emittedAt: new Date().toISOString()
+  };
+  recordAdminActivity(eventName, eventPayload).catch((error) => {
+    console.error("Failed to record admin activity", {
+      eventName,
+      message: error.message
+    });
   });
+  if (io) {
+    io.to("admin").emit(eventName, eventPayload);
+  }
 }
 
 function getIO() {

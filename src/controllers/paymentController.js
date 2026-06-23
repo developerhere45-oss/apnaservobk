@@ -5,6 +5,7 @@ const User = require("../models/User");
 const { Booking } = require("../models/Booking");
 const razorpayClient = require("../config/razorpay");
 const { reliableNotify } = require("../utils/reliableNotify");
+const { emitAdminEvent, serializeBooking } = require("../sockets/bookingSocket");
 
 const objectIdSchema = z.string().regex(/^[a-f0-9]{24}$/i);
 const createOrderSchema = z.object({
@@ -61,13 +62,20 @@ async function createOrder(req, res, next) {
       }
     });
 
-    await Payment.create({
+    const payment = await Payment.create({
       bookingId: booking._id,
       userId: booking.userId,
       partnerId: booking.partnerId,
       amount: booking.price,
       status: "created",
       razorpayOrderId: order.id
+    });
+    emitAdminEvent("payment:created", {
+      ...serializeBooking(booking),
+      paymentId: String(payment._id),
+      amount: payment.amount,
+      paymentStatus: payment.status,
+      razorpayOrderId: payment.razorpayOrderId
     });
 
     return res.json({ order });
@@ -115,6 +123,14 @@ async function verifyPayment(req, res, next) {
     payment.razorpayPaymentId = razorpayPaymentId;
     payment.razorpaySignature = razorpaySignature;
     await payment.save();
+    emitAdminEvent("payment:confirmed", {
+      ...serializeBooking(booking),
+      paymentId: String(payment._id),
+      amount: payment.amount,
+      paymentStatus: payment.status,
+      razorpayOrderId: payment.razorpayOrderId,
+      razorpayPaymentId: payment.razorpayPaymentId
+    });
 
     await reliableNotify({
       recipients: [userRecipient(user)],

@@ -7,6 +7,7 @@ const Partner = require("../models/Partner");
 const { Booking } = require("../models/Booking");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { recomputePartnerRating } = require("../utils/ratingAggregation");
+const { emitAdminEvent } = require("../sockets/bookingSocket");
 
 const reviewSchema = z.object({
   rating: z.coerce.number().int().min(1).max(5),
@@ -206,6 +207,14 @@ async function disputeReview(req, res, next) {
       userId: review.userId,
       reason: body.reason || "other",
       details: body.details || ""
+    });
+    emitAdminEvent("complaint:submitted", {
+      disputeId: String(dispute._id),
+      bookingId: String(dispute.bookingId),
+      bookingCode: dispute.bookingCode || "",
+      userId: String(dispute.userId),
+      reason: dispute.reason,
+      status: dispute.status
     });
 
     review.status = "under_dispute";

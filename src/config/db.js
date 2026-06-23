@@ -1,7 +1,17 @@
 const mongoose = require("mongoose");
 
+let memoryServer;
+
 async function connectDb() {
-  const uri = process.env.MONGODB_URI;
+  let uri = process.env.MONGODB_URI;
+  if (process.env.USE_IN_MEMORY_DB === "true") {
+    const { MongoMemoryServer } = require("mongodb-memory-server");
+    memoryServer = await MongoMemoryServer.create({
+      instance: { dbName: "apnaservo_dev" }
+    });
+    uri = memoryServer.getUri();
+    console.log("Development in-memory MongoDB started");
+  }
   if (!uri) {
     throw new Error("MONGODB_URI is required in .env");
   }
@@ -21,6 +31,9 @@ async function connectDb() {
   }
 
   console.log("MongoDB connected");
+  if (process.env.SEED_ADMIN_DEMO === "true") {
+    await require("../dev/seedAdminDemo")();
+  }
 }
 
 module.exports = connectDb;

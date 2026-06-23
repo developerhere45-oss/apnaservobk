@@ -265,7 +265,7 @@ async function expireQuoteIfNeeded(booking, options = {}) {
     return false;
   }
   booking.quoteStatus = "expired";
-    booking.status = "started";
+  booking.status = "started";
   booking.paymentStatus = "pending";
   booking.statusTimeline.push({ status: "quote_expired", at: new Date(), by: "system" });
   booking.quoteHistory.push({
@@ -278,6 +278,7 @@ async function expireQuoteIfNeeded(booking, options = {}) {
   await booking.save();
   if (options.emit) {
     emitBookingStatusUpdate(booking);
+    emitAdminEvent("booking:quote_expired", serializeBooking(booking));
   }
   return true;
 }
@@ -424,7 +425,6 @@ function emergencyPayload(body) {
 }
 
 async function dispatchBookingToPartners(booking, category, lat, lng) {
-  emitAdminEvent("booking:new_request", serializeBooking(booking));
   let partners = [];
   try {
     partners = await findNearbyPartners({
@@ -483,6 +483,8 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
 async function getOrCreateUser(req, body) {
   const phone = body.userPhone || req.auth.phone_number || "";
   const verified = firebasePhoneVerified(req, phone);
+  const now = new Date();
+  const existing = await User.findOne({ firebaseUid: req.auth.uid }).select("_id").lean();
   const update = {
     $set: {
       name: body.userName || req.auth.name || "ApnaServo Customer",
@@ -491,10 +493,20 @@ async function getOrCreateUser(req, body) {
       city: body.city || "Guwahati",
       address: body.address || "",
       bookingRiskStatus: verified ? "trusted" : "otp_required",
+      lastLoginAt: now,
       location: {
         type: "Point",
         coordinates: [Number(body.lng || 91.7362), Number(body.lat || 26.1445)]
       }
+    },
+    $setOnInsert: {
+      registrationHistory: [{
+        source: "booking_create",
+        provider: "firebase",
+        registeredAt: now,
+        ip: req.ip || "",
+        userAgent: req.get("user-agent") || ""
+      }]
     }
   };
   if (verified) {
@@ -504,11 +516,39 @@ async function getOrCreateUser(req, body) {
     update.$set.phoneVerified = false;
     update.$set.phoneVerifiedAt = null;
   }
-  return User.findOneAndUpdate(
+  const user = await User.findOneAndUpdate(
     { firebaseUid: req.auth.uid },
     update,
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
+  const normalizedAddress = String(body.address || "").trim().toLowerCase();
+  const alreadySaved = normalizedAddress && (user.savedAddresses || []).some(
+    (entry) => String(entry.address || "").trim().toLowerCase() === normalizedAddress
+  );
+  if (normalizedAddress && !alreadySaved) {
+    user.savedAddresses.push({
+      label: user.savedAddresses.length ? "Service address" : "Primary",
+      address: body.address,
+      city: body.city || "Guwahati",
+      location: {
+        type: "Point",
+        coordinates: [Number(body.lng || 91.7362), Number(body.lat || 26.1445)]
+      },
+      isDefault: user.savedAddresses.length === 0,
+      updatedAt: now
+    });
+    await user.save();
+  }
+  if (!existing) {
+    emitAdminEvent("user:registered", {
+      userId: String(user._id),
+      name: user.name,
+      phone: user.phone,
+      email: user.email,
+      createdAt: user.createdAt
+    });
+  }
+  return user;
 }
 
 async function createBooking(req, res, next) {
@@ -927,6 +967,16 @@ async function updateStatus(req, res, next) {
     }
 
     emitBookingStatusUpdate(booking);
+    if (nextStatus === "amount_pending") {
+      emitAdminEvent("booking:quote_sent", serializeBooking(booking));
+    } else if (nextStatus === "completed") {
+      emitAdminEvent("booking:payment_accepted", serializeBooking(booking));
+      emitAdminEvent("booking:completed", serializeBooking(booking));
+    } else if (nextStatus === "cancelled" || nextStatus === "canceled") {
+      emitAdminEvent("booking:cancelled", serializeBooking(booking));
+    } else if (nextStatus === "disputed") {
+      emitAdminEvent("booking:disputed", serializeBooking(booking));
+    }
 
     const userForNotification = await User.findById(booking.userId);
     if (["on_the_way", "amount_pending", "completed"].includes(nextStatus)) {
@@ -1037,6 +1087,7 @@ async function counterOfferQuote(req, res, next) {
     });
 
     emitBookingStatusUpdate(booking);
+    emitAdminEvent("booking:quote_countered", serializeBooking(booking));
 
     if (booking.partnerId) {
       const partner = await Partner.findById(booking.partnerId);
@@ -1184,6 +1235,11 @@ async function reportCustomerNoResponse(req, res, next) {
     await Partner.findByIdAndUpdate(partner._id, { $set: partnerLocationUpdate(validation) });
 
     emitBookingStatusUpdate(booking);
+    emitAdminEvent("booking:customer_no_response", {
+      ...serializeBooking(booking),
+      reportId: String(report._id),
+      reason: report.reason
+    });
 
     const userForNotification = await User.findById(booking.userId);
     await reliableNotify({
@@ -1290,6 +1346,15 @@ async function createCallLog(req, res, next) {
       message: body.reason || "",
       metadata: { callLogId: log._id, action: body.action }
     });
+    emitAdminEvent("booking:call_log", {
+      ...serializeBooking(booking),
+      callLogId: String(log._id),
+      action: body.action,
+      status,
+      actorRole: "partner",
+      partnerId: String(partner._id),
+      partnerName: partner.name || ""
+    });
 
     return res.json({
       ok: true,
@@ -1393,6 +1458,11 @@ async function createTechnicianSos(req, res, next) {
     });
 
     emitBookingStatusUpdate(booking);
+    emitAdminEvent("booking:technician_sos", {
+      ...serializeBooking(booking),
+      sosId: String(sos._id),
+      reason: sos.reason
+    });
     return res.status(201).json({
       ok: true,
       sos: {
@@ -1469,6 +1539,14 @@ async function uploadJobProofPhoto(req, res, next) {
         proofPhotoId: photo._id
       }
     });
+    emitAdminEvent("booking:proof_photo_uploaded", {
+      ...serializeBooking(booking),
+      proofPhotoId: String(photo._id),
+      stage: body.stage,
+      actorRole: "partner",
+      partnerId: String(partner._id),
+      partnerName: partner.name || ""
+    });
 
     return res.status(201).json({ ok: true, proofPhoto: serializeProofPhoto(photo) });
   } catch (error) {
@@ -1539,6 +1617,11 @@ async function createRevisitRequest(req, res, next) {
     });
 
     emitBookingStatusUpdate(booking);
+    emitAdminEvent("booking:revisit_requested", {
+      ...serializeBooking(booking),
+      revisitRequestId: String(request._id),
+      reason: request.reason
+    });
     return res.status(201).json({ revisitRequest: serializeRevisitRequest(request) });
   } catch (error) {
     return next(error);
