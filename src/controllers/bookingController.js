@@ -425,6 +425,8 @@ function emergencyPayload(body) {
 }
 
 async function dispatchBookingToPartners(booking, category, lat, lng) {
+  emitAdminEvent("booking:new_request", serializeBooking(booking));
+
   let partners = [];
   try {
     partners = await findNearbyPartners({

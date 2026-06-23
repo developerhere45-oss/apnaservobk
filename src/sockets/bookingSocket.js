@@ -360,7 +360,6 @@ function initBookingSocket(httpServer) {
 }
 
 function emitNewBookingToPartners(booking, partners) {
-  emitAdminEvent("booking:new_request", serializeBooking(booking));
   if (!io) return;
   const payload = partnerBookingPayload(booking);
   const targetPartners = Array.isArray(partners) ? partners : [];
