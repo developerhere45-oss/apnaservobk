@@ -363,16 +363,17 @@ function partnerCategoryVariants(partner) {
 }
 
 function partnerOpenBookingVisibility(partner, categories) {
+  const cityRegex = new RegExp(escapeRegExp(partner.city || "Guwahati"), "i");
   return {
+    partnerId: null,
     serviceCategory: { $in: categories },
     rejectedPartners: { $ne: partner._id },
+    status: { $in: pendingAssignmentStatuses() },
     $or: [
-      { requestedPartners: partner._id, status: { $in: pendingAssignmentStatuses() } },
-      {
-        status: "pending",
-        requestedPartners: { $size: 0 },
-        city: new RegExp(escapeRegExp(partner.city || "Guwahati"), "i")
-      }
+      { requestedPartners: partner._id },
+      { requestedPartners: { $size: 0 } },
+      { city: cityRegex },
+      { city: { $in: ["", null] } }
     ]
   };
 }
@@ -390,6 +391,13 @@ function partnerAcceptBlockReason(partner) {
     return "Select at least one service before accepting jobs";
   }
   return "";
+}
+
+function partnerCanViewOpenJobs(partner) {
+  if (!partner) return false;
+  if (partner.trustStatus === "suspended") return false;
+  if (!partner.isOnline) return false;
+  return Array.isArray(partner.serviceCategory) && partner.serviceCategory.length > 0;
 }
 
 function userRecipient(user) {
@@ -664,11 +672,11 @@ async function listPartnerBookings(req, res, next) {
     if (!partner) return res.json({ bookings: [] });
 
     const categories = partnerCategoryVariants(partner);
-    const canReceiveNewJobs = !partnerAcceptBlockReason(partner);
+    const canViewOpenJobs = partnerCanViewOpenJobs(partner);
     const bookings = await Booking.find({
       $or: [
         { partnerId: partner._id },
-        canReceiveNewJobs ? partnerOpenBookingVisibility(partner, categories) : { _id: null }
+        canViewOpenJobs ? partnerOpenBookingVisibility(partner, categories) : { _id: null }
       ]
     }).sort({ createdAt: -1 }).limit(80);
 
