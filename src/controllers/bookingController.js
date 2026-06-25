@@ -22,6 +22,7 @@ const {
 } = require("../utils/bookingLifecycle");
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { reliableNotify } = require("../utils/reliableNotify");
+const { activeDeviceTokens } = require("../utils/notificationTokens");
 const {
   emitNewBookingToPartners,
   emitBookingAccepted,
@@ -401,23 +402,29 @@ function partnerCanViewOpenJobs(partner) {
 }
 
 function userRecipient(user) {
-  return user ? {
+  if (!user) return null;
+  const tokens = activeDeviceTokens(user, "user").map((device) => device.token);
+  return {
     role: "user",
     userId: user._id,
     firebaseUid: user.firebaseUid,
-    token: user.fcmToken,
+    token: tokens[0] || user.fcmToken,
+    tokens,
     phone: user.phone
-  } : null;
+  };
 }
 
 function partnerRecipient(partner) {
-  return partner ? {
+  if (!partner) return null;
+  const tokens = activeDeviceTokens(partner, "partner").map((device) => device.token);
+  return {
     role: "partner",
     partnerId: partner._id,
     firebaseUid: partner.firebaseUid,
-    token: partner.fcmToken,
+    token: tokens[0] || partner.fcmToken,
+    tokens,
     phone: partner.phone
-  } : null;
+  };
 }
 
 function emergencyPayload(body) {

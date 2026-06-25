@@ -5,6 +5,7 @@ const User = require("../models/User");
 const { Booking } = require("../models/Booking");
 const razorpayClient = require("../config/razorpay");
 const { reliableNotify } = require("../utils/reliableNotify");
+const { activeDeviceTokens } = require("../utils/notificationTokens");
 const { emitAdminEvent, serializeBooking } = require("../sockets/bookingSocket");
 
 const objectIdSchema = z.string().regex(/^[a-f0-9]{24}$/i);
@@ -20,13 +21,16 @@ const verifyPaymentSchema = z.object({
 });
 
 function userRecipient(user) {
-  return user ? {
+  if (!user) return null;
+  const tokens = activeDeviceTokens(user, "user").map((device) => device.token);
+  return {
     role: "user",
     userId: user._id,
     firebaseUid: user.firebaseUid,
-    token: user.fcmToken,
+    token: tokens[0] || user.fcmToken,
+    tokens,
     phone: user.phone
-  } : null;
+  };
 }
 
 function secureEqualHex(left, right) {

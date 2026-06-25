@@ -10,6 +10,7 @@ const { normalizeServiceCategory } = require("../utils/serviceCategory");
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
 const { validateDocumentUpload } = require("../utils/documentValidation");
 const { emitAdminEvent } = require("../sockets/bookingSocket");
+const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 
 const profileSchema = z.object({
   name: z.string().trim().min(2).max(80).regex(/^[A-Za-z][A-Za-z .'-]+$/).optional(),
@@ -483,14 +484,31 @@ async function uploadDocument(req, res, next) {
 async function saveFcmToken(req, res, next) {
   try {
     const token = String(req.body?.fcmToken || "").trim();
-    if (!token || token.length > 4096) {
+    const deviceToken = normalizeDeviceToken({
+      token,
+      platform: req.body?.platform || "android",
+      deviceId: req.body?.deviceId || "",
+      appType: "partner"
+    });
+    if (!deviceToken) {
       return res.status(400).json({ message: "Valid FCM token is required" });
     }
     const partner = await Partner.findOneAndUpdate(
       { firebaseUid: req.auth.uid },
-      { $set: { fcmToken: token } },
+      {
+        $setOnInsert: {
+          firebaseUid: req.auth.uid,
+          partnerCode: `ASP${Date.now().toString().slice(-6)}${crypto.randomBytes(2).toString("hex").toUpperCase()}`,
+          name: req.auth.name || "ApnaServo Partner",
+          phone: normalizePhone(req.auth.phone_number || ""),
+          email: normalizeEmail(req.auth.email || ""),
+          city: "Guwahati"
+        }
+      },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    upsertDeviceToken(partner, deviceToken);
+    await partner.save();
     return res.json({ ok: true, partnerId: partner._id });
   } catch (error) {
     return next(error);
@@ -505,11 +523,12 @@ async function requestDeletion(req, res, next) {
       {
         $set: {
           accountStatus: "deletion_requested",
-          deletionRequestedAt: new Date(),
-          deletionReason: body.reason || "Partner requested account deletion from Android app",
-          fcmToken: "",
-          isOnline: false
-        },
+            deletionRequestedAt: new Date(),
+            deletionReason: body.reason || "Partner requested account deletion from Android app",
+            fcmToken: "",
+            deviceTokens: [],
+            isOnline: false
+          },
         $setOnInsert: {
           firebaseUid: req.auth.uid,
           partnerCode: `ASP${Date.now().toString().slice(-6)}${crypto.randomBytes(2).toString("hex").toUpperCase()}`,

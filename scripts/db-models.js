@@ -1,4 +1,6 @@
 module.exports = {
+  AdminActivity: require("../src/models/AdminActivity"),
+  AdminNotification: require("../src/models/AdminNotification"),
   Booking: require("../src/models/Booking").Booking,
   BookingMessage: require("../src/models/BookingMessage"),
   CallLog: require("../src/models/CallLog"),

@@ -60,6 +60,12 @@ const fcmTokenLimiter = limiter({
   message: "Too many token updates. Please wait and try again."
 });
 
+const adminNotificationLimiter = limiter({
+  windowMs: 60 * 1000,
+  limit: 20,
+  message: "Too many admin notification requests. Please wait and try again."
+});
+
 const locationUpdateLimiter = limiter({
   windowMs: 60 * 1000,
   limit: 90,
@@ -73,6 +79,7 @@ const verificationLimiter = limiter({
 });
 
 module.exports = {
+  adminNotificationLimiter,
   bookingCreateLimiter,
   bookingReadLimiter,
   bookingWriteLimiter,

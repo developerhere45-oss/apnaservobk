@@ -12,6 +12,10 @@ const inAppNotificationSchema = new mongoose.Schema(
     category: { type: String, default: "system", trim: true, index: true },
     priority: { type: String, enum: ["normal", "high"], default: "normal" },
     data: { type: mongoose.Schema.Types.Mixed, default: {} },
+    adminNotificationId: { type: mongoose.Schema.Types.ObjectId, ref: "AdminNotification", default: null, index: true },
+    imageUrl: { type: String, trim: true, default: "" },
+    actionType: { type: String, trim: true, default: "NONE", index: true },
+    actionId: { type: String, trim: true, default: "" },
     bookingId: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", default: null, index: true },
     bookingCode: { type: String, default: "", trim: true, index: true },
     readAt: { type: Date, default: null, index: true },
@@ -32,5 +36,6 @@ inAppNotificationSchema.index({ userId: 1, readAt: 1, createdAt: -1 });
 inAppNotificationSchema.index({ partnerId: 1, readAt: 1, createdAt: -1 });
 inAppNotificationSchema.index({ recipientFirebaseUid: 1, createdAt: -1 });
 inAppNotificationSchema.index({ category: 1, priority: 1, createdAt: -1 });
+inAppNotificationSchema.index({ adminNotificationId: 1, createdAt: -1 });
 
 module.exports = mongoose.model("InAppNotification", inAppNotificationSchema);

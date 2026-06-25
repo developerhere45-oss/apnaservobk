@@ -93,6 +93,9 @@ async function sendSmsBackup({ notification, recipient, smsBody }) {
 }
 
 async function notifyOne({ recipient, title, body, cleanData, type, category, priority, smsBody }) {
+  const tokens = Array.isArray(recipient.tokens) && recipient.tokens.length
+    ? recipient.tokens.filter(Boolean)
+    : (recipient.token ? [recipient.token] : []);
   const notification = await InAppNotification.create({
     ...notificationOwner(recipient),
     title,
@@ -103,13 +106,13 @@ async function notifyOne({ recipient, title, body, cleanData, type, category, pr
     data: cleanData,
     bookingId: cleanData.bookingId || null,
     bookingCode: cleanData.bookingCode || "",
-    pushStatus: recipient.token ? "pending" : "skipped"
+    pushStatus: tokens.length ? "pending" : "skipped"
   });
 
-  let pushResult = { successCount: 0, failureCount: recipient.token ? 1 : 0 };
-  if (recipient.token) {
+  let pushResult = { successCount: 0, failureCount: tokens.length };
+  if (tokens.length) {
     pushResult = await sendNotification({
-      token: recipient.token,
+      tokens,
       title,
       body,
       data: cleanData
@@ -120,7 +123,7 @@ async function notifyOne({ recipient, title, body, cleanData, type, category, pr
     notification.pushStatus = notification.pushSuccessCount > 0 ? "sent" : "failed";
   }
 
-  if (!recipient.token) {
+  if (!tokens.length) {
     notification.pushStatus = "skipped";
   }
 

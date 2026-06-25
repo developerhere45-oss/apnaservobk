@@ -51,6 +51,20 @@ const adminNoteSchema = new mongoose.Schema(
   { _id: true }
 );
 
+const deviceTokenSchema = new mongoose.Schema(
+  {
+    token: { type: String, trim: true, default: "" },
+    tokenHash: { type: String, trim: true, default: "", index: true },
+    platform: { type: String, enum: ["android", "ios", "web"], default: "android" },
+    deviceId: { type: String, trim: true, default: "" },
+    appType: { type: String, enum: ["user"], default: "user" },
+    isActive: { type: Boolean, default: true, index: true },
+    lastUpdatedAt: { type: Date, default: Date.now },
+    createdAt: { type: Date, default: Date.now }
+  },
+  { _id: true }
+);
+
 const userSchema = new mongoose.Schema(
   {
     firebaseUid: { type: String, required: true, unique: true, index: true },
@@ -73,6 +87,7 @@ const userSchema = new mongoose.Schema(
     loginHistory: { type: [loginHistorySchema], default: [] },
     adminNotes: { type: [adminNoteSchema], default: [] },
     fcmToken: { type: String, default: "" },
+    deviceTokens: { type: [deviceTokenSchema], default: [] },
     accountStatus: { type: String, enum: ["active", "suspended", "blocked", "deletion_requested", "deleted"], default: "active", index: true },
     deletionRequestedAt: { type: Date, default: null },
     deletionReason: { type: String, trim: true, default: "" }
@@ -85,6 +100,7 @@ userSchema.index({ city: 1, createdAt: -1 });
 userSchema.index({ bookingRiskStatus: 1, lastBookingAt: -1 });
 userSchema.index({ accountStatus: 1, deletionRequestedAt: -1 });
 userSchema.index({ lastLoginAt: -1 });
+userSchema.index({ "deviceTokens.tokenHash": 1, "deviceTokens.isActive": 1 });
 userSchema.plugin(encryptedFieldsPlugin, {
   fields: [
     "name",
@@ -94,6 +110,8 @@ userSchema.plugin(encryptedFieldsPlugin, {
     "address",
     "savedAddresses.address",
     "fcmToken",
+    "deviceTokens.token",
+    "deviceTokens.deviceId",
     "deletionReason",
     "adminNotes.note"
   ]

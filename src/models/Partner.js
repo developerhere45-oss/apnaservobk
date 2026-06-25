@@ -9,6 +9,20 @@ const pointSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const deviceTokenSchema = new mongoose.Schema(
+  {
+    token: { type: String, trim: true, default: "" },
+    tokenHash: { type: String, trim: true, default: "", index: true },
+    platform: { type: String, enum: ["android", "ios", "web"], default: "android" },
+    deviceId: { type: String, trim: true, default: "" },
+    appType: { type: String, enum: ["partner"], default: "partner" },
+    isActive: { type: Boolean, default: true, index: true },
+    lastUpdatedAt: { type: Date, default: Date.now },
+    createdAt: { type: Date, default: Date.now }
+  },
+  { _id: true }
+);
+
 const partnerSchema = new mongoose.Schema(
   {
     firebaseUid: { type: String, required: true, unique: true, index: true },
@@ -63,6 +77,7 @@ const partnerSchema = new mongoose.Schema(
     totalJobs: { type: Number, default: 0 },
     responseRate: { type: Number, default: 92 },
     fcmToken: { type: String, default: "" },
+    deviceTokens: { type: [deviceTokenSchema], default: [] },
     photoUrl: { type: String, default: "" },
     accountStatus: { type: String, enum: ["active", "deletion_requested", "deleted"], default: "active", index: true },
     deletionRequestedAt: { type: Date, default: null },
@@ -79,8 +94,9 @@ partnerSchema.index({ kycStatus: 1, faceVerified: 1, selfieVerified: 1, aadhaarV
 partnerSchema.index({ accountStatus: 1, deletionRequestedAt: -1 });
 partnerSchema.index({ phoneHash: 1 }, { unique: true, partialFilterExpression: { phoneHash: { $type: "string", $gt: "" } } });
 partnerSchema.index({ emailHash: 1 }, { unique: true, partialFilterExpression: { emailHash: { $type: "string", $gt: "" } } });
+partnerSchema.index({ "deviceTokens.tokenHash": 1, "deviceTokens.isActive": 1 });
 partnerSchema.plugin(encryptedFieldsPlugin, {
-  fields: ["name", "phone", "email", "serviceArea", "fcmToken", "photoUrl", "selfieUrl", "faceLivenessSessionId", "aadhaarLast4", "idProofUrl", "skillCertificateUrl", "deletionReason"]
+  fields: ["name", "phone", "email", "serviceArea", "fcmToken", "deviceTokens.token", "deviceTokens.deviceId", "photoUrl", "selfieUrl", "faceLivenessSessionId", "aadhaarLast4", "idProofUrl", "skillCertificateUrl", "deletionReason"]
 });
 
 module.exports = mongoose.model("Partner", partnerSchema);

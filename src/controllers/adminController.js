@@ -6,6 +6,7 @@ const Service = require("../models/Service");
 const Review = require("../models/Review");
 const ReviewDispute = require("../models/ReviewDispute");
 const InAppNotification = require("../models/InAppNotification");
+const AdminNotification = require("../models/AdminNotification");
 const Payment = require("../models/Payment");
 const BookingMessage = require("../models/BookingMessage");
 const CustomerNoResponseReport = require("../models/CustomerNoResponseReport");
@@ -660,16 +661,25 @@ async function listResourceRows(req, res, next) {
         resolved: await ReviewDispute.countDocuments({ status: { $in: ["accepted", "rejected"] } })
       };
     } else if (resource === "notifications") {
-      const notifications = await InAppNotification.find().sort({ createdAt: -1 }).limit(limit);
+      const notifications = await AdminNotification.find().sort({ createdAt: -1 }).limit(limit);
       rows = notifications.map((notification) => ({
         id: id(notification._id),
         title: notification.title,
-        role: notification.recipientRole,
-        category: notification.category,
-        priority: notification.priority,
-        status: notification.readAt ? "read" : "unread",
+        sentTo: notification.targetType,
+        recipients: notification.recipientCount,
+        successCount: notification.successCount,
+        failureCount: notification.failureCount,
+        status: notification.status,
+        sentBy: notification.sentByEmail || notification.sentBy,
+        sentAt: iso(notification.sentAt || notification.scheduleAt || notification.createdAt),
         createdAt: iso(notification.createdAt)
       }));
+      metrics = {
+        totalNotifications: await AdminNotification.countDocuments(),
+        sentToday: await AdminNotification.countDocuments({ sentAt: { $gte: startOfToday() } }),
+        scheduled: await AdminNotification.countDocuments({ status: "scheduled" }),
+        failed: await AdminNotification.countDocuments({ status: "failed" })
+      };
     } else if (resource === "reports") {
       const [users, partners, bookings, completed, cancelled, disputes, tickets, payments] = await Promise.all([
         User.countDocuments(),

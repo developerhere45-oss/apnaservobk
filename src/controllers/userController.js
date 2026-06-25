@@ -3,6 +3,7 @@ const User = require("../models/User");
 const SupportTicket = require("../models/SupportTicket");
 const { Booking } = require("../models/Booking");
 const { emitAdminEvent } = require("../sockets/bookingSocket");
+const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 
 const profileSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
@@ -185,14 +186,30 @@ async function me(req, res, next) {
 async function saveFcmToken(req, res, next) {
   try {
     const token = String(req.body?.fcmToken || "").trim();
-    if (!token || token.length > 4096) {
+    const deviceToken = normalizeDeviceToken({
+      token,
+      platform: req.body?.platform || "android",
+      deviceId: req.body?.deviceId || "",
+      appType: "user"
+    });
+    if (!deviceToken) {
       return res.status(400).json({ message: "Valid FCM token is required" });
     }
     const user = await User.findOneAndUpdate(
       { firebaseUid: req.auth.uid },
-      { $set: { fcmToken: token } },
+      {
+        $setOnInsert: {
+          firebaseUid: req.auth.uid,
+          name: req.auth.name || "ApnaServo Customer",
+          phone: req.auth.phone_number || "",
+          email: req.auth.email || "",
+          city: "Guwahati"
+        }
+      },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    upsertDeviceToken(user, deviceToken);
+    await user.save();
     return res.json({ ok: true, userId: user._id });
   } catch (error) {
     return next(error);
@@ -295,10 +312,11 @@ async function requestDeletion(req, res, next) {
       {
         $set: {
           accountStatus: "deletion_requested",
-          deletionRequestedAt: new Date(),
-          deletionReason: body.reason || "Customer requested account deletion from Android app",
-          fcmToken: ""
-        },
+           deletionRequestedAt: new Date(),
+           deletionReason: body.reason || "Customer requested account deletion from Android app",
+           fcmToken: "",
+           deviceTokens: []
+         },
         $setOnInsert: {
           firebaseUid: req.auth.uid,
           name: req.auth.name || "ApnaServo Customer",
