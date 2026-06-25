@@ -8,11 +8,9 @@ function startNotificationScheduler() {
 
   async function tick() {
     const now = new Date();
-    const due = await AdminNotification.findOneAndUpdate(
+    const due = await AdminNotification.findOne(
       { status: "scheduled", scheduleAt: { $lte: now } },
-      { $set: { status: "sending" } },
-      { new: true, sort: { scheduleAt: 1 } }
-    );
+    ).sort({ scheduleAt: 1 });
     if (!due) return;
     try {
       await deliverAdminNotification(due);

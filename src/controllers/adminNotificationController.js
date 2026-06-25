@@ -1,5 +1,6 @@
 const { z } = require("zod");
 const { Readable } = require("stream");
+const mongoose = require("mongoose");
 const AdminNotification = require("../models/AdminNotification");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
@@ -77,6 +78,12 @@ function validateTarget(body) {
   if (body.targetType === "SPECIFIC_PARTNER" && !ids.targetPartnerIds.length) {
     throw new Error("Specific partner target requires a selected partner");
   }
+  const selectedIds = body.targetType === "SPECIFIC_USER" ? ids.targetUserIds
+    : body.targetType === "SPECIFIC_PARTNER" ? ids.targetPartnerIds
+      : [];
+  if (selectedIds.some((id) => !mongoose.Types.ObjectId.isValid(id))) {
+    throw new Error("Selected recipient ID is invalid");
+  }
   if (["OPEN_SERVICE", "OPEN_BOOKING", "OPEN_PARTNER_BOOKING"].includes(body.actionType) && !String(body.actionId || "").trim()) {
     throw new Error(`${body.actionType} requires actionId`);
   }
@@ -93,21 +100,29 @@ async function createNotification(body, req, status) {
   const idempotencyKey = body.idempotencyKey || req.get("idempotency-key") || "";
   const existing = await existingByIdempotency(idempotencyKey);
   if (existing) return { notification: existing, existing: true };
-  const notification = await AdminNotification.create({
-    title: body.title,
-    message: body.message,
-    imageUrl: body.imageUrl || "",
-    targetType: body.targetType,
-    targetUserIds: ids.targetUserIds,
-    targetPartnerIds: ids.targetPartnerIds,
-    actionType: body.actionType || "NONE",
-    actionId: body.actionId || "",
-    status,
-    scheduleAt: body.scheduleAt || null,
-    idempotencyKey,
-    ...adminIdentity(req)
-  });
-  return { notification, existing: false };
+  try {
+    const notification = await AdminNotification.create({
+      title: body.title,
+      message: body.message,
+      imageUrl: body.imageUrl || "",
+      targetType: body.targetType,
+      targetUserIds: ids.targetUserIds,
+      targetPartnerIds: ids.targetPartnerIds,
+      actionType: body.actionType || "NONE",
+      actionId: body.actionId || "",
+      status,
+      scheduleAt: body.scheduleAt || null,
+      idempotencyKey,
+      ...adminIdentity(req)
+    });
+    return { notification, existing: false };
+  } catch (error) {
+    if (error?.code === 11000 && idempotencyKey) {
+      const raced = await existingByIdempotency(idempotencyKey);
+      if (raced) return { notification: raced, existing: true };
+    }
+    throw error;
+  }
 }
 
 async function send(req, res, next) {
@@ -117,11 +132,13 @@ async function send(req, res, next) {
     const { notification, existing } = await createNotification(parsed.data, req, "draft");
     if (!existing) {
       emitAdminEvent("notification:created", { notificationId: String(notification._id), title: notification.title, targetType: notification.targetType });
-      await deliverAdminNotification(notification);
     }
-    return res.json({ notification: serialize(notification), existing });
+    const delivered = notification.status === "draft"
+      ? await deliverAdminNotification(notification)
+      : notification;
+    return res.json({ notification: serialize(delivered), existing });
   } catch (error) {
-    if (error.message.includes("requires")) return res.status(400).json({ message: error.message });
+    if (error.message.includes("requires") || error.message.includes("invalid")) return res.status(400).json({ message: error.message });
     return next(error);
   }
 }
@@ -134,15 +151,17 @@ async function schedule(req, res, next) {
       return res.status(400).json({ message: "Schedule date/time must be at least 1 minute in the future" });
     }
     const { notification, existing } = await createNotification(parsed.data, req, "scheduled");
-    emitAdminEvent("notification:scheduled", {
-      notificationId: String(notification._id),
-      title: notification.title,
-      targetType: notification.targetType,
-      scheduleAt: notification.scheduleAt
-    });
+    if (!existing) {
+      emitAdminEvent("notification:scheduled", {
+        notificationId: String(notification._id),
+        title: notification.title,
+        targetType: notification.targetType,
+        scheduleAt: notification.scheduleAt
+      });
+    }
     return res.json({ notification: serialize(notification), existing });
   } catch (error) {
-    if (error.message.includes("requires")) return res.status(400).json({ message: error.message });
+    if (error.message.includes("requires") || error.message.includes("invalid")) return res.status(400).json({ message: error.message });
     return next(error);
   }
 }
@@ -229,8 +248,8 @@ async function resend(req, res, next) {
       metadata: { resendOf: String(source._id) },
       ...adminIdentity(req)
     });
-    await deliverAdminNotification(clone);
-    return res.json({ notification: serialize(clone) });
+    const delivered = await deliverAdminNotification(clone);
+    return res.json({ notification: serialize(delivered) });
   } catch (error) {
     return next(error);
   }

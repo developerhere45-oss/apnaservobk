@@ -179,16 +179,20 @@ async function sendFcm(notification, recipients, targetApp) {
 }
 
 async function deliverAdminNotification(notificationOrId) {
-  const notification = typeof notificationOrId === "string"
-    ? await AdminNotification.findById(notificationOrId)
-    : notificationOrId;
-  if (!notification) throw new Error("Notification not found");
-  if (["sent", "partially_sent", "failed", "cancelled"].includes(notification.status)) {
-    return notification;
+  const notificationId = typeof notificationOrId === "string"
+    ? notificationOrId
+    : notificationOrId?._id;
+  if (!notificationId) throw new Error("Notification not found");
+  const notification = await AdminNotification.findOneAndUpdate(
+    { _id: notificationId, status: { $in: ["draft", "scheduled"] } },
+    { $set: { status: "sending" } },
+    { new: true }
+  );
+  if (!notification) {
+    const current = await AdminNotification.findById(notificationId);
+    if (!current) throw new Error("Notification not found");
+    return current;
   }
-
-  notification.status = "sending";
-  await notification.save();
 
   const recipients = await resolveRecipients(notification);
   const targetApp = targetAppFor(notification);
