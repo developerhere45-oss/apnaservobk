@@ -1275,7 +1275,7 @@ async function partnerProfile(req, res, next) {
         id: id(partner._id),
         firebaseUid: partner.firebaseUid || "",
         partnerCode: partner.partnerCode || "",
-        profilePhoto: partner.photoUrl || "",
+        profilePhoto: partner.photoUrl || partner.selfieUrl || "",
         fullName: partner.name || "",
         mobileNumber: partner.phone || "",
         email: partner.email || "",

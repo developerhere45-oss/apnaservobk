@@ -1,4 +1,5 @@
 const { z } = require("zod");
+const crypto = require("crypto");
 const { Readable } = require("stream");
 const mongoose = require("mongoose");
 const AdminNotification = require("../models/AdminNotification");
@@ -19,6 +20,7 @@ const notificationPayloadSchema = z.object({
   targetUserIds: z.array(z.string().trim().min(1)).max(50).optional(),
   targetPartnerIds: z.array(z.string().trim().min(1)).max(50).optional(),
   recipientId: z.string().trim().max(80).optional(),
+  recipientQuery: z.string().trim().max(180).optional(),
   actionType: z.enum(actionTypes).default("NONE"),
   actionId: z.string().trim().max(160).optional().or(z.literal("")),
   scheduleAt: z.coerce.date().optional(),
@@ -70,8 +72,79 @@ function targetIds(body) {
   };
 }
 
-function validateTarget(body) {
+function normalizePhone(value) {
+  return String(value || "").replace(/\D/g, "").slice(-10);
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function identityHash(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  const secret = process.env.IDENTITY_HASH_PEPPER || process.env.ENCRYPTION_KEY || "apnaservo-dev-identity-hash";
+  return crypto.createHmac("sha256", secret).update(normalized).digest("hex");
+}
+
+function matchesRecipient(record, q) {
+  const clean = String(q || "").trim().toLowerCase();
+  if (!clean) return true;
+  const phone = normalizePhone(clean);
+  return [
+    record.name,
+    record.phone,
+    record.email,
+    record.partnerCode,
+    String(record._id || "")
+  ].some((value) => String(value || "").toLowerCase().includes(clean))
+    || (phone.length === 10 && normalizePhone(record.phone) === phone);
+}
+
+async function resolveRecipientIdsFromQuery(body) {
+  const query = String(body.recipientQuery || "").trim();
+  if (!query || !["SPECIFIC_USER", "SPECIFIC_PARTNER"].includes(body.targetType)) {
+    return [];
+  }
+  const isPartner = body.targetType === "SPECIFIC_PARTNER";
+  const Model = isPartner ? Partner : User;
+  const filters = [];
+  const phone = normalizePhone(query);
+  const email = normalizeEmail(query);
+  if (mongoose.Types.ObjectId.isValid(query)) filters.push({ _id: query });
+  if (phone.length === 10) filters.push({ phoneHash: identityHash(phone) });
+  if (email.includes("@")) filters.push({ emailHash: identityHash(email) });
+  if (isPartner) {
+    const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    filters.push({ partnerCode: regex });
+  }
+
+  let records = filters.length
+    ? await Model.find({ $or: filters }).select("_id name phone email partnerCode accountStatus trustStatus").limit(5)
+    : [];
+
+  if (!records.length) {
+    const candidates = await Model.find()
+      .select("_id name phone email partnerCode accountStatus trustStatus")
+      .sort({ createdAt: -1 })
+      .limit(1000);
+    records = candidates.filter((record) => matchesRecipient(record, query)).slice(0, 5);
+  }
+  return records.map((record) => String(record._id));
+}
+
+async function validateTarget(body) {
   const ids = targetIds(body);
+  if (body.targetType === "SPECIFIC_USER" && !ids.targetUserIds.length) {
+    const resolved = await resolveRecipientIdsFromQuery(body);
+    if (resolved.length > 1) throw new Error("Multiple users matched. Select the exact recipient from search results");
+    ids.targetUserIds = resolved;
+  }
+  if (body.targetType === "SPECIFIC_PARTNER" && !ids.targetPartnerIds.length) {
+    const resolved = await resolveRecipientIdsFromQuery(body);
+    if (resolved.length > 1) throw new Error("Multiple partners matched. Select the exact recipient from search results");
+    ids.targetPartnerIds = resolved;
+  }
   if (body.targetType === "SPECIFIC_USER" && !ids.targetUserIds.length) {
     throw new Error("Specific user target requires a selected user");
   }
@@ -96,7 +169,7 @@ async function existingByIdempotency(key) {
 }
 
 async function createNotification(body, req, status) {
-  const ids = validateTarget(body);
+  const ids = await validateTarget(body);
   const idempotencyKey = body.idempotencyKey || req.get("idempotency-key") || "";
   const existing = await existingByIdempotency(idempotencyKey);
   if (existing) return { notification: existing, existing: true };
@@ -138,7 +211,7 @@ async function send(req, res, next) {
       : notification;
     return res.json({ notification: serialize(delivered), existing });
   } catch (error) {
-    if (error.message.includes("requires") || error.message.includes("invalid")) return res.status(400).json({ message: error.message });
+    if (error.message.includes("requires") || error.message.includes("invalid") || error.message.includes("Multiple")) return res.status(400).json({ message: error.message });
     return next(error);
   }
 }
@@ -161,7 +234,7 @@ async function schedule(req, res, next) {
     }
     return res.json({ notification: serialize(notification), existing });
   } catch (error) {
-    if (error.message.includes("requires") || error.message.includes("invalid")) return res.status(400).json({ message: error.message });
+    if (error.message.includes("requires") || error.message.includes("invalid") || error.message.includes("Multiple")) return res.status(400).json({ message: error.message });
     return next(error);
   }
 }
@@ -270,22 +343,32 @@ async function searchRecipients(req, res, next) {
 
     const isPartner = targetType.includes("PARTNER");
     const Model = isPartner ? Partner : User;
+    const phone = normalizePhone(q);
+    const email = normalizeEmail(q);
     const regex = q ? new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") : null;
-    const filters = regex
-      ? {
-          $or: [
-            { name: regex },
-            { phone: regex },
-            { email: regex },
-            ...(isPartner ? [{ partnerCode: regex }] : []),
-            ...(q.match(/^[a-f0-9]{24}$/i) ? [{ _id: q }] : [])
-          ]
-        }
-      : {};
-    const records = await Model.find(filters)
-      .select("_id name phone email partnerCode accountStatus trustStatus")
-      .sort({ createdAt: -1 })
-      .limit(limit);
+    const queryFilters = [];
+    if (q.match(/^[a-f0-9]{24}$/i)) queryFilters.push({ _id: q });
+    if (phone.length === 10) queryFilters.push({ phoneHash: identityHash(phone) });
+    if (email.includes("@")) queryFilters.push({ emailHash: identityHash(email) });
+    if (isPartner && regex) queryFilters.push({ partnerCode: regex });
+    const filters = queryFilters.length ? { $or: queryFilters } : {};
+    let records = q && !queryFilters.length
+      ? []
+      : await Model.find(filters)
+        .select("_id name phone email partnerCode accountStatus trustStatus")
+        .sort({ createdAt: -1 })
+        .limit(limit);
+    if (q && records.length < limit) {
+      const candidates = await Model.find()
+        .select("_id name phone email partnerCode accountStatus trustStatus")
+        .sort({ createdAt: -1 })
+        .limit(1000);
+      const seen = new Set(records.map((record) => String(record._id)));
+      const fallback = candidates
+        .filter((record) => !seen.has(String(record._id)) && matchesRecipient(record, q))
+        .slice(0, Math.max(limit - records.length, 0));
+      records = [...records, ...fallback];
+    }
     return res.json({
       count: records.length,
       results: records.map((record) => ({

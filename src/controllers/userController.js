@@ -1,4 +1,5 @@
 const { z } = require("zod");
+const crypto = require("crypto");
 const User = require("../models/User");
 const SupportTicket = require("../models/SupportTicket");
 const { Booking } = require("../models/Booking");
@@ -50,6 +51,17 @@ function normalizePhone(value) {
   return String(value || "").replace(/\D/g, "").slice(-10);
 }
 
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function identityHash(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  const secret = process.env.IDENTITY_HASH_PEPPER || process.env.ENCRYPTION_KEY || "apnaservo-dev-identity-hash";
+  return crypto.createHmac("sha256", secret).update(normalized).digest("hex");
+}
+
 function tokenPhoneVerified(req, phone) {
   const tokenPhone = normalizePhone(req.auth?.phone_number);
   const profilePhone = normalizePhone(phone);
@@ -89,6 +101,8 @@ async function upsertProfile(req, res, next) {
   try {
     const body = profileSchema.parse(req.body || {});
     const phone = body.phone || req.auth.phone_number || "";
+    const normalizedPhone = normalizePhone(phone);
+    const email = normalizeEmail(body.email !== undefined ? body.email : req.auth.email || "");
     const verified = tokenPhoneVerified(req, phone);
     const now = new Date();
     const existing = await User.findOne({ firebaseUid: req.auth.uid }).select("_id").lean();
@@ -99,8 +113,14 @@ async function upsertProfile(req, res, next) {
     };
 
     if (body.name || req.auth.name) update.name = body.name || req.auth.name;
-    if (phone) update.phone = phone;
-    if (body.email !== undefined || req.auth.email) update.email = body.email || req.auth.email || "";
+    if (phone) {
+      update.phone = phone;
+      if (normalizedPhone.length === 10) update.phoneHash = identityHash(normalizedPhone);
+    }
+    if (body.email !== undefined || req.auth.email) {
+      update.email = email;
+      update.emailHash = identityHash(email);
+    }
     if (body.profilePhotoUrl || req.auth.picture) update.profilePhotoUrl = body.profilePhotoUrl || req.auth.picture;
     if (body.address !== undefined && body.address) update.address = body.address;
     if (body.city) update.city = body.city;
@@ -195,14 +215,19 @@ async function saveFcmToken(req, res, next) {
     if (!deviceToken) {
       return res.status(400).json({ message: "Valid FCM token is required" });
     }
+    const insertPhone = req.auth.phone_number || "";
+    const insertPhoneHash = normalizePhone(insertPhone).length === 10 ? identityHash(normalizePhone(insertPhone)) : "";
+    const insertEmail = normalizeEmail(req.auth.email || "");
     const user = await User.findOneAndUpdate(
       { firebaseUid: req.auth.uid },
       {
         $setOnInsert: {
           firebaseUid: req.auth.uid,
           name: req.auth.name || "ApnaServo Customer",
-          phone: req.auth.phone_number || "",
-          email: req.auth.email || "",
+          phone: insertPhone,
+          phoneHash: insertPhoneHash,
+          email: insertEmail,
+          emailHash: identityHash(insertEmail),
           city: "Guwahati"
         }
       },

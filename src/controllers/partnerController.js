@@ -212,7 +212,7 @@ function fileDataUri(file) {
 
 async function uploadDocumentToCloudinary(file, partnerId, documentType) {
   if (!process.env.CLOUDINARY_CLOUD_NAME) {
-    return { storageProvider: "inline", url: "", cloudinaryPublicId: "" };
+    return { storageProvider: "inline", url: fileDataUri(file), cloudinaryPublicId: "" };
   }
   const result = await cloudinary.uploader.upload(fileDataUri(file), {
     folder: `apnaservo/partner_documents/${partnerId}`,
@@ -227,6 +227,39 @@ async function uploadDocumentToCloudinary(file, partnerId, documentType) {
     url: result.secure_url || result.url || "",
     cloudinaryPublicId: result.public_id || ""
   };
+}
+
+async function uploadProfilePhoto(req, res, next) {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ message: "Profile photo is required" });
+    }
+    const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    if (!partner) {
+      return res.status(404).json({ message: "Partner profile not found" });
+    }
+    const uploaded = await uploadDocumentToCloudinary(file, partner._id, "profile_photo");
+    partner.photoUrl = uploaded.url;
+    if (partner.kycStatus === "missing") {
+      partner.kycStatus = "pending_review";
+    }
+    await partner.save();
+    emitAdminEvent("partner:photo_updated", {
+      partnerId: String(partner._id),
+      partnerCode: partner.partnerCode || "",
+      partnerName: partner.name || "",
+      hasProfilePhoto: Boolean(partner.photoUrl)
+    });
+    return res.status(201).json({
+      ok: true,
+      photoUrl: partner.photoUrl || "",
+      storageProvider: uploaded.storageProvider,
+      partner
+    });
+  } catch (error) {
+    return next(error);
+  }
 }
 
 async function upsertProfile(req, res, next) {
@@ -931,6 +964,7 @@ module.exports = {
   me,
   submitVerification,
   uploadDocument,
+  uploadProfilePhoto,
   saveFcmToken,
   createSupportTicket,
   requestDeletion,

@@ -96,9 +96,14 @@ async function createInAppRecords(notification, recipients, targetApp) {
     data: dataPayload(notification, targetApp),
     pushStatus: "pending"
   }));
+  let insertedCount = 0;
   for (const batch of chunk(docs, INSERT_BATCH_SIZE)) {
-    if (batch.length) await InAppNotification.insertMany(batch, { ordered: false });
+    if (batch.length) {
+      const inserted = await InAppNotification.insertMany(batch, { ordered: false });
+      insertedCount += inserted.length;
+    }
   }
+  return insertedCount;
 }
 
 async function deactivateInvalidTokens(invalidTokens) {
@@ -196,20 +201,28 @@ async function deliverAdminNotification(notificationOrId) {
 
   const recipients = await resolveRecipients(notification);
   const targetApp = targetAppFor(notification);
-  await createInAppRecords(notification, recipients, targetApp);
+  const inAppCount = await createInAppRecords(notification, recipients, targetApp);
   const delivery = await sendFcm(notification, recipients, targetApp);
 
   notification.recipientCount = recipients.length;
-  notification.successCount = delivery.successCount;
-  notification.failureCount = delivery.failureCount;
+  notification.successCount = inAppCount;
+  notification.failureCount = Math.max(recipients.length - inAppCount, 0);
   notification.invalidTokenCount = delivery.invalidTokens.length;
   notification.errorMessages = delivery.errors;
+  notification.metadata = {
+    ...(notification.metadata || {}),
+    inAppStoredCount: inAppCount,
+    pushSuccessCount: delivery.successCount,
+    pushFailureCount: delivery.failureCount
+  };
   notification.sentAt = new Date();
-  notification.status = delivery.successCount > 0 && delivery.failureCount > 0
-    ? "partially_sent"
-    : delivery.successCount > 0
-      ? "sent"
-      : "failed";
+  notification.status = recipients.length < 1
+    ? "failed"
+    : inAppCount > 0 && inAppCount < recipients.length
+      ? "partially_sent"
+      : inAppCount > 0
+        ? "sent"
+        : "failed";
   await notification.save();
 
   emitAdminEvent("notification:sent", {
@@ -219,7 +232,9 @@ async function deliverAdminNotification(notificationOrId) {
     status: notification.status,
     recipientCount: notification.recipientCount,
     successCount: notification.successCount,
-    failureCount: notification.failureCount
+    failureCount: notification.failureCount,
+    pushSuccessCount: delivery.successCount,
+    pushFailureCount: delivery.failureCount
   });
   return notification;
 }

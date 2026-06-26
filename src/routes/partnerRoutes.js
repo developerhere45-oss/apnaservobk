@@ -23,6 +23,7 @@ router.use(verifyFirebaseToken);
 router.post("/profile", profileWriteLimiter, controller.upsertProfile);
 router.get("/me", controller.me);
 router.post("/verification", verificationLimiter, controller.submitVerification);
+router.post("/profile-photo", verificationLimiter, upload.single("photo"), validateUploadedImage(["image/jpeg", "image/png"]), rejectPlainSensitiveFields, controller.uploadProfilePhoto);
 router.post("/documents", verificationLimiter, upload.single("document"), validateUploadedImage(["image/jpeg", "image/png"]), rejectPlainSensitiveFields, controller.uploadDocument);
 router.post("/support-tickets", profileWriteLimiter, controller.createSupportTicket);
 router.post("/fcm-token", fcmTokenLimiter, controller.saveFcmToken);

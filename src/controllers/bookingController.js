@@ -222,6 +222,17 @@ function normalizePhone(value) {
   return String(value || "").replace(/\D/g, "").slice(-10);
 }
 
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function identityHash(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  const secret = process.env.IDENTITY_HASH_PEPPER || process.env.ENCRYPTION_KEY || "apnaservo-dev-identity-hash";
+  return crypto.createHmac("sha256", secret).update(normalized).digest("hex");
+}
+
 function firebasePhoneVerified(req, phone) {
   const tokenPhone = normalizePhone(req.auth?.phone_number);
   const customerPhone = normalizePhone(phone);
@@ -505,6 +516,8 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
 
 async function getOrCreateUser(req, body) {
   const phone = body.userPhone || req.auth.phone_number || "";
+  const normalizedPhone = normalizePhone(phone);
+  const email = normalizeEmail(req.auth.email || "");
   const verified = firebasePhoneVerified(req, phone);
   const now = new Date();
   const existing = await User.findOne({ firebaseUid: req.auth.uid }).select("_id").lean();
@@ -512,7 +525,9 @@ async function getOrCreateUser(req, body) {
     $set: {
       name: body.userName || req.auth.name || "ApnaServo Customer",
       phone,
-      email: req.auth.email || "",
+      phoneHash: normalizedPhone.length === 10 ? identityHash(normalizedPhone) : "",
+      email,
+      emailHash: identityHash(email),
       city: body.city || "Guwahati",
       address: body.address || "",
       bookingRiskStatus: verified ? "trusted" : "otp_required",
