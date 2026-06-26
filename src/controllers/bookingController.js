@@ -385,7 +385,11 @@ function escapeRegExp(value) {
 
 function partnerAcceptBlockReason(partner) {
   if (!partner) return "Partner profile not found";
+  if (partner.accountStatus !== "active") return "Partner account is not active";
   if (partner.trustStatus === "suspended") return "Partner account is suspended";
+  if (!partner.isVerified || partner.kycStatus !== "verified" || partner.trustStatus !== "trusted") {
+    return "ApnaServo admin approval is pending. Keep your device online after approval to receive bookings.";
+  }
   if (!partner.isOnline) return "Go online before accepting new jobs";
   if (!partner.phone) return "Add a phone number before accepting jobs";
   if (!Array.isArray(partner.serviceCategory) || partner.serviceCategory.length === 0) {
@@ -396,7 +400,9 @@ function partnerAcceptBlockReason(partner) {
 
 function partnerCanViewOpenJobs(partner) {
   if (!partner) return false;
+  if (partner.accountStatus !== "active") return false;
   if (partner.trustStatus === "suspended") return false;
+  if (!partner.isVerified || partner.kycStatus !== "verified" || partner.trustStatus !== "trusted") return false;
   if (!partner.isOnline) return false;
   return Array.isArray(partner.serviceCategory) && partner.serviceCategory.length > 0;
 }
@@ -767,6 +773,10 @@ async function rejectBooking(req, res, next) {
   try {
     const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
     if (!partner) return res.status(404).json({ message: "Partner profile not found" });
+    const blockReason = partnerAcceptBlockReason(partner);
+    if (blockReason) {
+      return res.status(403).json({ message: blockReason });
+    }
 
     const now = new Date();
     const booking = await Booking.findOneAndUpdate(
@@ -1300,12 +1310,15 @@ async function getBooking(req, res, next) {
       const isAssignedPartner = String(booking.partnerId || "") === String(partner._id);
       const isRequestedPartner = (booking.requestedPartners || []).some((partnerId) => String(partnerId) === String(partner._id));
       const partnerCategories = partnerCategoryVariants(partner);
+      const canViewOpenJobs = partnerCanViewOpenJobs(partner);
       const canSeeOpenRequest = !booking.partnerId
         && pendingAssignmentStatuses().includes(booking.status)
+        && canViewOpenJobs
         && isRequestedPartner
         && !booking.rejectedPartners?.some((partnerId) => String(partnerId) === String(partner._id));
       const canSeeFallbackPending = !booking.partnerId
         && booking.status === "pending"
+        && canViewOpenJobs
         && (!booking.requestedPartners || booking.requestedPartners.length === 0)
         && partnerCategories.includes(booking.serviceCategory)
         && String(booking.city || "").toLowerCase() === String(partner.city || "Guwahati").toLowerCase()

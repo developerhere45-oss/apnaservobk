@@ -96,7 +96,7 @@ function tokenHasVerifiedEmail(req, email) {
 async function findVerifiedEmailPartner(req, email, emailHash) {
   if (!emailHash || !tokenHasVerifiedEmail(req, email)) return null;
   return Partner.findOne({ firebaseUid: { $ne: req.auth.uid }, emailHash })
-    .select("_id firebaseUid phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus fcmToken")
+    .select("_id firebaseUid phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken")
     .lean();
 }
 
@@ -121,12 +121,14 @@ async function ensureUniquePartnerIdentity({ uid, partnerId, phoneHash, emailHas
 }
 
 function kycStatusFor(update, partner) {
+  if (partner?.kycStatus === "verified") return "verified";
+  if (partner?.kycStatus === "rejected") return "rejected";
   const faceVerified = update.faceVerified ?? partner?.faceVerified ?? false;
   const selfieVerified = update.selfieVerified ?? partner?.selfieVerified ?? false;
   const aadhaarStatus = update.aadhaarStatus || partner?.aadhaarStatus || "missing";
-  if (partner?.kycStatus === "rejected") return "rejected";
-  if (faceVerified && selfieVerified && aadhaarStatus === "verified") return "verified";
-  if (faceVerified || selfieVerified || aadhaarStatus === "submitted") return "pending_review";
+  if (faceVerified || selfieVerified || ["submitted", "verified"].includes(aadhaarStatus) || update.idProofUrl || update.skillCertificateUrl) {
+    return "pending_review";
+  }
   return "missing";
 }
 
@@ -202,12 +204,15 @@ async function upsertProfile(req, res, next) {
     const phoneHash = identityHash(phone);
     const emailHash = identityHash(email);
     const existingPartner = await Partner.findOne({ firebaseUid: req.auth.uid })
-      .select("_id phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus fcmToken")
+      .select("_id phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken")
       .lean();
     const emailPartner = await findVerifiedEmailPartner(req, email, emailHash);
     const targetPartner = emailPartner || existingPartner;
     await ensureUniquePartnerIdentity({ uid: req.auth.uid, partnerId: targetPartner?._id, phoneHash, emailHash });
-    const faceTrusted = targetPartner?.faceVerified === true || targetPartner?.selfieVerified === true;
+    const adminApproved = targetPartner?.isVerified === true
+      && targetPartner?.kycStatus === "verified"
+      && targetPartner?.trustStatus === "trusted";
+    const currentTrustStatus = targetPartner?.trustStatus || "review_required";
     const update = {
       firebaseUid: req.auth.uid,
       name: body.name || req.auth.name || "ApnaServo Partner",
@@ -220,8 +225,10 @@ async function upsertProfile(req, res, next) {
       serviceArea: body.serviceArea || "Guwahati, Assam",
       serviceRadiusKm: body.serviceRadiusKm || 25,
       isOnline: body.isOnline !== false,
-      isVerified: faceTrusted,
-      trustStatus: faceTrusted ? "trusted" : "review_required"
+      isVerified: adminApproved,
+      trustStatus: currentTrustStatus === "suspended"
+        ? "suspended"
+        : (adminApproved ? "trusted" : "review_required")
     };
 
     if (body.fcmToken) update.fcmToken = body.fcmToken;
@@ -269,7 +276,7 @@ async function upsertProfile(req, res, next) {
 async function me(req, res, next) {
   try {
     let partner = await Partner.findOne({ firebaseUid: req.auth.uid })
-      .select("_id firebaseUid phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus fcmToken");
+      .select("_id firebaseUid partnerCode name phone email serviceCategory city serviceArea serviceRadiusKm photoUrl accountStatus phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken");
     if (req.auth.email_verified === true && req.auth.email) {
       const email = normalizeEmail(req.auth.email);
       const emailHash = identityHash(email);

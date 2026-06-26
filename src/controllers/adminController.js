@@ -17,6 +17,8 @@ const AdminActivity = require("../models/AdminActivity");
 const cache = require("../config/cache");
 const { recomputePartnerRating } = require("../utils/ratingAggregation");
 const { emitAdminEvent } = require("../sockets/bookingSocket");
+const { reliableNotify } = require("../utils/reliableNotify");
+const { activeDeviceTokens } = require("../utils/notificationTokens");
 
 function iso(value) {
   return value ? new Date(value).toISOString() : "";
@@ -332,6 +334,7 @@ function bookingRow(booking) {
 }
 
 function partnerRow(partner, bookingCount = 0) {
+  const approved = partner.isVerified === true && partner.kycStatus === "verified" && partner.trustStatus === "trusted";
   return {
     id: id(partner._id),
     code: partner.partnerCode || id(partner._id),
@@ -343,11 +346,26 @@ function partnerRow(partner, bookingCount = 0) {
     serviceArea: partner.serviceArea || "",
     online: Boolean(partner.isOnline),
     totalBookings: bookingCount,
+    approval: approved ? "Approved" : (partner.kycStatus === "rejected" ? "Denied" : "Waiting Approval"),
+    isVerified: Boolean(partner.isVerified),
     kyc: partner.kycStatus || "",
     trust: partner.trustStatus || "",
     status: partner.accountStatus || "active",
     rating: Number(partner.rating || 0),
     joinedAt: iso(partner.createdAt)
+  };
+}
+
+function partnerNotificationRecipient(partner) {
+  if (!partner) return null;
+  const tokens = activeDeviceTokens(partner, "partner").map((device) => device.token);
+  return {
+    role: "partner",
+    partnerId: partner._id,
+    firebaseUid: partner.firebaseUid,
+    token: tokens[0] || partner.fcmToken,
+    tokens,
+    phone: partner.phone
   };
 }
 
@@ -725,23 +743,83 @@ async function performAdminAction(req, res, next) {
     if (action === "approve-technician") {
       const partner = await Partner.findByIdAndUpdate(
         targetId,
-        { $set: { isVerified: true, trustStatus: "trusted", kycStatus: "verified" } },
+        {
+          $set: {
+            isVerified: true,
+            trustStatus: "trusted",
+            kycStatus: "verified",
+            accountStatus: "active"
+          }
+        },
         { new: true }
       );
       if (!partner) return res.status(404).json({ message: "Partner not found" });
       await cache.del("admin:dashboard:v1");
-      return res.json({ ok: true, action, targetId, status: partner.kycStatus });
+      emitAdminEvent("partner:approved", {
+        partnerId: String(partner._id),
+        partnerCode: partner.partnerCode || "",
+        partnerName: partner.name || "",
+        partnerPhone: partner.phone || "",
+        status: partner.kycStatus
+      });
+      await reliableNotify({
+        recipients: [partnerNotificationRecipient(partner)],
+        title: "You have been verified",
+        body: "Your ApnaServo partner profile is approved. Keep your device online to receive bookings.",
+        category: "partner_approval",
+        priority: "high",
+        data: {
+          type: "partner:approved",
+          targetApp: "partner",
+          actionType: "OPEN_PARTNER_HOME",
+          partnerId: partner._id,
+          status: "verified"
+        },
+        smsBody: `ApnaServo: Your partner profile is verified. Keep your device online to receive bookings.`
+      });
+      return res.json({ ok: true, action, targetId, status: partner.kycStatus, approval: "approved" });
     }
 
     if (action === "reject-technician" || action === "suspend-technician") {
+      const isSuspend = action === "suspend-technician";
       const partner = await Partner.findByIdAndUpdate(
         targetId,
-        { $set: { isOnline: false, trustStatus: action === "suspend-technician" ? "suspended" : "review_required" } },
+        {
+          $set: {
+            isOnline: false,
+            isVerified: false,
+            kycStatus: isSuspend ? "verified" : "rejected",
+            trustStatus: isSuspend ? "suspended" : "review_required"
+          }
+        },
         { new: true }
       );
       if (!partner) return res.status(404).json({ message: "Partner not found" });
       await cache.del("admin:dashboard:v1");
-      return res.json({ ok: true, action, targetId, status: partner.trustStatus });
+      emitAdminEvent(isSuspend ? "partner:suspended" : "partner:rejected", {
+        partnerId: String(partner._id),
+        partnerCode: partner.partnerCode || "",
+        partnerName: partner.name || "",
+        partnerPhone: partner.phone || "",
+        status: isSuspend ? partner.trustStatus : partner.kycStatus
+      });
+      await reliableNotify({
+        recipients: [partnerNotificationRecipient(partner)],
+        title: isSuspend ? "Partner account suspended" : "Verification not approved",
+        body: isSuspend
+          ? "Your ApnaServo partner account is suspended. Contact support for review."
+          : "Your ApnaServo partner verification was not approved. Please contact support or update your details.",
+        category: "partner_approval",
+        priority: "high",
+        data: {
+          type: isSuspend ? "partner:suspended" : "partner:rejected",
+          targetApp: "partner",
+          actionType: "OPEN_PARTNER_HOME",
+          partnerId: partner._id,
+          status: isSuspend ? "suspended" : "rejected"
+        }
+      });
+      return res.json({ ok: true, action, targetId, status: isSuspend ? partner.trustStatus : partner.kycStatus, approval: isSuspend ? "suspended" : "denied" });
     }
 
     return res.json({

@@ -25,14 +25,19 @@ async function findNearbyPartners({ serviceCategory, city, lat, lng, radiusKm })
   const latitude = safeNumber(lat, 26.1445);
   const longitude = safeNumber(lng, 91.7362);
   const maxDistance = safeNumber(radiusKm, Number(process.env.DEFAULT_PARTNER_RADIUS_KM || 25)) * 1000;
-  const trustFilter = { trustStatus: { $ne: "suspended" } };
+  const approvalFilter = {
+    accountStatus: "active",
+    isVerified: true,
+    kycStatus: "verified",
+    trustStatus: "trusted"
+  };
 
   let partners = [];
   try {
     partners = await Partner.find({
       serviceCategory: { $in: categories },
       isOnline: true,
-      ...trustFilter,
+      ...approvalFilter,
       location: {
         $near: {
           $geometry: { type: "Point", coordinates: [longitude, latitude] },
@@ -44,7 +49,7 @@ async function findNearbyPartners({ serviceCategory, city, lat, lng, radiusKm })
     partners = await Partner.find({
       serviceCategory: { $in: categories },
       isOnline: true,
-      ...trustFilter,
+      ...approvalFilter,
       city: new RegExp(city || "Guwahati", "i")
     }).limit(30);
   }
