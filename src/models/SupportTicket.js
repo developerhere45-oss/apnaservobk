@@ -17,7 +17,7 @@ const conversationMessageSchema = new mongoose.Schema(
     clientMessageId: { type: String, trim: true, default: "" },
     senderRole: {
       type: String,
-      enum: ["user", "ai", "support", "admin", "system"],
+      enum: ["user", "partner", "ai", "support", "admin", "system"],
       default: "user",
       index: true
     },
@@ -52,9 +52,11 @@ const supportTicketSchema = new mongoose.Schema(
   {
     ticketCode: { type: String, required: true, unique: true, index: true },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
+    partnerId: { type: mongoose.Schema.Types.ObjectId, ref: "Partner", default: null, index: true },
     bookingId: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", default: null, index: true },
     bookingCode: { type: String, trim: true, default: "", index: true },
     userName: { type: String, trim: true, default: "" },
+    partnerName: { type: String, trim: true, default: "" },
     mobileNumber: { type: String, trim: true, default: "" },
     email: { type: String, trim: true, lowercase: true, default: "" },
     category: { type: String, trim: true, default: "general", index: true },
@@ -65,7 +67,7 @@ const supportTicketSchema = new mongoose.Schema(
       default: "open",
       index: true
     },
-    source: { type: String, enum: ["ai_support", "customer_support", "admin", "system"], default: "ai_support", index: true },
+    source: { type: String, enum: ["ai_support", "customer_support", "partner_app", "admin", "system"], default: "ai_support", index: true },
     complaint: { type: String, trim: true, default: "" },
     aiSummary: { type: String, trim: true, default: "" },
     conversation: { type: [conversationMessageSchema], default: [] },
@@ -84,6 +86,7 @@ const supportTicketSchema = new mongoose.Schema(
 );
 
 supportTicketSchema.index({ userId: 1, createdAt: -1 });
+supportTicketSchema.index({ partnerId: 1, createdAt: -1 });
 supportTicketSchema.index({ status: 1, priority: 1, createdAt: -1 });
 supportTicketSchema.index({ category: 1, status: 1, createdAt: -1 });
 supportTicketSchema.index({ mobileNumber: 1, createdAt: -1 });
@@ -92,6 +95,7 @@ supportTicketSchema.index({ ticketCode: 1, "conversation.clientMessageId": 1 });
 supportTicketSchema.plugin(encryptedFieldsPlugin, {
   fields: [
     "userName",
+    "partnerName",
     "mobileNumber",
     "email",
     "complaint",

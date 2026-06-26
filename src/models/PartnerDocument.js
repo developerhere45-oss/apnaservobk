@@ -4,7 +4,25 @@ const encryptedFieldsPlugin = require("../utils/encryptedFieldsPlugin");
 const partnerDocumentSchema = new mongoose.Schema(
   {
     partnerId: { type: mongoose.Schema.Types.ObjectId, ref: "Partner", required: true, index: true },
-    documentType: { type: String, enum: ["id_proof", "address_proof", "skill_certificate"], required: true, index: true },
+    documentType: {
+      type: String,
+      enum: [
+        "aadhaar_front",
+        "aadhaar_back",
+        "pan_card",
+        "selfie_photo",
+        "id_proof",
+        "address_proof",
+        "experience_certificate",
+        "skill_certificate",
+        "training_certificate",
+        "government_license",
+        "trade_license",
+        "other_supporting_document"
+      ],
+      required: true,
+      index: true
+    },
     originalName: { type: String, default: "" },
     mimeType: { type: String, default: "" },
     sizeBytes: { type: Number, default: 0 },

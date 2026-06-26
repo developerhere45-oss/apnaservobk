@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const PDFDocument = require("pdfkit");
 const Partner = require("../models/Partner");
 const PartnerDocument = require("../models/PartnerDocument");
+const SupportTicket = require("../models/SupportTicket");
 const { Booking } = require("../models/Booking");
 const LocationLog = require("../models/LocationLog");
 const { cloudinary } = require("../config/cloudinary");
@@ -16,9 +17,18 @@ const profileSchema = z.object({
   name: z.string().trim().min(2).max(80).regex(/^[A-Za-z][A-Za-z .'-]+$/).optional(),
   phone: z.string().trim().max(20).optional(),
   email: z.string().trim().email().max(180).optional().or(z.literal("")),
+  dateOfBirth: z.string().trim().max(30).optional().or(z.literal("")),
+  gender: z.string().trim().max(40).optional().or(z.literal("")),
+  residentialAddress: z.string().trim().max(700).optional().or(z.literal("")),
   serviceCategory: z.union([z.string().trim().max(80), z.array(z.string().trim().max(80)).max(12)]).optional(),
   city: z.string().trim().max(80).optional(),
+  state: z.string().trim().max(80).optional().or(z.literal("")),
+  pinCode: z.string().trim().max(12).optional().or(z.literal("")),
+  emergencyContactNumber: z.string().trim().max(20).optional().or(z.literal("")),
   serviceArea: z.string().trim().max(200).optional(),
+  workingAreas: z.union([z.string().trim().max(500), z.array(z.string().trim().max(120)).max(30)]).optional(),
+  languagesKnown: z.union([z.string().trim().max(300), z.array(z.string().trim().max(60)).max(20)]).optional(),
+  yearsOfExperience: z.coerce.number().min(0).max(80).optional(),
   serviceRadiusKm: z.coerce.number().min(1).max(250).optional(),
   lat: z.coerce.number().min(-90).max(90).optional(),
   lng: z.coerce.number().min(-180).max(180).optional(),
@@ -52,8 +62,23 @@ const verificationSchema = z.object({
   livenessChecks: livenessChecksSchema
 });
 
+const partnerDocumentTypes = [
+  "aadhaar_front",
+  "aadhaar_back",
+  "pan_card",
+  "selfie_photo",
+  "id_proof",
+  "address_proof",
+  "experience_certificate",
+  "skill_certificate",
+  "training_certificate",
+  "government_license",
+  "trade_license",
+  "other_supporting_document"
+];
+
 const documentUploadSchema = z.object({
-  documentType: z.enum(["id_proof", "address_proof", "skill_certificate"]),
+  documentType: z.enum(partnerDocumentTypes),
   aadhaarLast4: z.string().regex(/^\d{4}$/).optional(),
   compressedByClient: z.coerce.boolean().optional(),
   originalSizeBytes: z.coerce.number().min(0).max(20 * 1024 * 1024).optional()
@@ -63,9 +88,24 @@ const deletionRequestSchema = z.object({
   reason: z.string().trim().max(500).optional()
 });
 
+const supportTicketSchema = z.object({
+  category: z.string().trim().max(120).optional(),
+  message: z.string().trim().min(1).max(1000),
+  clientMessageId: z.string().trim().max(120).optional(),
+  attachmentUrl: z.string().trim().max(1000).optional().or(z.literal("")),
+  priority: z.enum(["low", "normal", "medium", "high", "urgent"]).optional()
+});
+
 function categoriesFrom(bodyValue) {
   const values = Array.isArray(bodyValue) ? bodyValue : [bodyValue || "ac"];
   return [...new Set(values.map(normalizeServiceCategory).filter(Boolean))];
+}
+
+function listFromBody(value) {
+  const values = Array.isArray(value)
+    ? value
+    : String(value || "").split(",");
+  return [...new Set(values.map((entry) => String(entry || "").trim()).filter(Boolean))].slice(0, 30);
 }
 
 function normalizePhone(value) {
@@ -220,9 +260,18 @@ async function upsertProfile(req, res, next) {
       phoneHash,
       email,
       emailHash,
+      dateOfBirth: body.dateOfBirth || "",
+      gender: body.gender || "",
+      residentialAddress: body.residentialAddress || body.serviceArea || "",
       serviceCategory: categories,
       city: body.city || "Guwahati",
+      state: body.state || "Assam",
+      pinCode: body.pinCode || "",
+      emergencyContactNumber: normalizePhone(body.emergencyContactNumber || ""),
       serviceArea: body.serviceArea || "Guwahati, Assam",
+      workingAreas: listFromBody(body.workingAreas || body.serviceArea || "Guwahati"),
+      languagesKnown: listFromBody(body.languagesKnown || "Hindi, English"),
+      yearsOfExperience: Number.isFinite(body.yearsOfExperience) ? body.yearsOfExperience : 0,
       serviceRadiusKm: body.serviceRadiusKm || 25,
       isOnline: body.isOnline !== false,
       isVerified: adminApproved,
@@ -230,6 +279,9 @@ async function upsertProfile(req, res, next) {
         ? "suspended"
         : (adminApproved ? "trusted" : "review_required")
     };
+    if (!adminApproved && currentTrustStatus !== "suspended" && targetPartner?.kycStatus !== "rejected") {
+      update.kycStatus = targetPartner?.kycStatus || "pending_review";
+    }
 
     if (body.fcmToken) update.fcmToken = body.fcmToken;
     if (body.photoUrl) update.photoUrl = body.photoUrl;
@@ -276,7 +328,7 @@ async function upsertProfile(req, res, next) {
 async function me(req, res, next) {
   try {
     let partner = await Partner.findOne({ firebaseUid: req.auth.uid })
-      .select("_id firebaseUid partnerCode name phone email serviceCategory city serviceArea serviceRadiusKm photoUrl accountStatus phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken");
+      .select("_id firebaseUid partnerCode name phone email dateOfBirth gender residentialAddress city state pinCode emergencyContactNumber serviceCategory yearsOfExperience workingAreas languagesKnown serviceArea serviceRadiusKm photoUrl accountStatus phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken");
     if (req.auth.email_verified === true && req.auth.email) {
       const email = normalizeEmail(req.auth.email);
       const emailHash = identityHash(email);
@@ -365,7 +417,7 @@ async function uploadDocument(req, res, next) {
     if (!partner) {
       return res.status(404).json({ message: "Partner profile not found" });
     }
-    if (body.documentType === "id_proof" && !body.aadhaarLast4) {
+    if (["id_proof", "aadhaar_front", "aadhaar_back"].includes(body.documentType) && !body.aadhaarLast4) {
       return res.status(400).json({ message: "Aadhaar last 4 digits required for ID proof" });
     }
     const contentHash = crypto.createHash("sha256").update(file.buffer).digest("hex");
@@ -449,13 +501,20 @@ async function uploadDocument(req, res, next) {
     });
 
     const update = {};
-    if (body.documentType === "id_proof") {
+    if (["id_proof", "aadhaar_front", "aadhaar_back"].includes(body.documentType)) {
       update.idProofUrl = uploaded.url;
       update.idProofStatus = validation.validationStatus === "accepted" ? "submitted" : "submitted";
       update.aadhaarLast4 = body.aadhaarLast4;
       update.aadhaarStatus = validation.ocrStatus === "passed" && validation.validationStatus === "accepted" ? "verified" : "submitted";
       update.aadhaarVerified = update.aadhaarStatus === "verified";
-    } else if (body.documentType === "skill_certificate") {
+    } else if (body.documentType === "pan_card") {
+      update.idProofUrl = uploaded.url;
+      update.idProofStatus = "submitted";
+    } else if (body.documentType === "selfie_photo") {
+      update.selfieUrl = uploaded.url;
+      update.selfieVerified = false;
+      update.faceVerified = false;
+    } else if (["experience_certificate", "skill_certificate", "training_certificate", "government_license", "trade_license", "other_supporting_document"].includes(body.documentType)) {
       update.skillCertificateUrl = uploaded.url;
       update.skillCertificateStatus = "submitted";
     }
@@ -553,6 +612,66 @@ async function requestDeletion(req, res, next) {
       accountStatus: partner.accountStatus,
       deletionRequestedAt: partner.deletionRequestedAt
     });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+function supportTicketCode() {
+  return `PTK-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(16).slice(2, 8).toUpperCase()}`;
+}
+
+async function createSupportTicket(req, res, next) {
+  try {
+    const body = supportTicketSchema.parse(req.body || {});
+    const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    if (!partner) {
+      return res.status(404).json({ message: "Partner profile not found" });
+    }
+    const now = new Date();
+    const category = body.category || "Partner Verification Support";
+    const attachments = body.attachmentUrl ? [{
+      name: "partner-support-attachment",
+      url: body.attachmentUrl,
+      mimeType: "image/jpeg",
+      uploadedAt: now
+    }] : [];
+    const ticket = await SupportTicket.create({
+      ticketCode: supportTicketCode(),
+      partnerId: partner._id,
+      partnerName: partner.name || "",
+      userName: partner.name || "",
+      mobileNumber: partner.phone || "",
+      email: partner.email || "",
+      category,
+      priority: body.priority || (category.toLowerCase().includes("verification") ? "high" : "normal"),
+      status: "open",
+      source: "partner_app",
+      complaint: body.message,
+      aiSummary: category.toLowerCase().includes("verification")
+        ? "Partner verification related support request."
+        : "Partner support request.",
+      conversation: [{
+        clientMessageId: body.clientMessageId || "",
+        senderRole: "partner",
+        senderName: partner.name || "ApnaServo Partner",
+        message: body.message,
+        attachments,
+        createdAt: now
+      }],
+      attachments,
+      timeline: [{ event: "ticket_created", by: "partner_app", note: category, at: now }],
+      lastUpdatedAt: now
+    });
+    emitAdminEvent("support:ticket_created", {
+      ticketId: ticket.ticketCode,
+      partnerId: String(partner._id),
+      partnerName: partner.name || "",
+      priority: ticket.priority,
+      status: ticket.status,
+      category: ticket.category
+    });
+    return res.status(201).json({ ok: true, ticketId: ticket.ticketCode, ticket });
   } catch (error) {
     return next(error);
   }
@@ -813,6 +932,7 @@ module.exports = {
   submitVerification,
   uploadDocument,
   saveFcmToken,
+  createSupportTicket,
   requestDeletion,
   setOnline,
   updateLocation,

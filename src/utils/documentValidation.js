@@ -126,7 +126,7 @@ async function validateDocumentUpload({ buffer, mimeType, documentType, aadhaarL
 
   let ocrStatus = "skipped";
   let ocrText = "";
-  if (documentType === "id_proof") {
+  if (["id_proof", "aadhaar_front", "aadhaar_back"].includes(documentType)) {
     const ocr = await callOcrProvider(buffer, mimeType);
     ocrStatus = ocr.status;
     ocrText = ocr.text || "";

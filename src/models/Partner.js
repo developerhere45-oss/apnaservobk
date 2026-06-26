@@ -32,7 +32,16 @@ const partnerSchema = new mongoose.Schema(
     phoneHash: { type: String, default: "" },
     email: { type: String, trim: true, lowercase: true, default: "" },
     emailHash: { type: String, default: "" },
+    dateOfBirth: { type: String, trim: true, default: "" },
+    gender: { type: String, trim: true, default: "" },
+    residentialAddress: { type: String, trim: true, default: "" },
+    state: { type: String, trim: true, default: "" },
+    pinCode: { type: String, trim: true, default: "" },
+    emergencyContactNumber: { type: String, trim: true, default: "" },
     serviceCategory: { type: [String], default: ["ac"] },
+    yearsOfExperience: { type: Number, default: 0 },
+    workingAreas: { type: [String], default: [] },
+    languagesKnown: { type: [String], default: [] },
     isOnline: { type: Boolean, default: true, index: true },
     isVerified: { type: Boolean, default: false },
     city: { type: String, trim: true, default: "Guwahati" },
@@ -96,7 +105,7 @@ partnerSchema.index({ phoneHash: 1 }, { unique: true, partialFilterExpression: {
 partnerSchema.index({ emailHash: 1 }, { unique: true, partialFilterExpression: { emailHash: { $type: "string", $gt: "" } } });
 partnerSchema.index({ "deviceTokens.tokenHash": 1, "deviceTokens.isActive": 1 });
 partnerSchema.plugin(encryptedFieldsPlugin, {
-  fields: ["name", "phone", "email", "serviceArea", "fcmToken", "deviceTokens.token", "deviceTokens.deviceId", "photoUrl", "selfieUrl", "faceLivenessSessionId", "aadhaarLast4", "idProofUrl", "skillCertificateUrl", "deletionReason"]
+  fields: ["name", "phone", "email", "dateOfBirth", "gender", "residentialAddress", "state", "pinCode", "emergencyContactNumber", "workingAreas", "languagesKnown", "serviceArea", "fcmToken", "deviceTokens.token", "deviceTokens.deviceId", "photoUrl", "selfieUrl", "faceLivenessSessionId", "aadhaarLast4", "idProofUrl", "skillCertificateUrl", "deletionReason"]
 });
 
 module.exports = mongoose.model("Partner", partnerSchema);

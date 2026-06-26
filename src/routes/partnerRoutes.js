@@ -24,6 +24,7 @@ router.post("/profile", profileWriteLimiter, controller.upsertProfile);
 router.get("/me", controller.me);
 router.post("/verification", verificationLimiter, controller.submitVerification);
 router.post("/documents", verificationLimiter, upload.single("document"), validateUploadedImage(["image/jpeg", "image/png"]), rejectPlainSensitiveFields, controller.uploadDocument);
+router.post("/support-tickets", profileWriteLimiter, controller.createSupportTicket);
 router.post("/fcm-token", fcmTokenLimiter, controller.saveFcmToken);
 router.post("/delete-account-request", profileWriteLimiter, controller.requestDeletion);
 router.post("/online", profileWriteLimiter, controller.setOnline);

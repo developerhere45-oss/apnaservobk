@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
+const PartnerDocument = require("../models/PartnerDocument");
 const { Booking } = require("../models/Booking");
 const Service = require("../models/Service");
 const Review = require("../models/Review");
@@ -196,9 +197,11 @@ function serializeSupportTicket(ticket) {
     id: id(ticket._id),
     ticketId: ticket.ticketCode || id(ticket._id),
     userId: id(ticket.userId),
+    partnerId: id(ticket.partnerId),
     bookingId: id(ticket.bookingId),
     bookingCode: ticket.bookingCode || "",
     userName: ticket.userName || "",
+    partnerName: ticket.partnerName || "",
     mobileNumber: ticket.mobileNumber || "",
     email: ticket.email || "",
     ticketCategory: ticket.category || "general",
@@ -341,8 +344,18 @@ function partnerRow(partner, bookingCount = 0) {
     name: partner.name || "",
     phone: partner.phone || "",
     email: partner.email || "",
+    dateOfBirth: partner.dateOfBirth || "",
+    gender: partner.gender || "",
+    residentialAddress: partner.residentialAddress || "",
     services: (partner.serviceCategory || []).join(", "),
+    profession: (partner.serviceCategory || []).join(", "),
+    yearsOfExperience: Number(partner.yearsOfExperience || 0),
+    workingAreas: (partner.workingAreas || []).join(", ") || partner.serviceArea || "",
+    languagesKnown: (partner.languagesKnown || []).join(", "),
     city: partner.city || "",
+    state: partner.state || "",
+    pinCode: partner.pinCode || "",
+    emergencyContactNumber: partner.emergencyContactNumber || "",
     serviceArea: partner.serviceArea || "",
     online: Boolean(partner.isOnline),
     totalBookings: bookingCount,
@@ -1223,6 +1236,110 @@ async function updateUserAdminState(req, res, next) {
   }
 }
 
+function serializePartnerDocument(document) {
+  return {
+    id: id(document._id),
+    documentType: document.documentType || "",
+    originalName: document.originalName || "",
+    mimeType: document.mimeType || "",
+    sizeBytes: Number(document.sizeBytes || 0),
+    url: document.url || "",
+    storageProvider: document.storageProvider || "",
+    validationStatus: document.validationStatus || "review",
+    validationScore: Number(document.validationScore || 0),
+    validationReasons: document.validationReasons || [],
+    ocrStatus: document.ocrStatus || "",
+    aadhaarLast4: document.aadhaarLast4 || "",
+    uploadedAt: iso(document.createdAt),
+    updatedAt: iso(document.updatedAt)
+  };
+}
+
+async function partnerProfile(req, res, next) {
+  try {
+    const partnerObjectId = objectId(req.params.partnerId);
+    if (!partnerObjectId) return res.status(400).json({ message: "Invalid partner id" });
+    const partner = await Partner.findById(partnerObjectId);
+    if (!partner) return res.status(404).json({ message: "Partner not found" });
+    const [documents, bookings, tickets] = await Promise.all([
+      PartnerDocument.find({ partnerId: partner._id }).sort({ documentType: 1, createdAt: -1 }),
+      Booking.find({ partnerId: partner._id }).sort({ createdAt: -1 }).limit(100),
+      SupportTicket.find({ partnerId: partner._id }).sort({ createdAt: -1 }).limit(100)
+    ]);
+    const approved = partner.isVerified === true && partner.kycStatus === "verified" && partner.trustStatus === "trusted";
+    const rawProfile = partner.toObject({ getters: true });
+    delete rawProfile.fcmToken;
+    delete rawProfile.deviceTokens;
+    return res.json({
+      partner: {
+        id: id(partner._id),
+        firebaseUid: partner.firebaseUid || "",
+        partnerCode: partner.partnerCode || "",
+        profilePhoto: partner.photoUrl || "",
+        fullName: partner.name || "",
+        mobileNumber: partner.phone || "",
+        email: partner.email || "",
+        dateOfBirth: partner.dateOfBirth || "",
+        gender: partner.gender || "",
+        completeResidentialAddress: partner.residentialAddress || "",
+        city: partner.city || "",
+        state: partner.state || "",
+        pinCode: partner.pinCode || "",
+        emergencyContactNumber: partner.emergencyContactNumber || "",
+        professionServiceCategory: partner.serviceCategory || [],
+        yearsOfExperience: Number(partner.yearsOfExperience || 0),
+        workingAreas: partner.workingAreas || [],
+        serviceArea: partner.serviceArea || "",
+        serviceRadiusKm: Number(partner.serviceRadiusKm || 0),
+        languagesKnown: partner.languagesKnown || [],
+        registrationDate: iso(partner.createdAt),
+        currentVerificationStatus: approved ? "Approved" : (partner.kycStatus === "rejected" ? "Rejected" : "Under Verification"),
+        isVerified: Boolean(partner.isVerified),
+        kycStatus: partner.kycStatus || "",
+        trustStatus: partner.trustStatus || "",
+        accountStatus: partner.accountStatus || "active",
+        online: Boolean(partner.isOnline),
+        aadhaarStatus: partner.aadhaarStatus || "",
+        idProofStatus: partner.idProofStatus || "",
+        skillCertificateStatus: partner.skillCertificateStatus || "",
+        rawProfile
+      },
+      documents: documents.map(serializePartnerDocument),
+      bookingHistory: bookings.map(bookingRow),
+      supportTickets: tickets.map(serializeSupportTicket)
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function updatePartnerDocument(req, res, next) {
+  try {
+    const partnerObjectId = objectId(req.params.partnerId);
+    const documentObjectId = objectId(req.params.documentId);
+    if (!partnerObjectId || !documentObjectId) return res.status(400).json({ message: "Invalid partner or document id" });
+    const status = String(req.body?.validationStatus || "").trim().toLowerCase();
+    if (!["accepted", "rejected", "review"].includes(status)) {
+      return res.status(400).json({ message: "Invalid validation status" });
+    }
+    const document = await PartnerDocument.findOneAndUpdate(
+      { _id: documentObjectId, partnerId: partnerObjectId },
+      { $set: { validationStatus: status } },
+      { new: true }
+    );
+    if (!document) return res.status(404).json({ message: "Document not found" });
+    emitAdminEvent("partner:document_updated", {
+      partnerId: String(partnerObjectId),
+      documentId: String(document._id),
+      documentType: document.documentType,
+      status
+    });
+    return res.json({ ok: true, document: serializePartnerDocument(document) });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function bookingTimelineDetails(req, res, next) {
   try {
     const raw = String(req.params.bookingId || "").trim();
@@ -1459,6 +1576,8 @@ module.exports = {
   usersControlCenter,
   userProfile,
   updateUserAdminState,
+  partnerProfile,
+  updatePartnerDocument,
   bookingTimelineDetails,
   listSupportTickets,
   createSupportTicket,

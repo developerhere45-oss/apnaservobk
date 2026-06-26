@@ -35,6 +35,8 @@ router.post("/notifications/:notificationId/resend", adminNotificationLimiter, n
 router.get("/users/control-center", controller.usersControlCenter);
 router.get("/users/:userId", controller.userProfile);
 router.patch("/users/:userId", controller.updateUserAdminState);
+router.get("/partners/:partnerId", controller.partnerProfile);
+router.patch("/partners/:partnerId/documents/:documentId", controller.updatePartnerDocument);
 router.get("/bookings/:bookingId/timeline", controller.bookingTimelineDetails);
 router.get("/support-tickets", controller.listSupportTickets);
 router.post("/support-tickets", controller.createSupportTicket);
