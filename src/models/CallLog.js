@@ -7,10 +7,10 @@ const callLogSchema = new mongoose.Schema(
     partnerId: { type: mongoose.Schema.Types.ObjectId, ref: "Partner", required: true, index: true },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     action: { type: String, enum: ["start", "report"], required: true, index: true },
-    direction: { type: String, enum: ["partner_to_customer"], default: "partner_to_customer" },
+    direction: { type: String, enum: ["partner_to_customer", "user_to_partner"], default: "partner_to_customer" },
     status: {
       type: String,
-      enum: ["virtual_call_ready", "virtual_call_unconfigured", "reported"],
+      enum: ["virtual_call_ready", "direct_call_ready", "virtual_call_unconfigured", "reported"],
       required: true,
       index: true
     },

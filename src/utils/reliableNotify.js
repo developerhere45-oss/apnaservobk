@@ -10,6 +10,32 @@ function pushData(data = {}) {
   return clean;
 }
 
+function destinationData(data, recipient) {
+  const clean = pushData(data);
+  const role = recipient?.role || recipient?.recipientRole || "user";
+  const type = String(clean.type || "").toLowerCase();
+  const category = String(clean.category || "").toLowerCase();
+  const status = String(clean.status || "").toLowerCase();
+  if (!clean.actionId) {
+    clean.actionId = clean.bookingId || clean.bookingCode || clean.ticketId || "";
+  }
+  if (!clean.actionType) {
+    if (type.includes("chat") || category === "chat") {
+      clean.actionType = "OPEN_BOOKING_CHAT";
+    } else if (category === "payment" || status === "amount_pending" || type.includes("payment")) {
+      clean.actionType = "OPEN_PAYMENT";
+    } else if (category.includes("support") || type.includes("support") || clean.ticketId) {
+      clean.actionType = "OPEN_SUPPORT";
+    } else if (clean.bookingId || clean.bookingCode || type.startsWith("booking:")) {
+      clean.actionType = role === "partner" ? "OPEN_PARTNER_BOOKING" : "OPEN_BOOKING";
+    } else {
+      clean.actionType = role === "partner" ? "OPEN_PARTNER_HOME" : "OPEN_HOME";
+    }
+  }
+  clean.targetApp = role === "partner" ? "PARTNER" : "USER";
+  return clean;
+}
+
 function notificationOwner(recipient = {}) {
   return {
     recipientRole: recipient.role || recipient.recipientRole || "user",
@@ -93,6 +119,7 @@ async function sendSmsBackup({ notification, recipient, smsBody }) {
 }
 
 async function notifyOne({ recipient, title, body, cleanData, type, category, priority, smsBody }) {
+  cleanData = destinationData({ ...cleanData, category }, recipient);
   const tokens = Array.isArray(recipient.tokens) && recipient.tokens.length
     ? recipient.tokens.filter(Boolean)
     : (recipient.token ? [recipient.token] : []);
@@ -159,5 +186,6 @@ async function reliableNotify({ recipients = [], title, body, data = {}, type = 
 }
 
 module.exports = {
-  reliableNotify
+  reliableNotify,
+  destinationData
 };

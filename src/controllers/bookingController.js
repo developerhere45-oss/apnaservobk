@@ -360,12 +360,15 @@ async function creditCompletedBookingOnce(booking) {
   return true;
 }
 
-function protectCustomerPhoneForPartner(payload, booking) {
+function protectCustomerPhoneForPartner(payload, booking, partner) {
+  const assigned = partner && String(booking.partnerId || "") === String(partner._id);
+  const customerPhone = assigned ? String(booking.userSnapshot?.phone || payload.userPhone || "") : "";
   return {
     ...payload,
-    userPhone: maskPhone(booking.userSnapshot?.phone || payload.userPhone),
-    customerPhoneMasked: maskPhone(booking.userSnapshot?.phone || payload.userPhone),
-    phoneProtected: true,
+    userPhone: customerPhone || maskPhone(booking.userSnapshot?.phone || payload.userPhone),
+    customerPhone: customerPhone,
+    customerPhoneMasked: customerPhone || maskPhone(booking.userSnapshot?.phone || payload.userPhone),
+    phoneProtected: !assigned,
     virtualCalling: Boolean(virtualCallNumber())
   };
 }
@@ -686,7 +689,7 @@ async function listUserBookings(req, res, next) {
   try {
     const user = await User.findOne({ firebaseUid: req.auth.uid });
     if (!user) return res.json({ bookings: [] });
-    const bookings = await Booking.find({ userId: user._id }).sort({ createdAt: -1 }).limit(50);
+    const bookings = await Booking.find({ userId: user._id }).sort({ createdAt: -1 }).limit(500);
     await expireQuotesIfNeeded(bookings);
     return res.json({ bookings: bookings.map(serializeBooking) });
   } catch (error) {
@@ -709,7 +712,7 @@ async function listPartnerBookings(req, res, next) {
     }).sort({ createdAt: -1 }).limit(80);
 
     await expireQuotesIfNeeded(bookings);
-    return res.json({ bookings: bookings.map((booking) => protectCustomerPhoneForPartner(serializeBooking(booking), booking)) });
+    return res.json({ bookings: bookings.map((booking) => protectCustomerPhoneForPartner(serializeBooking(booking), booking, partner)) });
   } catch (error) {
     return next(error);
   }
@@ -1341,7 +1344,7 @@ async function getBooking(req, res, next) {
       if (!isAssignedPartner && !canSeeOpenRequest && !canSeeFallbackPending) {
         return res.status(403).json({ message: "Not allowed to access this booking" });
       }
-      return res.json({ booking: protectCustomerPhoneForPartner(serializeBooking(booking), booking) });
+      return res.json({ booking: protectCustomerPhoneForPartner(serializeBooking(booking), booking, partner) });
     }
     return res.status(403).json({ message: "Not allowed to access this booking" });
   } catch (error) {
@@ -1352,30 +1355,43 @@ async function getBooking(req, res, next) {
 async function createCallLog(req, res, next) {
   try {
     const body = callActionSchema.parse(req.body || {});
-    const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
-    if (!partner) return res.status(404).json({ message: "Partner profile not found" });
+    const [partner, user] = await Promise.all([
+      Partner.findOne({ firebaseUid: req.auth.uid }),
+      User.findOne({ firebaseUid: req.auth.uid })
+    ]);
 
     const booking = await Booking.findOne(bookingIdFilter(String(req.params.bookingId || "")));
     if (!booking) return res.status(404).json({ message: "Booking not found" });
-    if (String(booking.partnerId || "") !== String(partner._id)) {
-      return res.status(403).json({ message: "Only assigned partner can call this customer" });
+    const isPartner = partner && String(booking.partnerId || "") === String(partner._id);
+    const isUser = user && String(booking.userId || "") === String(user._id);
+    if (!isPartner && !isUser) {
+      return res.status(403).json({ message: "Only booking participants can start this call" });
+    }
+    if (!booking.partnerId) {
+      return res.status(409).json({ message: "Partner is not assigned yet" });
     }
 
-    const virtualNumber = virtualCallNumber();
+    const configuredVirtualNumber = virtualCallNumber();
+    const directNumber = isPartner ? booking.userSnapshot?.phone : booking.partnerSnapshot?.phone;
+    const virtualNumber = isPartner && configuredVirtualNumber ? configuredVirtualNumber : "";
+    const phoneNumber = virtualNumber || String(directNumber || "");
     const status = body.action === "report"
       ? "reported"
       : virtualNumber
         ? "virtual_call_ready"
-        : "virtual_call_unconfigured";
+        : phoneNumber
+          ? "direct_call_ready"
+          : "virtual_call_unconfigured";
 
     const log = await CallLog.create({
       bookingId: booking._id,
       bookingCode: booking.bookingCode,
-      partnerId: partner._id,
+      partnerId: booking.partnerId,
       userId: booking.userId,
       action: body.action,
+      direction: isPartner ? "partner_to_customer" : "user_to_partner",
       status,
-      customerPhoneMasked: maskPhone(booking.userSnapshot?.phone),
+      customerPhoneMasked: maskPhone(directNumber),
       virtualNumber: body.action === "start" ? virtualNumber : "",
       reason: body.reason || "",
       userAgent: req.get("user-agent") || "",
@@ -1384,9 +1400,9 @@ async function createCallLog(req, res, next) {
 
     const fraudScan = await recordFraudSignal({
       booking,
-      partnerId: partner._id,
+      partnerId: booking.partnerId,
       userId: booking.userId,
-      actorRole: "partner",
+      actorRole: isPartner ? "partner" : "user",
       source: body.action === "report" ? "call_report" : "call_start",
       message: body.reason || "",
       metadata: { callLogId: log._id, action: body.action }
@@ -1396,9 +1412,9 @@ async function createCallLog(req, res, next) {
       callLogId: String(log._id),
       action: body.action,
       status,
-      actorRole: "partner",
-      partnerId: String(partner._id),
-      partnerName: partner.name || ""
+      actorRole: isPartner ? "partner" : "user",
+      partnerId: String(booking.partnerId),
+      partnerName: booking.partnerSnapshot?.name || partner?.name || ""
     });
 
     return res.json({
@@ -1406,7 +1422,8 @@ async function createCallLog(req, res, next) {
       callLogId: log._id,
       maskedCustomerPhone: log.customerPhoneMasked,
       virtualNumber: body.action === "start" ? virtualNumber : "",
-      canCall: body.action === "start" && Boolean(virtualNumber),
+      phoneNumber: body.action === "start" ? phoneNumber : "",
+      canCall: body.action === "start" && Boolean(phoneNumber),
       status,
       fraudWarning: fraudScan.flagged
     });

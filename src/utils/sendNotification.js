@@ -15,8 +15,7 @@ async function sendNotification({ token, tokens, title, body, data = {} }) {
     if (cleanTokens.length === 1) {
       await admin.messaging().send({
         token: cleanTokens[0],
-        notification: { title, body },
-        data: messageData,
+        data: { ...messageData, title: String(title || "ApnaServo"), body: String(body || "New update received") },
         android: {
           priority: "high",
           notification: {
@@ -30,8 +29,7 @@ async function sendNotification({ token, tokens, title, body, data = {} }) {
 
     return await admin.messaging().sendEachForMulticast({
       tokens: cleanTokens,
-      notification: { title, body },
-      data: messageData,
+      data: { ...messageData, title: String(title || "ApnaServo"), body: String(body || "New update received") },
       android: {
         priority: "high",
         notification: {
