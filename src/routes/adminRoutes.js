@@ -24,6 +24,7 @@ router.use(verifyAdminSecret);
 router.get("/dashboard", controller.dashboard);
 router.get("/activity", controller.listAdminActivity);
 router.post("/actions", controller.performAdminAction);
+router.delete("/reset-platform-data", controller.resetPlatformData);
 router.post("/notifications/send", adminNotificationLimiter, notifications.send);
 router.post("/notifications/schedule", adminNotificationLimiter, notifications.schedule);
 router.get("/notifications/history", notifications.history);

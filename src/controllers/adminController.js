@@ -854,6 +854,51 @@ async function performAdminAction(req, res, next) {
   }
 }
 
+const platformResetPlan = [
+  ["Booking messages", BookingMessage],
+  ["Customer no response reports", CustomerNoResponseReport],
+  ["In-app notifications", InAppNotification],
+  ["Location logs", LocationLog],
+  ["Partner documents", PartnerDocument],
+  ["Payments", Payment],
+  ["Reviews", Review],
+  ["Review disputes", ReviewDispute],
+  ["Revisit requests", RevisitRequest],
+  ["Support tickets", SupportTicket],
+  ["Technician SOS", TechnicianSos],
+  ["Bookings", Booking],
+  ["Admin notifications", AdminNotification],
+  ["Admin activity", AdminActivity],
+  ["Partners", Partner],
+  ["Users", User]
+];
+
+async function resetPlatformData(req, res, next) {
+  try {
+    const confirm = String(req.body?.confirm || req.headers["x-admin-reset-confirm"] || "").trim();
+    if (confirm !== "DELETE_APNASERVO_DATA") {
+      return res.status(400).json({ message: "Reset confirmation is required" });
+    }
+
+    const results = [];
+    for (const [collection, model] of platformResetPlan) {
+      const before = await model.countDocuments();
+      const result = before > 0 ? await model.deleteMany({}) : { deletedCount: 0 };
+      results.push({ collection, before, deleted: result.deletedCount || 0 });
+    }
+
+    emitAdminEvent("platform:reset", {
+      by: req.auth?.email || req.auth?.uid || "admin",
+      collections: results.length,
+      deleted: results.reduce((sum, item) => sum + item.deleted, 0)
+    });
+    await cache.del("admin:dashboard:v1");
+    return res.json({ ok: true, reset: results });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function findUserByPhoneOrId(userId, mobileNumber) {
   const directId = objectId(userId);
   if (directId) {
@@ -1582,6 +1627,7 @@ module.exports = {
   listAdminActivity,
   listResourceRows,
   performAdminAction,
+  resetPlatformData,
   usersControlCenter,
   userProfile,
   updateUserAdminState,
