@@ -689,7 +689,14 @@ async function listUserBookings(req, res, next) {
   try {
     const user = await User.findOne({ firebaseUid: req.auth.uid });
     if (!user) return res.json({ bookings: [] });
-    const bookings = await Booking.find({ userId: user._id }).sort({ createdAt: -1 }).limit(500);
+    const identityFilters = [];
+    if (user.phoneVerified && user.phoneHash) identityFilters.push({ phoneHash: user.phoneHash });
+    if (req.auth.email_verified === true && user.emailHash) identityFilters.push({ emailHash: user.emailHash });
+    const linkedUsers = identityFilters.length
+      ? await User.find({ $or: identityFilters }).select("_id")
+      : [];
+    const userIds = [...new Set([String(user._id), ...linkedUsers.map((entry) => String(entry._id))])];
+    const bookings = await Booking.find({ userId: { $in: userIds } }).sort({ createdAt: -1 }).limit(500);
     await expireQuotesIfNeeded(bookings);
     return res.json({ bookings: bookings.map(serializeBooking) });
   } catch (error) {
@@ -1371,8 +1378,14 @@ async function createCallLog(req, res, next) {
       return res.status(409).json({ message: "Partner is not assigned yet" });
     }
 
+    const [assignedPartner, bookingUser] = await Promise.all([
+      booking.partnerId ? Partner.findById(booking.partnerId) : null,
+      booking.userId ? User.findById(booking.userId) : null
+    ]);
     const configuredVirtualNumber = virtualCallNumber();
-    const directNumber = isPartner ? booking.userSnapshot?.phone : booking.partnerSnapshot?.phone;
+    const directNumber = isPartner
+      ? (booking.userSnapshot?.phone || bookingUser?.phone || "")
+      : (booking.partnerSnapshot?.phone || assignedPartner?.phone || "");
     const virtualNumber = isPartner && configuredVirtualNumber ? configuredVirtualNumber : "";
     const phoneNumber = virtualNumber || String(directNumber || "");
     const status = body.action === "report"
