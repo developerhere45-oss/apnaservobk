@@ -103,9 +103,35 @@ app.use("/api/admin", adminRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
+function keepAliveUrl() {
+  return String(
+    process.env.KEEP_ALIVE_URL
+    || process.env.PUBLIC_BACKEND_URL
+    || process.env.RENDER_EXTERNAL_URL
+    || ""
+  ).replace(/\/$/, "");
+}
+
+function startKeepAlive() {
+  if (String(process.env.DISABLE_BACKEND_KEEP_ALIVE || "").toLowerCase() === "true") return;
+  const baseUrl = keepAliveUrl();
+  if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) return;
+  const intervalMs = Math.max(Number(process.env.BACKEND_KEEP_ALIVE_INTERVAL_MS || 8 * 60 * 1000), 60 * 1000);
+  const ping = async () => {
+    try {
+      await fetch(`${baseUrl}/health`, { method: "GET" });
+    } catch (error) {
+      console.warn("Backend keep-alive ping failed:", error.message);
+    }
+  };
+  setTimeout(ping, 30 * 1000).unref();
+  setInterval(ping, intervalMs).unref();
+}
+
 async function start() {
   await connectDb();
   startNotificationScheduler();
+  startKeepAlive();
   const port = Number(process.env.PORT || 5000);
   server.listen(port, "0.0.0.0", () => {
     console.log(`ApnaServo backend running on http://0.0.0.0:${port}`);
