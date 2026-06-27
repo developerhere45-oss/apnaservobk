@@ -842,7 +842,8 @@ async function dashboard(req, res, next) {
       recentDisputes,
       recentTickets,
       recentPayments,
-      recentActivity
+      recentActivity,
+      amountBookings
     ] = await Promise.all([
       User.countDocuments(),
       User.countDocuments({ accountStatus: "active" }),
@@ -866,14 +867,29 @@ async function dashboard(req, res, next) {
       ReviewDispute.find().sort({ createdAt: -1 }).limit(6),
       SupportTicket.find().sort({ lastUpdatedAt: -1, createdAt: -1 }).limit(6),
       Payment.find().sort({ createdAt: -1 }).limit(8).populate("partnerId", "name phone").populate("userId", "name phone").populate("bookingId", "bookingCode serviceName serviceCategory"),
-      AdminActivity.find().sort({ createdAt: -1 }).limit(12)
+      AdminActivity.find().sort({ createdAt: -1 }).limit(12),
+      Booking.find({
+        status: { $in: ["completed", "amount_pending"] },
+        $or: [
+          { finalAmount: { $gt: 0 } },
+          { quoteAmount: { $gt: 0 } },
+          { price: { $gt: 0 } }
+        ]
+      }).select("finalAmount quoteAmount price paymentStatus status")
     ]);
 
-    const totalRevenue = payments
+    const paidPaymentRevenue = payments
       .filter((payment) => payment.status === "paid")
       .reduce((sum, payment) => sum + money(payment.amount), 0);
-    const pendingPaymentAmount = pendingPayments.reduce((sum, payment) => sum + money(payment.amount), 0);
-    const totalCollection = payments.reduce((sum, payment) => sum + money(payment.amount), 0);
+    const bookingRevenueFallback = amountBookings
+      .filter((booking) => booking.status === "completed" || booking.paymentStatus === "paid")
+      .reduce((sum, booking) => sum + bookingAmount(booking), 0);
+    const totalRevenue = paidPaymentRevenue || bookingRevenueFallback;
+    const pendingPaymentFallback = amountBookings
+      .filter((booking) => booking.status === "amount_pending" || booking.paymentStatus === "pending")
+      .reduce((sum, booking) => sum + bookingAmount(booking), 0);
+    const pendingPaymentAmount = pendingPayments.reduce((sum, payment) => sum + money(payment.amount), 0) || pendingPaymentFallback;
+    const totalCollection = payments.reduce((sum, payment) => sum + money(payment.amount), 0) || amountBookings.reduce((sum, booking) => sum + bookingAmount(booking), 0);
     const platformCommission = Math.round(totalRevenue * 0.12);
     const partnerEarnings = Math.max(totalRevenue - platformCommission, 0);
     const recentComplaints = [
