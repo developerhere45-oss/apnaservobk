@@ -16,6 +16,7 @@
     "db:audit": "node scripts/db-audit.js",
     "db:audit:schema": "node scripts/db-audit.js --schema-only",
     "db:migrate": "node scripts/db-migrate-fixes.js",
+    "db:reset-users-partners": "node scripts/reset-users-partners.js",
     "scale:simulate": "node scripts/scale-simulation.js",
     "security:audit": "node scripts/security-audit.js"
   },

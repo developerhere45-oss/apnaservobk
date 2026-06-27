@@ -338,6 +338,7 @@ function bookingRow(booking) {
 
 function partnerRow(partner, bookingCount = 0) {
   const approved = partner.isVerified === true && partner.kycStatus === "verified" && partner.trustStatus === "trusted";
+  const blocked = partner.accountStatus === "blocked" || partner.accountStatus === "suspended" || partner.trustStatus === "suspended";
   return {
     id: id(partner._id),
     code: partner.partnerCode || id(partner._id),
@@ -359,11 +360,11 @@ function partnerRow(partner, bookingCount = 0) {
     serviceArea: partner.serviceArea || "",
     online: Boolean(partner.isOnline),
     totalBookings: bookingCount,
-    approval: approved ? "Approved" : (partner.kycStatus === "rejected" ? "Denied" : "Waiting Approval"),
+    approval: blocked ? "Blocked" : (approved ? "Approved" : (partner.kycStatus === "rejected" ? "Denied" : "Waiting Approval")),
     isVerified: Boolean(partner.isVerified),
     kyc: partner.kycStatus || "",
     trust: partner.trustStatus || "",
-    status: partner.accountStatus || "active",
+    status: blocked ? "blocked" : (partner.accountStatus || "active"),
     rating: Number(partner.rating || 0),
     joinedAt: iso(partner.createdAt)
   };
@@ -627,11 +628,16 @@ async function listResourceRows(req, res, next) {
         totalBookings: await Booking.countDocuments({ partnerId: { $ne: null } })
       };
     } else if (resource === "partner-approvals") {
-      const partners = await Partner.find({ kycStatus: { $in: ["missing", "submitted", "pending_review"] } }).sort({ createdAt: -1 }).limit(limit);
+      const pendingPartnerFilter = {
+        kycStatus: { $in: ["missing", "submitted", "pending_review"] },
+        accountStatus: "active",
+        trustStatus: { $ne: "suspended" }
+      };
+      const partners = await Partner.find(pendingPartnerFilter).sort({ createdAt: -1 }).limit(limit);
       const countMap = await bookingCountByPartner(partners.map((partner) => partner._id));
       rows = partners.map((partner) => partnerRow(partner, countMap.get(id(partner._id)) || 0));
       metrics = {
-        pendingApproval: await Partner.countDocuments({ kycStatus: { $in: ["missing", "submitted", "pending_review"] } }),
+        pendingApproval: await Partner.countDocuments(pendingPartnerFilter),
         submitted: await Partner.countDocuments({ kycStatus: "submitted" }),
         pendingReview: await Partner.countDocuments({ kycStatus: "pending_review" }),
         rejected: await Partner.countDocuments({ kycStatus: "rejected" }),
@@ -793,8 +799,9 @@ async function performAdminAction(req, res, next) {
       return res.json({ ok: true, action, targetId, status: partner.kycStatus, approval: "approved" });
     }
 
-    if (action === "reject-technician" || action === "suspend-technician") {
-      const isSuspend = action === "suspend-technician";
+    if (action === "reject-technician" || action === "suspend-technician" || action === "block-technician") {
+      const isSuspend = action === "suspend-technician" || action === "block-technician";
+      const isBlock = action === "block-technician";
       const partner = await Partner.findByIdAndUpdate(
         targetId,
         {
@@ -802,14 +809,15 @@ async function performAdminAction(req, res, next) {
             isOnline: false,
             isVerified: false,
             kycStatus: isSuspend ? "verified" : "rejected",
-            trustStatus: isSuspend ? "suspended" : "review_required"
+            trustStatus: isSuspend ? "suspended" : "review_required",
+            ...(isBlock ? { accountStatus: "blocked" } : {})
           }
         },
         { new: true }
       );
       if (!partner) return res.status(404).json({ message: "Partner not found" });
       await cache.del("admin:dashboard:v1");
-      emitAdminEvent(isSuspend ? "partner:suspended" : "partner:rejected", {
+      emitAdminEvent(isBlock ? "partner:blocked" : (isSuspend ? "partner:suspended" : "partner:rejected"), {
         partnerId: String(partner._id),
         partnerCode: partner.partnerCode || "",
         partnerName: partner.name || "",
@@ -818,21 +826,21 @@ async function performAdminAction(req, res, next) {
       });
       await reliableNotify({
         recipients: [partnerNotificationRecipient(partner)],
-        title: isSuspend ? "Partner account suspended" : "Verification not approved",
+        title: isSuspend ? "Partner account blocked" : "Verification not approved",
         body: isSuspend
-          ? "Your ApnaServo partner account is suspended. Contact support for review."
+          ? "Your ApnaServo partner account is blocked. Contact support for review."
           : "Your ApnaServo partner verification was not approved. Please contact support or update your details.",
         category: "partner_approval",
         priority: "high",
         data: {
-          type: isSuspend ? "partner:suspended" : "partner:rejected",
+          type: isBlock ? "partner:blocked" : (isSuspend ? "partner:suspended" : "partner:rejected"),
           targetApp: "partner",
           actionType: "OPEN_PARTNER_HOME",
           partnerId: partner._id,
-          status: isSuspend ? "suspended" : "rejected"
+          status: isSuspend ? "blocked" : "rejected"
         }
       });
-      return res.json({ ok: true, action, targetId, status: isSuspend ? partner.trustStatus : partner.kycStatus, approval: isSuspend ? "suspended" : "denied" });
+      return res.json({ ok: true, action, targetId, status: isSuspend ? partner.accountStatus || partner.trustStatus : partner.kycStatus, approval: isSuspend ? "blocked" : "denied" });
     }
 
     return res.json({
@@ -1267,6 +1275,7 @@ async function partnerProfile(req, res, next) {
       SupportTicket.find({ partnerId: partner._id }).sort({ createdAt: -1 }).limit(100)
     ]);
     const approved = partner.isVerified === true && partner.kycStatus === "verified" && partner.trustStatus === "trusted";
+    const blocked = partner.accountStatus === "blocked" || partner.accountStatus === "suspended" || partner.trustStatus === "suspended";
     const rawProfile = partner.toObject({ getters: true });
     delete rawProfile.fcmToken;
     delete rawProfile.deviceTokens;
@@ -1293,7 +1302,7 @@ async function partnerProfile(req, res, next) {
         serviceRadiusKm: Number(partner.serviceRadiusKm || 0),
         languagesKnown: partner.languagesKnown || [],
         registrationDate: iso(partner.createdAt),
-        currentVerificationStatus: approved ? "Approved" : (partner.kycStatus === "rejected" ? "Rejected" : "Under Verification"),
+        currentVerificationStatus: blocked ? "Blocked" : (approved ? "Approved" : (partner.kycStatus === "rejected" ? "Rejected" : "Under Verification")),
         isVerified: Boolean(partner.isVerified),
         kycStatus: partner.kycStatus || "",
         trustStatus: partner.trustStatus || "",
