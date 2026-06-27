@@ -1882,7 +1882,20 @@ async function supportTicketDetails(req, res, next) {
   try {
     const ticket = await findTicket(req.params.ticketId);
     if (!ticket) return res.status(404).json({ message: "Support ticket not found" });
-    return res.json({ ticket: serializeSupportTicket(ticket) });
+    const booking = ticket.bookingId
+      ? await Booking.findById(ticket.bookingId).select("serviceCategory serviceName city address partnerSnapshot bookingCode")
+      : null;
+    return res.json({
+      ticket: {
+        ...serializeSupportTicket(ticket),
+        serviceCategory: booking?.serviceCategory || "",
+        serviceName: booking?.serviceName || "",
+        area: booking?.city || "",
+        customerAddress: booking?.address || "",
+        assignedPartnerName: booking?.partnerSnapshot?.name || "",
+        bookingCode: ticket.bookingCode || booking?.bookingCode || ""
+      }
+    });
   } catch (error) {
     return next(error);
   }
@@ -1905,6 +1918,11 @@ async function updateSupportTicket(req, res, next) {
     if (body.status) {
       ticket.status = String(body.status).trim().toLowerCase();
       ticket.timeline.push({ event: "status_changed", by: actor, note: ticket.status, at: now });
+    }
+    if (body.priority) {
+      const priority = String(body.priority).trim().toLowerCase();
+      ticket.priority = priority === "critical" ? "urgent" : priority;
+      ticket.timeline.push({ event: "priority_changed", by: actor, note: ticket.priority, at: now });
     }
     if (action === "mark_resolved") {
       ticket.status = "resolved";
