@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const { Readable } = require("stream");
 const mongoose = require("mongoose");
 const AdminNotification = require("../models/AdminNotification");
+const AdminNotificationAsset = require("../models/AdminNotificationAsset");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
 const { cloudinary } = require("../config/cloudinary");
@@ -15,7 +16,7 @@ const actionTypes = ["NONE", "OPEN_HOME", "OPEN_NOTIFICATIONS", "OPEN_SERVICE", 
 const notificationPayloadSchema = z.object({
   title: z.string().trim().min(1).max(100),
   message: z.string().trim().min(1).max(500),
-  imageUrl: z.string().trim().url().max(1600).optional().or(z.literal("")),
+  imageUrl: z.string().trim().max(2500).optional().or(z.literal("")),
   targetType: z.enum(targetTypes),
   targetUserIds: z.array(z.string().trim().min(1)).max(50).optional(),
   targetPartnerIds: z.array(z.string().trim().min(1)).max(50).optional(),
@@ -52,6 +53,32 @@ function serialize(notification) {
     createdAt: notification.createdAt ? notification.createdAt.toISOString() : "",
     updatedAt: notification.updatedAt ? notification.updatedAt.toISOString() : ""
   };
+}
+
+function publicBaseUrl(req) {
+  const configured = String(process.env.PUBLIC_BACKEND_URL || process.env.API_PUBLIC_BASE_URL || "").replace(/\/$/, "");
+  if (configured) return configured;
+  const host = req.get("x-forwarded-host") || req.get("host") || "";
+  const proto = String(req.get("x-forwarded-proto") || req.protocol || "https").split(",")[0].trim();
+  if (!host) return "";
+  return `${host.includes("onrender.com") ? "https" : proto}://${host}`;
+}
+
+function isHttpUrl(value) {
+  return /^https?:\/\/\S+$/i.test(String(value || "").trim());
+}
+
+function normalizeNotificationImageUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    const imgUrl = parsed.searchParams.get("imgurl");
+    if (imgUrl && isHttpUrl(imgUrl)) return imgUrl;
+  } catch {
+    return "";
+  }
+  return isHttpUrl(raw) ? raw : "";
 }
 
 function adminIdentity(req) {
@@ -173,11 +200,12 @@ async function createNotification(body, req, status) {
   const idempotencyKey = body.idempotencyKey || req.get("idempotency-key") || "";
   const existing = await existingByIdempotency(idempotencyKey);
   if (existing) return { notification: existing, existing: true };
+  const imageUrl = normalizeNotificationImageUrl(body.imageUrl);
   try {
     const notification = await AdminNotification.create({
       title: body.title,
       message: body.message,
-      imageUrl: body.imageUrl || "",
+      imageUrl,
       targetType: body.targetType,
       targetUserIds: ids.targetUserIds,
       targetPartnerIds: ids.targetPartnerIds,
@@ -202,6 +230,7 @@ async function send(req, res, next) {
   try {
     const parsed = notificationPayloadSchema.safeParse(req.body || {});
     if (!parsed.success) return res.status(400).json({ message: "Invalid notification payload", issues: parsed.error.issues });
+    parsed.data.imageUrl = normalizeNotificationImageUrl(parsed.data.imageUrl || "");
     const { notification, existing } = await createNotification(parsed.data, req, "draft");
     if (!existing) {
       emitAdminEvent("notification:created", { notificationId: String(notification._id), title: notification.title, targetType: notification.targetType });
@@ -220,6 +249,7 @@ async function schedule(req, res, next) {
   try {
     const parsed = notificationPayloadSchema.safeParse(req.body || {});
     if (!parsed.success) return res.status(400).json({ message: "Invalid notification payload", issues: parsed.error.issues });
+    parsed.data.imageUrl = normalizeNotificationImageUrl(parsed.data.imageUrl || "");
     if (!parsed.data.scheduleAt || parsed.data.scheduleAt.getTime() <= Date.now() + 60 * 1000) {
       return res.status(400).json({ message: "Schedule date/time must be at least 1 minute in the future" });
     }
@@ -247,7 +277,7 @@ async function history(req, res, next) {
       AdminNotification.countDocuments(),
       AdminNotification.countDocuments({ sentAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } }),
       AdminNotification.countDocuments({ status: "scheduled" }),
-      AdminNotification.countDocuments({ status: "failed" })
+      AdminNotification.countDocuments({ status: "failed", recipientCount: 0 })
     ]);
     return res.json({
       metrics: { totalNotifications, sentToday, scheduled, failed },
@@ -405,12 +435,40 @@ function uploadBufferToCloudinary(file) {
 
 async function uploadImage(req, res, next) {
   try {
-    if (!process.env.CLOUDINARY_CLOUD_NAME) {
-      return res.status(503).json({ message: "Cloudinary is not configured. Paste an existing HTTPS image URL instead." });
-    }
     if (!req.file) return res.status(400).json({ message: "Image file is required" });
+    if (!process.env.CLOUDINARY_CLOUD_NAME) {
+      const asset = await AdminNotificationAsset.create({
+        mimeType: req.file.mimetype,
+        originalName: req.file.originalname || "notification-image",
+        sizeBytes: req.file.size,
+        dataBase64: req.file.buffer.toString("base64"),
+        createdBy: req.auth?.uid || "admin-dashboard"
+      });
+      const baseUrl = publicBaseUrl(req);
+      return res.json({
+        imageUrl: `${baseUrl}/api/admin/notifications/assets/${asset._id}`,
+        publicId: String(asset._id),
+        storageProvider: "mongodb"
+      });
+    }
     const result = await uploadBufferToCloudinary(req.file);
     return res.json({ imageUrl: result.secure_url, publicId: result.public_id });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function asset(req, res, next) {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(String(req.params.assetId || ""))) {
+      return res.status(404).json({ message: "Asset not found" });
+    }
+    const record = await AdminNotificationAsset.findById(req.params.assetId).lean();
+    if (!record) return res.status(404).json({ message: "Asset not found" });
+    const buffer = Buffer.from(record.dataBase64 || "", "base64");
+    res.set("Content-Type", record.mimeType);
+    res.set("Cache-Control", "public, max-age=2592000, immutable");
+    return res.send(buffer);
   } catch (error) {
     return next(error);
   }
@@ -425,5 +483,6 @@ module.exports = {
   cancel,
   resend,
   searchRecipients,
-  uploadImage
+  uploadImage,
+  asset
 };

@@ -19,6 +19,7 @@ const upload = multer({
   }
 });
 
+router.get("/notifications/assets/:assetId", notifications.asset);
 router.use(verifyAdminSecret);
 router.get("/dashboard", controller.dashboard);
 router.get("/activity", controller.listAdminActivity);

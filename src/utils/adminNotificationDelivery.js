@@ -48,6 +48,16 @@ function dataPayload(notification, targetApp) {
   });
 }
 
+function pushImageUrl(value) {
+  const url = String(value || "").trim();
+  if (!/^https:\/\/\S+$/i.test(url)) return "";
+  if (url.includes("/api/admin/notifications/assets/")) return url;
+  if (/\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(url)) return url;
+  if (/res\.cloudinary\.com\/.+\/image\/upload\//i.test(url)) return url;
+  if (/googleusercontent\.com|gstatic\.com/i.test(url)) return url;
+  return "";
+}
+
 async function resolveRecipients(notification) {
   if (notification.targetType === "ALL_USERS") {
     const users = await User.find({ accountStatus: { $nin: ["blocked", "deleted"] } })
@@ -142,6 +152,7 @@ async function sendFcm(notification, recipients, targetApp) {
   }
 
   const payloadData = dataPayload(notification, targetApp);
+  const imageUrl = pushImageUrl(notification.imageUrl);
   const invalidTokens = [];
   const errors = [];
   let successCount = 0;
@@ -153,7 +164,7 @@ async function sendFcm(notification, recipients, targetApp) {
       notification: {
         title: notification.title,
         body: notification.message,
-        ...(notification.imageUrl ? { imageUrl: notification.imageUrl } : {})
+        ...(imageUrl ? { imageUrl } : {})
       },
       data: payloadData,
       android: {
@@ -161,7 +172,7 @@ async function sendFcm(notification, recipients, targetApp) {
         notification: {
           channelId: targetApp === "PARTNER" ? "partner_admin_announcements" : "admin_announcements",
           sound: "default",
-          ...(notification.imageUrl ? { imageUrl: notification.imageUrl } : {})
+          ...(imageUrl ? { imageUrl } : {})
         }
       }
     });
