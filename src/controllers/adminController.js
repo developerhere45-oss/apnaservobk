@@ -17,9 +17,12 @@ const SupportTicket = require("../models/SupportTicket");
 const AdminActivity = require("../models/AdminActivity");
 const cache = require("../config/cache");
 const { recomputePartnerRating } = require("../utils/ratingAggregation");
-const { emitAdminEvent } = require("../sockets/bookingSocket");
+const { emitAdminEvent, emitNewBookingToPartners } = require("../sockets/bookingSocket");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens } = require("../utils/notificationTokens");
+const findNearbyPartners = require("../utils/findNearbyPartners");
+const { serviceCategoryVariants, serviceLabel } = require("../utils/serviceCategory");
+const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
 
 function iso(value) {
   return value ? new Date(value).toISOString() : "";
@@ -381,6 +384,408 @@ function partnerNotificationRecipient(partner) {
     tokens,
     phone: partner.phone
   };
+}
+
+function userNotificationRecipient(user) {
+  if (!user) return null;
+  const tokens = activeDeviceTokens(user, "user").map((device) => device.token);
+  return {
+    role: "user",
+    userId: user._id,
+    firebaseUid: user.firebaseUid,
+    token: tokens[0] || user.fcmToken,
+    tokens,
+    phone: user.phone
+  };
+}
+
+function approvedPartnerFilter(extra = {}) {
+  return {
+    accountStatus: "active",
+    isVerified: true,
+    kycStatus: "verified",
+    trustStatus: "trusted",
+    ...extra
+  };
+}
+
+function smartPriority(booking) {
+  if (booking.emergency?.isEmergency || booking.emergency?.priority === "critical") return "High Priority";
+  const createdAt = booking.createdAt ? new Date(booking.createdAt).getTime() : Date.now();
+  const ageHours = (Date.now() - createdAt) / (60 * 60 * 1000);
+  if (ageHours >= 4) return "High Priority";
+  if (ageHours >= 1) return "Medium Priority";
+  return "Low Priority";
+}
+
+function ageLabel(value) {
+  const time = value ? new Date(value).getTime() : Date.now();
+  const minutes = Math.max(0, Math.floor((Date.now() - time) / 60000));
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function smartStatus(booking) {
+  if (booking.partnerId) return "Assigned";
+  if ((booking.requestedPartners || []).length) return "Sent to Partner";
+  return "No Partner";
+}
+
+function smartBookingRow(booking) {
+  return {
+    id: id(booking._id),
+    bookingCode: booking.bookingCode || id(booking._id),
+    customerName: booking.userSnapshot?.name || "Customer",
+    customerMobile: booking.userSnapshot?.phone || "",
+    serviceCategory: booking.serviceCategory || "",
+    serviceName: booking.serviceName || serviceLabel(booking.serviceCategory),
+    area: booking.city || "Guwahati",
+    address: booking.address || "",
+    bookingDateTime: iso(booking.createdAt),
+    scheduledDateTime: booking.slot || iso(booking.expectedArrivalAt),
+    timeAgo: ageLabel(booking.createdAt),
+    priority: smartPriority(booking),
+    status: smartStatus(booking),
+    rawStatus: booking.status || "",
+    partnerName: booking.partnerSnapshot?.name || "",
+    requestedPartnersCount: (booking.requestedPartners || []).length,
+    finalServiceCost: bookingAmount(booking),
+    paymentStatus: booking.paymentStatus || ""
+  };
+}
+
+function smartPartnerRow(partner, activeJobs = 0) {
+  return {
+    id: id(partner._id),
+    partnerCode: partner.partnerCode || id(partner._id),
+    name: partner.name || "ApnaServo Partner",
+    phone: partner.phone || "",
+    email: partner.email || "",
+    serviceCategory: (partner.serviceCategory || []).join(", "),
+    serviceLabel: (partner.serviceCategory || []).map(serviceLabel).join(", "),
+    area: partner.serviceArea || partner.city || "Guwahati",
+    city: partner.city || "",
+    rating: Number(partner.rating || 0),
+    totalJobs: Number(partner.totalJobs || 0),
+    activeJobs,
+    isOnline: Boolean(partner.isOnline),
+    status: partner.isOnline ? "Available" : "Offline",
+    verificationStatus: partner.isVerified && partner.kycStatus === "verified" && partner.trustStatus === "trusted" ? "Verified" : "Review",
+    photoUrl: partner.photoUrl || "",
+    joinedAt: iso(partner.createdAt)
+  };
+}
+
+function smartComplaintRow(ticket) {
+  return {
+    id: id(ticket._id),
+    ticketId: ticket.ticketCode || id(ticket._id),
+    bookingId: id(ticket.bookingId),
+    bookingCode: ticket.bookingCode || "",
+    customerName: ticket.userName || ticket.partnerName || "Customer",
+    mobileNumber: ticket.mobileNumber || "",
+    category: ticket.category || "complaint",
+    priority: ticket.priority || "normal",
+    status: ticket.status || "open",
+    createdAt: iso(ticket.createdAt),
+    lastUpdated: iso(ticket.lastUpdatedAt || ticket.updatedAt),
+    complaint: ticket.complaint || ""
+  };
+}
+
+function smartRebookingRow(request) {
+  return {
+    id: id(request._id),
+    bookingId: id(request.bookingId),
+    bookingCode: request.bookingCode || "",
+    partnerId: id(request.partnerId),
+    status: request.status || "",
+    reason: request.reason || "",
+    message: request.message || "",
+    requestedAt: iso(request.requestedAt || request.createdAt)
+  };
+}
+
+async function activeJobCountByPartner(partnerIds) {
+  if (!partnerIds.length) return new Map();
+  const rows = await Booking.aggregate([
+    { $match: { partnerId: { $in: partnerIds }, status: { $in: ["accepted", "on_the_way", "arrived", "started", "amount_pending"] } } },
+    { $group: { _id: "$partnerId", total: { $sum: 1 } } }
+  ]);
+  return new Map(rows.map((entry) => [id(entry._id), Number(entry.total || 0)]));
+}
+
+function bookingCoordinates(booking) {
+  const coordinatesList = booking.location?.coordinates || [];
+  return {
+    lng: Number(coordinatesList[0] || 91.7362),
+    lat: Number(coordinatesList[1] || 26.1445)
+  };
+}
+
+async function availablePartnersForBooking(booking, { partnerIds = [], onlineOnly = false, limit = 30 } = {}) {
+  const ids = (Array.isArray(partnerIds) ? partnerIds : [])
+    .map((value) => objectId(value))
+    .filter(Boolean);
+  if (ids.length) {
+    return Partner.find({ _id: { $in: ids }, ...approvedPartnerFilter() }).limit(limit);
+  }
+
+  let partners = [];
+  if (onlineOnly) {
+    const { lat, lng } = bookingCoordinates(booking);
+    partners = await findNearbyPartners({
+      serviceCategory: booking.serviceCategory,
+      city: booking.city,
+      lat,
+      lng
+    });
+  }
+
+  if (partners.length) return partners.slice(0, limit);
+
+  const categories = serviceCategoryVariants(booking.serviceCategory);
+  const cityMatcher = regex(booking.city || "Guwahati");
+  return Partner.find({
+    ...approvedPartnerFilter(onlineOnly ? { isOnline: true } : {}),
+    serviceCategory: { $in: categories },
+    ...(cityMatcher ? { $or: [{ city: cityMatcher }, { serviceArea: cityMatcher }, { workingAreas: cityMatcher }] } : {})
+  })
+    .sort({ isOnline: -1, rating: -1, totalJobs: -1, updatedAt: -1 })
+    .limit(limit);
+}
+
+async function smartAssignmentDashboard(req, res, next) {
+  try {
+    const search = String(req.query.search || "").trim();
+    const service = String(req.query.service || "").trim();
+    const area = String(req.query.area || "").trim();
+    const serviceFilter = service ? { serviceCategory: { $in: serviceCategoryVariants(service) } } : {};
+    const areaFilter = area ? { city: regex(area) } : {};
+    const searchFilter = search
+      ? {
+        $or: [
+          { bookingCode: regex(search) },
+          { serviceName: regex(search) },
+          { "userSnapshot.name": regex(search) },
+          { "userSnapshot.phone": regex(search) }
+        ]
+      }
+      : {};
+
+    const pendingQuery = {
+      partnerId: null,
+      status: { $in: pendingAssignmentStatuses() },
+      ...serviceFilter,
+      ...areaFilter,
+      ...searchFilter
+    };
+
+    const [
+      pendingBookings,
+      pendingBookingsCount,
+      rebookingRequests,
+      rebookingRequestsCount,
+      openComplaints,
+      openComplaintsCount,
+      availablePartners,
+      totalAvailablePartners
+    ] = await Promise.all([
+      Booking.find(pendingQuery).sort({ "emergency.isEmergency": -1, createdAt: 1 }).limit(60),
+      Booking.countDocuments(pendingQuery),
+      RevisitRequest.find({ status: { $in: ["open", "partner_notified", "scheduled"] } }).sort({ createdAt: -1 }).limit(20),
+      RevisitRequest.countDocuments({ status: { $in: ["open", "partner_notified", "scheduled"] } }),
+      SupportTicket.find({ status: { $in: ["open", "assigned", "in_progress", "reopened", "escalated"] } }).sort({ lastUpdatedAt: -1, createdAt: -1 }).limit(30),
+      SupportTicket.countDocuments({ status: { $in: ["open", "assigned", "in_progress", "reopened", "escalated"] } }),
+      Partner.find(approvedPartnerFilter()).sort({ isOnline: -1, rating: -1, updatedAt: -1 }).limit(30),
+      Partner.countDocuments(approvedPartnerFilter({ isOnline: true }))
+    ]);
+
+    const partnerIds = availablePartners.map((partner) => partner._id);
+    const activeCounts = await activeJobCountByPartner(partnerIds);
+    const partnerRows = availablePartners.map((partner) => smartPartnerRow(partner, activeCounts.get(id(partner._id)) || 0));
+    const idlePartnerCount = partnerRows.filter((partner) => partner.isOnline && partner.activeJobs === 0).length;
+
+    return res.json({
+      generatedAt: new Date().toISOString(),
+      metrics: {
+        pendingBookings: pendingBookingsCount,
+        rebookingRequests: rebookingRequestsCount,
+        openComplaints: openComplaintsCount,
+        partnersIdle: idlePartnerCount,
+        partnersAvailable: totalAvailablePartners
+      },
+      pendingBookings: pendingBookings.map(smartBookingRow),
+      partners: partnerRows,
+      rebookingRequests: rebookingRequests.map(smartRebookingRow),
+      complaints: openComplaints.map(smartComplaintRow),
+      escalationRules: [
+        { priority: "High Priority", minutes: 15 },
+        { priority: "Medium Priority", minutes: 30 },
+        { priority: "Low Priority", minutes: 60 }
+      ]
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function forwardBookingToPartners({ booking, partners, reason = "Admin manual assignment", mode = "manual" }) {
+  const now = new Date();
+  const partnerIds = [...new Set(partners.map((partner) => id(partner._id)).filter(Boolean))];
+  if (!partnerIds.length) {
+    return { booking, partnerIds: [], addedPartnerIds: [] };
+  }
+
+  const currentRequested = new Set((booking.requestedPartners || []).map((partnerId) => id(partnerId)));
+  const addedPartnerIds = partnerIds.filter((partnerId) => !currentRequested.has(partnerId));
+  const requestedIds = [...new Set([...currentRequested, ...partnerIds])].map((partnerId) => new mongoose.Types.ObjectId(partnerId));
+  const forwardedPartners = partners.filter((partner) => partnerIds.includes(id(partner._id)));
+
+  booking.requestedPartners = requestedIds;
+  booking.rejectedPartners = (booking.rejectedPartners || []).filter((partnerId) => !partnerIds.includes(id(partnerId)));
+  booking.status = "sent_to_partner";
+  booking.statusTimeline.push({ status: mode === "bulk" ? "admin_bulk_forwarded" : "admin_forwarded", at: now, by: "admin" });
+  booking.statusTimeline.push({ status: "sent_to_partner", at: now, by: "admin" });
+  await booking.save();
+
+  emitNewBookingToPartners(booking, forwardedPartners);
+  emitAdminEvent("booking:admin_forwarded", {
+    ...smartBookingRow(booking),
+    assignedPartnerIds: partnerIds,
+    addedPartnerIds,
+    partnerCount: partnerIds.length,
+    reason,
+    mode
+  });
+
+  await reliableNotify({
+    recipients: forwardedPartners.map(partnerNotificationRecipient),
+    title: "Booking assigned by ApnaServo",
+    body: `${booking.serviceName || serviceLabel(booking.serviceCategory)} booking ${booking.bookingCode} is available in ${booking.city || "your area"}. Accept it from the Partner App.`,
+    category: "booking_request",
+    priority: smartPriority(booking).startsWith("High") ? "high" : "normal",
+    data: {
+      type: "booking:admin_forwarded",
+      targetApp: "partner",
+      actionType: "OPEN_BOOKING",
+      bookingId: booking._id,
+      bookingCode: booking.bookingCode,
+      serviceCategory: booking.serviceCategory,
+      mode
+    },
+    smsBody: `ApnaServo: Booking ${booking.bookingCode} for ${booking.serviceName || booking.serviceCategory} is available. Open Partner App to accept.`
+  });
+
+  const user = await User.findById(booking.userId);
+  await reliableNotify({
+    recipients: [userNotificationRecipient(user)],
+    title: "Partner assignment in progress",
+    body: `We have forwarded booking ${booking.bookingCode} to available partners in your area.`,
+    category: "booking_status",
+    priority: "normal",
+    data: {
+      type: "booking:admin_forwarded",
+      targetApp: "user",
+      actionType: "OPEN_BOOKING",
+      bookingId: booking._id,
+      bookingCode: booking.bookingCode,
+      status: booking.status
+    }
+  });
+
+  return { booking, partnerIds, addedPartnerIds };
+}
+
+async function smartAssignBooking(req, res, next) {
+  try {
+    const bookingId = String(req.body?.bookingId || "").trim();
+    const mode = String(req.body?.mode || "area").trim();
+    const reason = String(req.body?.reason || "Admin smart assignment").trim();
+    const partnerIds = Array.isArray(req.body?.partnerIds) ? req.body.partnerIds : [];
+    if (!bookingId) return res.status(400).json({ message: "bookingId is required" });
+
+    const booking = await Booking.findOne({
+      $or: [
+        { _id: objectId(bookingId) || undefined },
+        { bookingCode: bookingId }
+      ].filter((entry) => Object.values(entry)[0])
+    });
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    if (booking.partnerId) return res.status(409).json({ message: "Booking already has an assigned partner" });
+    if (!pendingAssignmentStatuses().includes(String(booking.status || ""))) {
+      return res.status(409).json({ message: `Booking cannot be forwarded while status is ${booking.status}` });
+    }
+
+    const partners = await availablePartnersForBooking(booking, {
+      partnerIds,
+      onlineOnly: mode !== "individual",
+      limit: mode === "individual" ? 10 : 30
+    });
+    if (!partners.length) {
+      return res.status(404).json({ message: "No approved partners found for this booking area/service" });
+    }
+
+    const result = await forwardBookingToPartners({ booking, partners, reason, mode });
+    return res.json({
+      ok: true,
+      booking: smartBookingRow(result.booking),
+      partners: partners.map((partner) => smartPartnerRow(partner)),
+      assignedPartnerIds: result.partnerIds,
+      addedPartnerIds: result.addedPartnerIds
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function smartBulkAssignPending(req, res, next) {
+  try {
+    const limit = Math.max(1, Math.min(Number(req.body?.limit || 25), 50));
+    const service = String(req.body?.service || "").trim();
+    const area = String(req.body?.area || "").trim();
+    const query = {
+      partnerId: null,
+      status: { $in: pendingAssignmentStatuses() },
+      ...(service ? { serviceCategory: { $in: serviceCategoryVariants(service) } } : {}),
+      ...(area ? { city: regex(area) } : {})
+    };
+    const bookings = await Booking.find(query).sort({ "emergency.isEmergency": -1, createdAt: 1 }).limit(limit);
+    const results = [];
+
+    for (const booking of bookings) {
+      const partners = await availablePartnersForBooking(booking, { onlineOnly: true, limit: 15 });
+      if (!partners.length) {
+        results.push({ bookingId: id(booking._id), bookingCode: booking.bookingCode, ok: false, message: "No approved online partners found" });
+        continue;
+      }
+      const result = await forwardBookingToPartners({
+        booking,
+        partners,
+        reason: "Admin bulk auto assignment",
+        mode: "bulk"
+      });
+      results.push({
+        bookingId: id(result.booking._id),
+        bookingCode: result.booking.bookingCode,
+        ok: true,
+        partnerCount: result.partnerIds.length,
+        addedPartnerCount: result.addedPartnerIds.length
+      });
+    }
+
+    return res.json({
+      ok: true,
+      processed: results.length,
+      forwarded: results.filter((entry) => entry.ok).length,
+      results
+    });
+  } catch (error) {
+    return next(error);
+  }
 }
 
 function paymentRow(payment) {
@@ -1627,6 +2032,9 @@ module.exports = {
   listAdminActivity,
   listResourceRows,
   performAdminAction,
+  smartAssignmentDashboard,
+  smartAssignBooking,
+  smartBulkAssignPending,
   resetPlatformData,
   usersControlCenter,
   userProfile,
