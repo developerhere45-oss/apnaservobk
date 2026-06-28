@@ -924,7 +924,7 @@ async function updateStatus(req, res, next) {
         partner,
         booking: currentBooking,
         payload: req.body || {},
-        requireNearCustomer: ["arrived", "started"].includes(nextStatus)
+        requireNearCustomer: nextStatus === "arrived"
       });
       await LocationLog.create({
         partnerId: partner._id,
