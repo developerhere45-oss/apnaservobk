@@ -172,11 +172,17 @@ function serializeBooking(booking) {
 function partnerBookingPayload(booking) {
   const payload = serializeBooking(booking);
   const doc = typeof booking.toObject === "function" ? booking.toObject() : booking;
+  const assignedPartnerId = doc.partnerId || payload.partnerId || payload.assignedPartnerId || "";
+  const realCustomerPhone = assignedPartnerId
+    ? String(doc.userSnapshot?.phone || payload.userPhone || payload.customerPhone || "")
+    : "";
+  const protectedPhone = maskPhone(doc.userSnapshot?.phone || payload.userPhone || payload.customerPhone);
   return {
     ...payload,
-    userPhone: maskPhone(doc.userSnapshot?.phone || payload.userPhone),
-    customerPhoneMasked: maskPhone(doc.userSnapshot?.phone || payload.userPhone),
-    phoneProtected: true,
+    userPhone: realCustomerPhone || protectedPhone,
+    customerPhone: realCustomerPhone,
+    customerPhoneMasked: realCustomerPhone || protectedPhone,
+    phoneProtected: !realCustomerPhone,
     virtualCalling: virtualCallingEnabled()
   };
 }

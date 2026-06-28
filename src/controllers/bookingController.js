@@ -690,7 +690,7 @@ async function listUserBookings(req, res, next) {
     const user = await User.findOne({ firebaseUid: req.auth.uid });
     if (!user) return res.json({ bookings: [] });
     const identityFilters = [];
-    if (user.phoneVerified && user.phoneHash) identityFilters.push({ phoneHash: user.phoneHash });
+    if (user.phoneHash) identityFilters.push({ phoneHash: user.phoneHash });
     if (req.auth.email_verified === true && user.emailHash) identityFilters.push({ emailHash: user.emailHash });
     const linkedUsers = identityFilters.length
       ? await User.find({ $or: identityFilters }).select("_id")
