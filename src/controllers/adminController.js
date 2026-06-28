@@ -11,6 +11,7 @@ const AdminNotification = require("../models/AdminNotification");
 const Payment = require("../models/Payment");
 const BookingMessage = require("../models/BookingMessage");
 const CustomerNoResponseReport = require("../models/CustomerNoResponseReport");
+const LocationLog = require("../models/LocationLog");
 const RevisitRequest = require("../models/RevisitRequest");
 const TechnicianSos = require("../models/TechnicianSos");
 const SupportTicket = require("../models/SupportTicket");
