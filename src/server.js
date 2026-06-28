@@ -78,7 +78,10 @@ app.get("/health", (req, res) => {
     ok: true,
     service: "apnaservo-backend",
     realtime: "socket.io",
-    dataStore: "mongodb"
+    dataStore: "mongodb",
+    capabilities: {
+      partnerReapproval: true
+    }
   });
 });
 
