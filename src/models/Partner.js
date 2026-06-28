@@ -23,6 +23,20 @@ const deviceTokenSchema = new mongoose.Schema(
   { _id: true }
 );
 
+const verificationHistorySchema = new mongoose.Schema(
+  {
+    action: {
+      type: String,
+      enum: ["submitted", "approved", "reapproved", "rejected", "blocked", "suspended"],
+      required: true
+    },
+    at: { type: Date, default: Date.now },
+    by: { type: String, trim: true, default: "admin" },
+    note: { type: String, trim: true, default: "" }
+  },
+  { _id: true }
+);
+
 const partnerSchema = new mongoose.Schema(
   {
     firebaseUid: { type: String, required: true, unique: true, index: true },
@@ -77,6 +91,11 @@ const partnerSchema = new mongoose.Schema(
     skillCertificateUrl: { type: String, default: "" },
     skillCertificateStatus: { type: String, enum: ["missing", "submitted", "verified", "rejected"], default: "missing", index: true },
     kycStatus: { type: String, enum: ["missing", "pending_review", "verified", "rejected"], default: "missing", index: true },
+    approvalVersion: { type: Number, default: 0 },
+    approvedAt: { type: Date, default: null },
+    rejectedAt: { type: Date, default: null },
+    rejectionReason: { type: String, trim: true, default: "" },
+    verificationHistory: { type: [verificationHistorySchema], default: [] },
     fraudWarningCount: { type: Number, default: 0 },
     trustStatus: { type: String, enum: ["trusted", "warning", "review_required", "suspended"], default: "review_required", index: true },
     lastFraudWarningAt: { type: Date, default: null },
@@ -101,11 +120,12 @@ partnerSchema.index({ serviceCategory: 1, isOnline: 1, isVerified: 1, trustStatu
 partnerSchema.index({ isOnline: 1, lastLocationAt: -1 });
 partnerSchema.index({ kycStatus: 1, faceVerified: 1, selfieVerified: 1, aadhaarVerified: 1 });
 partnerSchema.index({ accountStatus: 1, deletionRequestedAt: -1 });
+partnerSchema.index({ kycStatus: 1, approvedAt: -1, rejectedAt: -1 });
 partnerSchema.index({ phoneHash: 1 }, { unique: true, partialFilterExpression: { phoneHash: { $type: "string", $gt: "" } } });
 partnerSchema.index({ emailHash: 1 }, { unique: true, partialFilterExpression: { emailHash: { $type: "string", $gt: "" } } });
 partnerSchema.index({ "deviceTokens.tokenHash": 1, "deviceTokens.isActive": 1 });
 partnerSchema.plugin(encryptedFieldsPlugin, {
-  fields: ["name", "phone", "email", "dateOfBirth", "gender", "residentialAddress", "state", "pinCode", "emergencyContactNumber", "workingAreas", "languagesKnown", "serviceArea", "fcmToken", "deviceTokens.token", "deviceTokens.deviceId", "photoUrl", "selfieUrl", "faceLivenessSessionId", "aadhaarLast4", "idProofUrl", "skillCertificateUrl", "deletionReason"]
+  fields: ["name", "phone", "email", "dateOfBirth", "gender", "residentialAddress", "state", "pinCode", "emergencyContactNumber", "workingAreas", "languagesKnown", "serviceArea", "fcmToken", "deviceTokens.token", "deviceTokens.deviceId", "photoUrl", "selfieUrl", "faceLivenessSessionId", "aadhaarLast4", "idProofUrl", "skillCertificateUrl", "deletionReason", "rejectionReason"]
 });
 
 module.exports = mongoose.model("Partner", partnerSchema);

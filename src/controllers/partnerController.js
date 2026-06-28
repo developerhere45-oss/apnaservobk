@@ -361,7 +361,7 @@ async function upsertProfile(req, res, next) {
 async function me(req, res, next) {
   try {
     let partner = await Partner.findOne({ firebaseUid: req.auth.uid })
-      .select("_id firebaseUid partnerCode name phone email dateOfBirth gender residentialAddress city state pinCode emergencyContactNumber serviceCategory yearsOfExperience workingAreas languagesKnown serviceArea serviceRadiusKm photoUrl accountStatus phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken");
+      .select("_id firebaseUid partnerCode name phone email dateOfBirth gender residentialAddress city state pinCode emergencyContactNumber serviceCategory yearsOfExperience workingAreas languagesKnown serviceArea serviceRadiusKm photoUrl accountStatus phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken approvalVersion approvedAt rejectedAt rejectionReason");
     if (req.auth.email_verified === true && req.auth.email) {
       const email = normalizeEmail(req.auth.email);
       const emailHash = identityHash(email);

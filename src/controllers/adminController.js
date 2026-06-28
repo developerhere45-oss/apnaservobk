@@ -370,6 +370,10 @@ function partnerRow(partner, bookingCount = 0) {
     trust: partner.trustStatus || "",
     status: blocked ? "blocked" : (partner.accountStatus || "active"),
     rating: Number(partner.rating || 0),
+    approvalVersion: Number(partner.approvalVersion || 0),
+    approvedAt: iso(partner.approvedAt),
+    rejectedAt: iso(partner.rejectedAt),
+    rejectionReason: partner.rejectionReason || "",
     joinedAt: iso(partner.createdAt)
   };
 }
@@ -1174,7 +1178,7 @@ async function listResourceRows(req, res, next) {
       };
     } else if (resource === "partner-approvals") {
       const pendingPartnerFilter = {
-        kycStatus: { $in: ["missing", "submitted", "pending_review"] },
+        kycStatus: { $in: ["missing", "submitted", "pending_review", "rejected"] },
         accountStatus: "active",
         trustStatus: { $ne: "suspended" }
       };
@@ -1182,7 +1186,8 @@ async function listResourceRows(req, res, next) {
       const countMap = await bookingCountByPartner(partners.map((partner) => partner._id));
       rows = partners.map((partner) => partnerRow(partner, countMap.get(id(partner._id)) || 0));
       metrics = {
-        pendingApproval: await Partner.countDocuments(pendingPartnerFilter),
+        needsAction: await Partner.countDocuments(pendingPartnerFilter),
+        pendingApproval: await Partner.countDocuments({ ...pendingPartnerFilter, kycStatus: { $in: ["missing", "submitted", "pending_review"] } }),
         submitted: await Partner.countDocuments({ kycStatus: "submitted" }),
         pendingReview: await Partner.countDocuments({ kycStatus: "pending_review" }),
         rejected: await Partner.countDocuments({ kycStatus: "rejected" }),
@@ -1305,6 +1310,16 @@ async function performAdminAction(req, res, next) {
     }
 
     if (action === "approve-technician") {
+      const existingPartner = await Partner.findById(targetId).select("kycStatus accountStatus approvalVersion");
+      if (!existingPartner) return res.status(404).json({ message: "Partner not found" });
+      if (existingPartner.accountStatus === "deleted") {
+        return res.status(409).json({ message: "Deleted partner cannot be approved" });
+      }
+      const isReapproval = existingPartner.kycStatus === "rejected"
+        || existingPartner.accountStatus === "blocked"
+        || existingPartner.accountStatus === "suspended";
+      const now = new Date();
+      const actor = req.auth?.email || req.auth?.uid || "admin";
       const partner = await Partner.findByIdAndUpdate(
         targetId,
         {
@@ -1312,41 +1327,65 @@ async function performAdminAction(req, res, next) {
             isVerified: true,
             trustStatus: "trusted",
             kycStatus: "verified",
-            accountStatus: "active"
+            accountStatus: "active",
+            approvedAt: now,
+            rejectedAt: null,
+            rejectionReason: ""
+          },
+          $inc: { approvalVersion: 1 },
+          $push: {
+            verificationHistory: {
+              action: isReapproval ? "reapproved" : "approved",
+              at: now,
+              by: actor,
+              note: isReapproval ? "Partner approved again after admin review" : "Partner approved after verification"
+            }
           }
         },
         { new: true }
       );
-      if (!partner) return res.status(404).json({ message: "Partner not found" });
       await cache.del("admin:dashboard:v1");
-      emitAdminEvent("partner:approved", {
+      emitAdminEvent(isReapproval ? "partner:reapproved" : "partner:approved", {
         partnerId: String(partner._id),
         partnerCode: partner.partnerCode || "",
         partnerName: partner.name || "",
         partnerPhone: partner.phone || "",
-        status: partner.kycStatus
+        status: partner.kycStatus,
+        by: actor,
+        source: "admin_dashboard",
+        approvalVersion: Number(partner.approvalVersion || 0),
+        previousKycStatus: existingPartner.kycStatus
       });
       await reliableNotify({
         recipients: [partnerNotificationRecipient(partner)],
-        title: "You have been verified",
-        body: "Your ApnaServo partner profile is approved. Keep your device online to receive bookings.",
+        title: isReapproval ? "Your account is approved again" : "You have been verified",
+        body: isReapproval
+          ? "Your ApnaServo partner account has been approved again. Keep your device online to receive bookings."
+          : "Your ApnaServo partner profile is approved. Keep your device online to receive bookings.",
         category: "partner_approval",
         priority: "high",
         data: {
-          type: "partner:approved",
+          type: isReapproval ? "partner:reapproved" : "partner:approved",
           targetApp: "partner",
           actionType: "OPEN_PARTNER_HOME",
           partnerId: partner._id,
-          status: "verified"
+          status: "verified",
+          approvalVersion: Number(partner.approvalVersion || 0)
         },
-        smsBody: `ApnaServo: Your partner profile is verified. Keep your device online to receive bookings.`
+        smsBody: isReapproval
+          ? "ApnaServo: Your partner account is approved again. Keep your device online to receive bookings."
+          : "ApnaServo: Your partner profile is verified. Keep your device online to receive bookings."
       });
-      return res.json({ ok: true, action, targetId, status: partner.kycStatus, approval: "approved" });
+      return res.json({ ok: true, action, targetId, status: partner.kycStatus, approval: "approved", reapproved: isReapproval, approvalVersion: Number(partner.approvalVersion || 0) });
     }
 
     if (action === "reject-technician" || action === "suspend-technician" || action === "block-technician") {
       const isSuspend = action === "suspend-technician" || action === "block-technician";
       const isBlock = action === "block-technician";
+      const now = new Date();
+      const actor = req.auth?.email || req.auth?.uid || "admin";
+      const reason = String(req.body?.payload?.reason || "").trim();
+      const historyAction = isBlock ? "blocked" : (isSuspend ? "suspended" : "rejected");
       const partner = await Partner.findByIdAndUpdate(
         targetId,
         {
@@ -1355,7 +1394,16 @@ async function performAdminAction(req, res, next) {
             isVerified: false,
             kycStatus: isSuspend ? "verified" : "rejected",
             trustStatus: isSuspend ? "suspended" : "review_required",
+            ...(!isSuspend ? { rejectedAt: now, rejectionReason: reason } : {}),
             ...(isBlock ? { accountStatus: "blocked" } : {})
+          },
+          $push: {
+            verificationHistory: {
+              action: historyAction,
+              at: now,
+              by: actor,
+              note: reason || (isSuspend ? "Partner access blocked by admin" : "Partner verification rejected by admin")
+            }
           }
         },
         { new: true }
@@ -1939,6 +1987,11 @@ async function partnerProfile(req, res, next) {
         languagesKnown: partner.languagesKnown || [],
         registrationDate: iso(partner.createdAt),
         currentVerificationStatus: blocked ? "Blocked" : (approved ? "Approved" : (partner.kycStatus === "rejected" ? "Rejected" : "Under Verification")),
+        approvalVersion: Number(partner.approvalVersion || 0),
+        approvedAt: iso(partner.approvedAt),
+        rejectedAt: iso(partner.rejectedAt),
+        rejectionReason: partner.rejectionReason || "",
+        verificationHistory: partner.verificationHistory || [],
         isVerified: Boolean(partner.isVerified),
         kycStatus: partner.kycStatus || "",
         trustStatus: partner.trustStatus || "",
