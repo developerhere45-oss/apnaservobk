@@ -460,8 +460,6 @@ function emergencyPayload(body) {
 }
 
 async function dispatchBookingToPartners(booking, category, lat, lng) {
-  emitAdminEvent("booking:new_request", serializeBooking(booking));
-
   let partners = [];
   try {
     partners = await findNearbyPartners({
@@ -486,35 +484,67 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
   }
 
   if (!booking.requestedPartners || booking.requestedPartners.length === 0) {
-    booking.requestedPartners = partners.map((partner) => partner._id);
-    booking.status = "sent_to_partner";
-    booking.statusTimeline.push({ status: "sent_to_partner", at: new Date(), by: "system" });
-    await booking.save();
+    const claimedBooking = await Booking.findOneAndUpdate(
+      {
+        _id: booking._id,
+        partnerId: null,
+        requestedPartners: { $size: 0 },
+        status: { $in: pendingAssignmentStatuses() }
+      },
+      {
+        $set: {
+          requestedPartners: partners.map((partner) => partner._id),
+          status: "sent_to_partner"
+        },
+        $push: { statusTimeline: { status: "sent_to_partner", at: new Date(), by: "system" } }
+      },
+      { new: true }
+    );
+    if (!claimedBooking) {
+      return [];
+    }
 
-    emitNewBookingToPartners(booking, partners);
+    emitNewBookingToPartners(claimedBooking, partners);
     await reliableNotify({
       recipients: partners.map(partnerRecipient),
-      title: booking.emergency?.isEmergency ? "Emergency Booking Request" : "New Booking Request",
-      body: booking.emergency?.isEmergency
-        ? `${booking.serviceName} emergency near ${booking.city}`
-        : `${booking.serviceName} near ${booking.city}`,
-      category: booking.emergency?.isEmergency ? "emergency_booking" : "booking_request",
+      title: claimedBooking.emergency?.isEmergency ? "Emergency Booking Request" : "New Booking Request",
+      body: claimedBooking.emergency?.isEmergency
+        ? `${claimedBooking.serviceName} emergency near ${claimedBooking.city}`
+        : `${claimedBooking.serviceName} near ${claimedBooking.city}`,
+      category: claimedBooking.emergency?.isEmergency ? "emergency_booking" : "booking_request",
       priority: "high",
       data: {
-        type: booking.emergency?.isEmergency ? "booking:emergency_request" : "booking:new_request",
-        bookingId: booking._id,
-        bookingCode: booking.bookingCode,
-        serviceCategory: booking.serviceCategory,
-        emergencyType: booking.emergency?.type || "none",
-        emergencyPriority: booking.emergency?.priority || "normal"
+        type: claimedBooking.emergency?.isEmergency ? "booking:emergency_request" : "booking:new_request",
+        bookingId: claimedBooking._id,
+        bookingCode: claimedBooking.bookingCode,
+        serviceCategory: claimedBooking.serviceCategory,
+        emergencyType: claimedBooking.emergency?.type || "none",
+        emergencyPriority: claimedBooking.emergency?.priority || "normal"
       },
-      smsBody: booking.emergency?.isEmergency
-        ? `ApnaServo Emergency: ${booking.serviceName} near ${booking.city}. Open partner app now.`
+      smsBody: claimedBooking.emergency?.isEmergency
+        ? `ApnaServo Emergency: ${claimedBooking.serviceName} near ${claimedBooking.city}. Open partner app now.`
         : ""
     });
   }
 
   return partners;
+}
+
+function queueBookingDispatch(booking, category, lat, lng) {
+  const bookingId = booking?._id;
+  if (!bookingId) return;
+  setImmediate(async () => {
+    try {
+      const current = await Booking.findById(bookingId);
+      if (!current || current.partnerId || current.requestedPartners?.length) return;
+      await dispatchBookingToPartners(current, category, lat, lng);
+    } catch (error) {
+      console.error("Queued partner dispatch failed", {
+        bookingId: String(bookingId),
+        message: error.message
+      });
+    }
+  });
 }
 
 async function getOrCreateUser(req, body) {
@@ -615,13 +645,14 @@ async function createBooking(req, res, next) {
         return res.status(409).json({ message: "Booking code already exists" });
       }
 
-      const partners = existingBooking.requestedPartners?.length
-        ? []
-        : await dispatchBookingToPartners(existingBooking, existingBooking.serviceCategory || category, lat, lng);
+      if (!existingBooking.requestedPartners?.length && !existingBooking.partnerId) {
+        queueBookingDispatch(existingBooking, existingBooking.serviceCategory || category, lat, lng);
+      }
 
       return res.status(200).json({
         booking: serializeBooking(existingBooking),
-        matchedPartners: existingBooking.requestedPartners?.length || partners.length,
+        matchedPartners: existingBooking.requestedPartners?.length || 0,
+        dispatchQueued: !existingBooking.requestedPartners?.length && !existingBooking.partnerId,
         idempotent: true
       });
     }
@@ -660,12 +691,13 @@ async function createBooking(req, res, next) {
       if (createError?.code === 11000) {
         const duplicate = await Booking.findOne({ bookingCode: requestedBookingCode });
         if (duplicate && String(duplicate.userId) === String(user._id)) {
-          const partners = duplicate.requestedPartners?.length
-            ? []
-            : await dispatchBookingToPartners(duplicate, duplicate.serviceCategory || category, lat, lng);
+          if (!duplicate.requestedPartners?.length && !duplicate.partnerId) {
+            queueBookingDispatch(duplicate, duplicate.serviceCategory || category, lat, lng);
+          }
           return res.status(200).json({
             booking: serializeBooking(duplicate),
-            matchedPartners: duplicate.requestedPartners?.length || partners.length,
+            matchedPartners: duplicate.requestedPartners?.length || 0,
+            dispatchQueued: !duplicate.requestedPartners?.length && !duplicate.partnerId,
             idempotent: true
           });
         }
@@ -673,12 +705,16 @@ async function createBooking(req, res, next) {
       throw createError;
     }
 
-    const partners = await dispatchBookingToPartners(booking, category, lat, lng);
-    await User.findByIdAndUpdate(user._id, { $set: { lastBookingAt: new Date() } });
+    emitAdminEvent("booking:new_request", serializeBooking(booking));
+    queueBookingDispatch(booking, category, lat, lng);
+    User.findByIdAndUpdate(user._id, { $set: { lastBookingAt: new Date() } }).catch((error) => {
+      console.error("Failed to update user last booking time", { userId: String(user._id), message: error.message });
+    });
 
     return res.status(201).json({
       booking: serializeBooking(booking),
-      matchedPartners: partners.length
+      matchedPartners: 0,
+      dispatchQueued: true
     });
   } catch (error) {
     return next(error);

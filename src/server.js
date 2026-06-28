@@ -80,7 +80,8 @@ app.get("/health", (req, res) => {
     realtime: "socket.io",
     dataStore: "mongodb",
     capabilities: {
-      partnerReapproval: true
+      partnerReapproval: true,
+      fastBookingDispatch: true
     }
   });
 });
