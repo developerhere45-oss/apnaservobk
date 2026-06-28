@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const { allowedCorsOrigins } = require("../config/env");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
+const Booking = require("../models/Booking");
 const LocationLog = require("../models/LocationLog");
 const AdminActivity = require("../models/AdminActivity");
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
@@ -180,6 +181,34 @@ function partnerBookingPayload(booking) {
   };
 }
 
+function livePartnerLocationPayload(booking, partner, validation) {
+  const updatedAtMillis = millis(validation.recordedAt) || Date.now();
+  return {
+    ...serializeBooking(booking),
+    partnerLat: validation.lat,
+    partnerLng: validation.lng,
+    partnerLocationAtMillis: updatedAtMillis,
+    partnerLocation: {
+      lat: validation.lat,
+      lng: validation.lng,
+      accuracy: validation.accuracy,
+      provider: validation.provider,
+      trustStatus: partner?.locationTrustStatus || "trusted",
+      updatedAtMillis
+    }
+  };
+}
+
+function bookingIdentityClauses(value) {
+  const id = String(value || "").trim();
+  if (!id) return [];
+  const clauses = [{ bookingCode: id }];
+  if (/^[0-9a-fA-F]{24}$/.test(id)) {
+    clauses.push({ _id: id });
+  }
+  return clauses;
+}
+
 async function identifySocket(socket, next) {
   try {
     const token = socket.handshake.auth?.token || socket.handshake.headers.authorization?.replace("Bearer ", "");
@@ -353,6 +382,19 @@ function initBookingSocket(httpServer) {
         { new: true }
       );
       socket.emit("partner:location_ok", { ok: true });
+      const activeStatuses = ["accepted", "on_the_way", "arrived", "started", "amount_pending"];
+      const query = { partnerId: partner._id, status: { $in: activeStatuses } };
+      const clauses = bookingIdentityClauses(payload.bookingId);
+      if (clauses.length) {
+        query.$or = clauses;
+      }
+      const activeBooking = await Booking.findOne(query).sort({ updatedAt: -1 });
+      if (activeBooking) {
+        const locationPayload = livePartnerLocationPayload(activeBooking, socket.partner, validation);
+        emitAdminEvent("partner:location_update", locationPayload);
+        io.to(`user:${activeBooking.userId}`).emit("partner:location_update", locationPayload);
+        io.to(`partner:${partner._id}`).emit("partner:location_update", locationPayload);
+      }
     });
   });
 
