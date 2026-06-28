@@ -20,7 +20,7 @@ const cache = require("../config/cache");
 const { recomputePartnerRating } = require("../utils/ratingAggregation");
 const { emitAdminEvent, emitNewBookingToPartners } = require("../sockets/bookingSocket");
 const { reliableNotify } = require("../utils/reliableNotify");
-const { activeDeviceTokens } = require("../utils/notificationTokens");
+const { activeDeviceTokens, tokenHash } = require("../utils/notificationTokens");
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { serviceCategoryVariants, serviceLabel } = require("../utils/serviceCategory");
 const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
@@ -371,6 +371,103 @@ function partnerRow(partner, bookingCount = 0) {
     status: blocked ? "blocked" : (partner.accountStatus || "active"),
     rating: Number(partner.rating || 0),
     joinedAt: iso(partner.createdAt)
+  };
+}
+
+function deviceRowsForOwner(owner, ownerType) {
+  const ownerId = id(owner?._id);
+  const ownerName = owner?.name || (ownerType === "partner" ? "ApnaServo Partner" : "ApnaServo Customer");
+  const ownerPhone = owner?.phone || "";
+  const ownerEmail = owner?.email || "";
+  const rows = [];
+  const seenTokens = new Set();
+  for (const device of owner?.deviceTokens || []) {
+    if (device?.token) seenTokens.add(String(device.token));
+    if (!device?.isActive) continue;
+    const deviceId = id(device._id) || device.deviceId || device.tokenHash || "";
+    rows.push({
+      id: `${ownerType}:${ownerId}:${deviceId}`,
+      ownerType,
+      ownerId,
+      ownerName,
+      mobileNumber: ownerPhone,
+      email: ownerEmail,
+      platform: device.platform || "android",
+      appType: device.appType || ownerType,
+      deviceId: device.deviceId || "",
+      tokenHash: device.tokenHash || (device.token ? tokenHash(device.token) : ""),
+      status: "active",
+      active: Boolean(device.isActive),
+      createdAt: iso(device.createdAt),
+      lastUpdatedAt: iso(device.lastUpdatedAt)
+    });
+  }
+  if (owner?.fcmToken && !seenTokens.has(String(owner.fcmToken))) {
+    rows.push({
+      id: `${ownerType}:${ownerId}:legacy`,
+      ownerType,
+      ownerId,
+      ownerName,
+      mobileNumber: ownerPhone,
+      email: ownerEmail,
+      platform: "android",
+      appType: ownerType,
+      deviceId: "legacy",
+      tokenHash: tokenHash(owner.fcmToken),
+      status: "active",
+      active: true,
+      createdAt: "",
+      lastUpdatedAt: ""
+    });
+  }
+  return rows;
+}
+
+async function deactivateAdminDevice(targetId) {
+  const [ownerType, ownerId, deviceIdentifier] = String(targetId || "").split(":");
+  if (!["user", "partner"].includes(ownerType) || !objectId(ownerId) || !deviceIdentifier) {
+    const error = new Error("Invalid device target");
+    error.status = 400;
+    throw error;
+  }
+  const Model = ownerType === "partner" ? Partner : User;
+  const owner = await Model.findById(ownerId);
+  if (!owner) {
+    const error = new Error(`${ownerType === "partner" ? "Partner" : "User"} not found`);
+    error.status = 404;
+    throw error;
+  }
+  let removed = false;
+  if (deviceIdentifier === "legacy") {
+    removed = Boolean(owner.fcmToken);
+    owner.fcmToken = "";
+  } else {
+    for (const device of owner.deviceTokens || []) {
+      if (
+        id(device._id) === deviceIdentifier
+        || String(device.deviceId || "") === deviceIdentifier
+        || String(device.tokenHash || "") === deviceIdentifier
+      ) {
+        device.isActive = false;
+        device.lastUpdatedAt = new Date();
+        if (owner.fcmToken && (String(owner.fcmToken) === String(device.token || "") || tokenHash(owner.fcmToken) === String(device.tokenHash || ""))) {
+          owner.fcmToken = "";
+        }
+        removed = true;
+      }
+    }
+  }
+  if (!removed) {
+    const error = new Error("Device not found or already deleted");
+    error.status = 404;
+    throw error;
+  }
+  await owner.save();
+  return {
+    ownerType,
+    ownerId,
+    ownerName: owner.name || "",
+    deviceIdentifier
   };
 }
 
@@ -1039,15 +1136,41 @@ async function listResourceRows(req, res, next) {
         activeUsers: await User.countDocuments({ accountStatus: "active" })
       };
     } else if (resource === "partners") {
-      const partners = await Partner.find().sort({ createdAt: -1 }).limit(limit);
+      const visiblePartnerFilter = { accountStatus: { $ne: "deleted" } };
+      const partners = await Partner.find(visiblePartnerFilter).sort({ createdAt: -1 }).limit(limit);
       const countMap = await bookingCountByPartner(partners.map((partner) => partner._id));
       rows = partners.map((partner) => partnerRow(partner, countMap.get(id(partner._id)) || 0));
       metrics = {
-        totalPartners: await Partner.countDocuments(),
+        totalPartners: await Partner.countDocuments(visiblePartnerFilter),
         activePartners: await Partner.countDocuments({ accountStatus: "active", trustStatus: { $ne: "suspended" } }),
-        pendingApproval: await Partner.countDocuments({ kycStatus: { $in: ["missing", "submitted", "pending_review"] } }),
-        blockedOrSuspended: await Partner.countDocuments({ $or: [{ trustStatus: "suspended" }, { accountStatus: { $ne: "active" } }] }),
+        pendingApproval: await Partner.countDocuments({ ...visiblePartnerFilter, kycStatus: { $in: ["missing", "submitted", "pending_review"] } }),
+        blockedOrSuspended: await Partner.countDocuments({ ...visiblePartnerFilter, $or: [{ trustStatus: "suspended" }, { accountStatus: { $ne: "active" } }] }),
+        deletedPartners: await Partner.countDocuments({ accountStatus: "deleted" }),
         totalBookings: await Booking.countDocuments({ partnerId: { $ne: null } })
+      };
+    } else if (resource === "devices") {
+      const [users, partners] = await Promise.all([
+        User.find({
+          $or: [
+            { fcmToken: { $nin: ["", null] } },
+            { deviceTokens: { $elemMatch: { isActive: true } } }
+          ]
+        }).sort({ updatedAt: -1 }).limit(limit),
+        Partner.find({
+          $or: [
+            { fcmToken: { $nin: ["", null] } },
+            { deviceTokens: { $elemMatch: { isActive: true } } }
+          ]
+        }).sort({ updatedAt: -1 }).limit(limit)
+      ]);
+      rows = [...users.flatMap((user) => deviceRowsForOwner(user, "user")), ...partners.flatMap((partner) => deviceRowsForOwner(partner, "partner"))]
+        .sort((left, right) => new Date(right.lastUpdatedAt || right.createdAt || 0).getTime() - new Date(left.lastUpdatedAt || left.createdAt || 0).getTime())
+        .slice(0, limit);
+      metrics = {
+        totalDevices: rows.length,
+        userDevices: rows.filter((row) => row.ownerType === "user").length,
+        partnerDevices: rows.filter((row) => row.ownerType === "partner").length,
+        activeDevices: rows.filter((row) => row.active).length
       };
     } else if (resource === "partner-approvals") {
       const pendingPartnerFilter = {
@@ -1263,6 +1386,52 @@ async function performAdminAction(req, res, next) {
         }
       });
       return res.json({ ok: true, action, targetId, status: isSuspend ? partner.accountStatus || partner.trustStatus : partner.kycStatus, approval: isSuspend ? "blocked" : "denied" });
+    }
+
+    if (action === "delete-partner") {
+      const partner = await Partner.findById(targetId);
+      if (!partner) return res.status(404).json({ message: "Partner not found" });
+      const activeBookingCount = await Booking.countDocuments({
+        partnerId: partner._id,
+        status: { $nin: ["completed", "cancelled", "canceled", "rejected"] }
+      });
+      if (activeBookingCount > 0) {
+        return res.status(409).json({ message: "This partner has active bookings. Reassign or complete those bookings before deleting." });
+      }
+      const now = new Date();
+      for (const device of partner.deviceTokens || []) {
+        device.isActive = false;
+        device.lastUpdatedAt = now;
+      }
+      partner.fcmToken = "";
+      partner.isOnline = false;
+      partner.isVerified = false;
+      partner.trustStatus = "suspended";
+      partner.accountStatus = "deleted";
+      partner.deletionRequestedAt = now;
+      partner.deletionReason = "Deleted by admin dashboard";
+      await partner.save();
+      await cache.del("admin:dashboard:v1");
+      emitAdminEvent("partner:deleted", {
+        partnerId: String(partner._id),
+        partnerCode: partner.partnerCode || "",
+        partnerName: partner.name || "",
+        partnerPhone: partner.phone || "",
+        status: partner.accountStatus
+      });
+      return res.json({ ok: true, action, targetId, status: "deleted", deleted: true });
+    }
+
+    if (action === "delete-device") {
+      const deleted = await deactivateAdminDevice(targetId);
+      await cache.del("admin:dashboard:v1");
+      emitAdminEvent("device:deleted", {
+        ownerType: deleted.ownerType,
+        ownerId: deleted.ownerId,
+        ownerName: deleted.ownerName,
+        deviceIdentifier: deleted.deviceIdentifier
+      });
+      return res.json({ ok: true, action, targetId, deleted: true });
     }
 
     return res.json({
