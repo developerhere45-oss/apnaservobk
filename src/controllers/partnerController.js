@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const PDFDocument = require("pdfkit");
 const Partner = require("../models/Partner");
 const PartnerDocument = require("../models/PartnerDocument");
+const PartnerUploadAsset = require("../models/PartnerUploadAsset");
 const SupportTicket = require("../models/SupportTicket");
 const { Booking } = require("../models/Booking");
 const LocationLog = require("../models/LocationLog");
@@ -12,6 +13,7 @@ const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/loc
 const { validateDocumentUpload } = require("../utils/documentValidation");
 const { emitAdminEvent } = require("../sockets/bookingSocket");
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
+const { partnerAssetUrl } = require("../utils/partnerUploadAssets");
 
 const profileSchema = z.object({
   name: z.string().trim().min(2).max(80).regex(/^[A-Za-z][A-Za-z .'-]+$/).optional(),
@@ -210,9 +212,28 @@ function fileDataUri(file) {
   return `data:${file.mimetype};base64,${file.buffer.toString("base64")}`;
 }
 
-async function uploadDocumentToCloudinary(file, partnerId, documentType) {
+function normalizedImageMime(mimeType) {
+  return String(mimeType || "").toLowerCase() === "image/jpg" ? "image/jpeg" : String(mimeType || "").toLowerCase();
+}
+
+async function uploadDocumentToCloudinary(file, partnerId, documentType, req, kind = "document") {
   if (!process.env.CLOUDINARY_CLOUD_NAME) {
-    return { storageProvider: "inline", url: fileDataUri(file), cloudinaryPublicId: "" };
+    const asset = await PartnerUploadAsset.create({
+      partnerId,
+      kind,
+      documentType,
+      mimeType: normalizedImageMime(file.mimetype),
+      originalName: file.originalname || `${documentType}.jpg`,
+      sizeBytes: file.size,
+      contentHash: crypto.createHash("sha256").update(file.buffer).digest("hex"),
+      dataBase64: file.buffer.toString("base64")
+    });
+    return {
+      storageProvider: "mongodb",
+      url: partnerAssetUrl(req, asset._id),
+      cloudinaryPublicId: "",
+      partnerUploadAssetId: asset._id
+    };
   }
   const result = await cloudinary.uploader.upload(fileDataUri(file), {
     folder: `apnaservo/partner_documents/${partnerId}`,
@@ -225,7 +246,8 @@ async function uploadDocumentToCloudinary(file, partnerId, documentType) {
   return {
     storageProvider: "cloudinary",
     url: result.secure_url || result.url || "",
-    cloudinaryPublicId: result.public_id || ""
+    cloudinaryPublicId: result.public_id || "",
+    partnerUploadAssetId: null
   };
 }
 
@@ -239,8 +261,9 @@ async function uploadProfilePhoto(req, res, next) {
     if (!partner) {
       return res.status(404).json({ message: "Partner profile not found" });
     }
-    const uploaded = await uploadDocumentToCloudinary(file, partner._id, "profile_photo");
+    const uploaded = await uploadDocumentToCloudinary(file, partner._id, "profile_photo", req, "profile_photo");
     partner.photoUrl = uploaded.url;
+    partner.profilePhotoAssetId = uploaded.partnerUploadAssetId || null;
     if (partner.kycStatus === "missing") {
       partner.kycStatus = "pending_review";
     }
@@ -514,7 +537,7 @@ async function uploadDocument(req, res, next) {
       });
     }
 
-    const uploaded = await uploadDocumentToCloudinary(file, partner._id, body.documentType);
+    const uploaded = await uploadDocumentToCloudinary(file, partner._id, body.documentType, req, "document");
     const document = await PartnerDocument.create({
       partnerId: partner._id,
       documentType: body.documentType,
@@ -532,6 +555,9 @@ async function uploadDocument(req, res, next) {
       ocrTextHash: validation.ocrTextHash,
       aadhaarLast4: body.aadhaarLast4 || ""
     });
+    if (uploaded.partnerUploadAssetId) {
+      await PartnerUploadAsset.findByIdAndUpdate(uploaded.partnerUploadAssetId, { $set: { documentId: document._id } });
+    }
 
     const update = {};
     if (["id_proof", "aadhaar_front", "aadhaar_back"].includes(body.documentType)) {

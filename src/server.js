@@ -81,7 +81,8 @@ app.get("/health", (req, res) => {
     dataStore: "mongodb",
     capabilities: {
       partnerReapproval: true,
-      fastBookingDispatch: true
+      fastBookingDispatch: true,
+      partnerUploadAssets: true
     }
   });
 });

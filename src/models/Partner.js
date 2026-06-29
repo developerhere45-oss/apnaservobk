@@ -107,6 +107,7 @@ const partnerSchema = new mongoose.Schema(
     fcmToken: { type: String, default: "" },
     deviceTokens: { type: [deviceTokenSchema], default: [] },
     photoUrl: { type: String, default: "" },
+    profilePhotoAssetId: { type: mongoose.Schema.Types.ObjectId, ref: "PartnerUploadAsset", default: null },
     accountStatus: { type: String, enum: ["active", "suspended", "blocked", "deletion_requested", "deleted"], default: "active", index: true },
     deletionRequestedAt: { type: Date, default: null },
     deletionReason: { type: String, trim: true, default: "" }

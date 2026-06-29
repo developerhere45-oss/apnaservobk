@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
 const PartnerDocument = require("../models/PartnerDocument");
+const PartnerUploadAsset = require("../models/PartnerUploadAsset");
 const { Booking } = require("../models/Booking");
 const Service = require("../models/Service");
 const Review = require("../models/Review");
@@ -24,6 +25,7 @@ const { activeDeviceTokens, tokenHash } = require("../utils/notificationTokens")
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { serviceCategoryVariants, serviceLabel } = require("../utils/serviceCategory");
 const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
+const { partnerAssetUrl, verifyPartnerAssetToken } = require("../utils/partnerUploadAssets");
 
 function iso(value) {
   return value ? new Date(value).toISOString() : "";
@@ -1928,15 +1930,23 @@ async function updateUserAdminState(req, res, next) {
   }
 }
 
-function serializePartnerDocument(document) {
+function partnerDocumentUrl(req, document) {
+  if (document.partnerUploadAssetId) {
+    return partnerAssetUrl(req, document.partnerUploadAssetId);
+  }
+  return document.url || "";
+}
+
+function serializePartnerDocument(document, req) {
   return {
     id: id(document._id),
     documentType: document.documentType || "",
     originalName: document.originalName || "",
     mimeType: document.mimeType || "",
     sizeBytes: Number(document.sizeBytes || 0),
-    url: document.url || "",
+    url: partnerDocumentUrl(req, document),
     storageProvider: document.storageProvider || "",
+    partnerUploadAssetId: id(document.partnerUploadAssetId),
     validationStatus: document.validationStatus || "review",
     validationScore: Number(document.validationScore || 0),
     validationReasons: document.validationReasons || [],
@@ -1945,6 +1955,25 @@ function serializePartnerDocument(document) {
     uploadedAt: iso(document.createdAt),
     updatedAt: iso(document.updatedAt)
   };
+}
+
+async function partnerUploadAsset(req, res, next) {
+  try {
+    const assetObjectId = objectId(req.params.assetId);
+    if (!assetObjectId || !verifyPartnerAssetToken(assetObjectId, req.query.token)) {
+      return res.status(404).json({ message: "Asset not found" });
+    }
+    const record = await PartnerUploadAsset.findById(assetObjectId).lean();
+    if (!record) return res.status(404).json({ message: "Asset not found" });
+    const buffer = Buffer.from(record.dataBase64 || "", "base64");
+    res.set("Content-Type", record.mimeType || "image/jpeg");
+    res.set("Content-Length", String(buffer.length));
+    res.set("Cache-Control", "private, max-age=2592000, immutable");
+    res.set("Content-Disposition", `inline; filename="${(record.originalName || "partner-upload.jpg").replace(/"/g, "")}"`);
+    return res.send(buffer);
+  } catch (error) {
+    return next(error);
+  }
 }
 
 async function partnerProfile(req, res, next) {
@@ -1968,7 +1997,7 @@ async function partnerProfile(req, res, next) {
         id: id(partner._id),
         firebaseUid: partner.firebaseUid || "",
         partnerCode: partner.partnerCode || "",
-        profilePhoto: partner.photoUrl || partner.selfieUrl || "",
+        profilePhoto: partner.profilePhotoAssetId ? partnerAssetUrl(req, partner.profilePhotoAssetId) : (partner.photoUrl || partner.selfieUrl || ""),
         fullName: partner.name || "",
         mobileNumber: partner.phone || "",
         email: partner.email || "",
@@ -2002,7 +2031,7 @@ async function partnerProfile(req, res, next) {
         skillCertificateStatus: partner.skillCertificateStatus || "",
         rawProfile
       },
-      documents: documents.map(serializePartnerDocument),
+      documents: documents.map((document) => serializePartnerDocument(document, req)),
       bookingHistory: bookings.map(bookingRow),
       supportTickets: tickets.map(serializeSupportTicket)
     });
@@ -2032,7 +2061,7 @@ async function updatePartnerDocument(req, res, next) {
       documentType: document.documentType,
       status
     });
-    return res.json({ ok: true, document: serializePartnerDocument(document) });
+    return res.json({ ok: true, document: serializePartnerDocument(document, req) });
   } catch (error) {
     return next(error);
   }
@@ -2296,6 +2325,7 @@ module.exports = {
   usersControlCenter,
   userProfile,
   updateUserAdminState,
+  partnerUploadAsset,
   partnerProfile,
   updatePartnerDocument,
   bookingTimelineDetails,
