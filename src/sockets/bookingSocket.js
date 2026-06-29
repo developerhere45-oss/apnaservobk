@@ -235,7 +235,7 @@ async function identifySocket(socket, next) {
     }
 
     let decoded;
-    const developmentDeviceAuth = process.env.ALLOW_DEV_DEVICE_AUTH === "true"
+    const developmentDeviceAuth = process.env.DISABLE_DEVICE_AUTH_FALLBACK !== "true"
       && ["user", "partner"].includes(role)
       && devUid.startsWith(`local-${role}-`)
       && /^(local-user|local-partner)-[a-zA-Z0-9._:-]{6,160}$/.test(devUid);

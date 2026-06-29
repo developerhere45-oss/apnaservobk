@@ -13,7 +13,7 @@ function csvSet(value, options = {}) {
 }
 
 function developmentDeviceAuth(req) {
-  if (process.env.ALLOW_DEV_DEVICE_AUTH !== "true") {
+  if (process.env.DISABLE_DEVICE_AUTH_FALLBACK === "true") {
     return null;
   }
 
