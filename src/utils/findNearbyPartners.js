@@ -54,6 +54,23 @@ async function findNearbyPartners({ serviceCategory, city, lat, lng, radiusKm })
     }).limit(30);
   }
 
+  if (!partners.length) {
+    partners = await Partner.find({
+      serviceCategory: { $in: categories },
+      isOnline: true,
+      ...approvalFilter,
+      city: new RegExp(city || "Guwahati", "i")
+    }).limit(30);
+  }
+
+  if (!partners.length) {
+    partners = await Partner.find({
+      isOnline: true,
+      ...approvalFilter,
+      city: new RegExp(city || "Guwahati", "i")
+    }).limit(30);
+  }
+
   return partners
     .map((partner) => {
       const coordinates = partner.location?.coordinates || [longitude, latitude];

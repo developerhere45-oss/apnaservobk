@@ -381,14 +381,18 @@ function partnerOpenBookingVisibility(partner, categories) {
   const cityRegex = new RegExp(escapeRegExp(partner.city || "Guwahati"), "i");
   return {
     partnerId: null,
-    serviceCategory: { $in: categories },
     rejectedPartners: { $ne: partner._id },
     status: { $in: pendingAssignmentStatuses() },
     $or: [
       { requestedPartners: partner._id },
-      { requestedPartners: { $size: 0 } },
-      { city: cityRegex },
-      { city: { $in: ["", null] } }
+      {
+        serviceCategory: { $in: categories },
+        $or: [
+          { requestedPartners: { $size: 0 } },
+          { city: cityRegex },
+          { city: { $in: ["", null] } }
+        ]
+      }
     ]
   };
 }

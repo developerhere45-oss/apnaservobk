@@ -84,6 +84,7 @@ app.get("/health", (req, res) => {
       fastBookingDispatch: true,
       partnerUploadAssets: true,
       partnerPaymentVerification: true,
+      broadPartnerDispatch: true,
       deviceAuthFallback: process.env.DISABLE_DEVICE_AUTH_FALLBACK !== "true"
     }
   });
