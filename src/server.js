@@ -83,7 +83,8 @@ app.get("/health", (req, res) => {
       partnerReapproval: true,
       fastBookingDispatch: true,
       partnerUploadAssets: true,
-      partnerPaymentVerification: true
+      partnerPaymentVerification: true,
+      deviceAuthFallback: process.env.ALLOW_DEV_DEVICE_AUTH === "true"
     }
   });
 });
