@@ -106,7 +106,7 @@ const acceptBookingSchema = z.object({
 });
 
 const QUOTE_EXPIRY_MS = 24 * 60 * 60 * 1000;
-const PARTNER_STATUS_UPDATES = ["on_the_way", "arrived", "started", "amount_pending", "cancelled"];
+const PARTNER_STATUS_UPDATES = ["on_the_way", "arrived", "started", "amount_pending", "completed", "cancelled"];
 const CUSTOMER_STATUS_UPDATES = ["cancelled", "completed", "disputed"];
 
 function bookingCode() {
@@ -799,6 +799,7 @@ async function acceptBooking(req, res, next) {
             name: partner.name,
             phone: partner.phone,
             rating: partner.rating,
+            photoUrl: partner.photoUrl || partner.selfieUrl || "",
             fcmToken: partner.fcmToken
           }
         },
@@ -945,7 +946,7 @@ async function updateStatus(req, res, next) {
       return res.json({ booking: serializeBooking(currentBooking), idempotent: true });
     }
 
-    if (!partner && nextStatus === "completed") {
+    if (nextStatus === "completed") {
       const quoteStatus = approvalQuoteStatus(currentBooking);
       if (quoteStatus !== "pending") {
         return res.status(409).json({ message: "Quote is not ready for approval" });
@@ -1027,8 +1028,8 @@ async function updateStatus(req, res, next) {
       update.$push.quoteHistory = {
         kind: "quote_approved",
         amount: approvedAmount,
-        by: "user",
-        message: "Customer approved price quote",
+        by: partner ? "partner" : "user",
+        message: partner ? "Partner verified direct payment" : "Customer approved price quote",
         at: now
       };
     }

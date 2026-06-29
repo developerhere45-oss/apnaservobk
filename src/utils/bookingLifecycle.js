@@ -161,7 +161,7 @@ function transitionDecision({ currentStatus, nextStatus, actorRole, quoteStatus 
       on_the_way: ["arrived", "cancelled"],
       arrived: ["started", "cancelled"],
       started: ["amount_pending"],
-      amount_pending: ["amount_pending"]
+      amount_pending: ["amount_pending", "completed"]
     };
     const allowed = partnerTransitions[current] || [];
     if (!allowed.includes(next)) {
@@ -169,6 +169,9 @@ function transitionDecision({ currentStatus, nextStatus, actorRole, quoteStatus 
     }
     if (current === "amount_pending" && next === "amount_pending" && quote !== "countered") {
       return { ok: false, reason: "A quote is already pending customer approval" };
+    }
+    if (current === "amount_pending" && next === "completed" && quote !== "pending") {
+      return { ok: false, reason: "Payment can be verified only while the quote is pending" };
     }
     return { ok: true };
   }

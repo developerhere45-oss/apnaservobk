@@ -160,6 +160,8 @@ function serializeBooking(booking) {
     userPhone: doc.userSnapshot?.phone || "",
     partnerName: doc.partnerSnapshot?.name || "",
     partnerPhone: doc.partnerSnapshot?.phone || "",
+    partnerPhoto: doc.partnerSnapshot?.photoUrl || "",
+    partnerPhotoUrl: doc.partnerSnapshot?.photoUrl || "",
     createdAt: doc.createdAt,
     createdAtMillis: millis(doc.createdAt),
     acceptedAt: doc.acceptedAt,
