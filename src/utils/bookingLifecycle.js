@@ -161,7 +161,7 @@ function transitionDecision({ currentStatus, nextStatus, actorRole, quoteStatus 
       on_the_way: ["arrived", "cancelled"],
       arrived: ["started", "cancelled"],
       started: ["amount_pending"],
-      amount_pending: ["amount_pending"]
+      amount_pending: ["amount_pending", "completed"]
     };
     const allowed = partnerTransitions[current] || [];
     if (!allowed.includes(next)) {
