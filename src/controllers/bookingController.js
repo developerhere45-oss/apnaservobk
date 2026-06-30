@@ -106,7 +106,7 @@ const acceptBookingSchema = z.object({
 });
 
 const QUOTE_EXPIRY_MS = 24 * 60 * 60 * 1000;
-const PARTNER_STATUS_UPDATES = ["on_the_way", "arrived", "started", "amount_pending", "completed", "cancelled"];
+const PARTNER_STATUS_UPDATES = ["on_the_way", "arrived", "started", "amount_pending", "cancelled"];
 const CUSTOMER_STATUS_UPDATES = ["cancelled", "completed", "disputed"];
 
 function bookingCode() {

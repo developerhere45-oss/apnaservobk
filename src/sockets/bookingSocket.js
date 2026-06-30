@@ -3,11 +3,12 @@ const crypto = require("crypto");
 const { allowedCorsOrigins } = require("../config/env");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
-const Booking = require("../models/Booking");
+const { Booking } = require("../models/Booking");
 const LocationLog = require("../models/LocationLog");
 const AdminActivity = require("../models/AdminActivity");
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
-const { lifecycleLabel, lifecycleStatusForBooking } = require("../utils/bookingLifecycle");
+const { serviceCategoryVariants } = require("../utils/serviceCategory");
+const { lifecycleLabel, lifecycleStatusForBooking, pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
 
 let io;
 
@@ -72,6 +73,79 @@ function handleSocketEvent(socket, event, handler) {
       });
     });
   });
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function partnerCanReceiveOpenBookings(partner) {
+  if (!partner) return false;
+  if (partner.accountStatus !== "active") return false;
+  if (partner.trustStatus === "suspended") return false;
+  if (!partner.isVerified || partner.kycStatus !== "verified" || partner.trustStatus !== "trusted") return false;
+  if (!partner.isOnline) return false;
+  return Array.isArray(partner.serviceCategory) && partner.serviceCategory.length > 0;
+}
+
+function partnerDispatchCategories(partner) {
+  return [...new Set((partner.serviceCategory || []).flatMap(serviceCategoryVariants))].filter(Boolean);
+}
+
+async function dispatchPendingBookingsToSocketPartner(partner) {
+  if (!partnerCanReceiveOpenBookings(partner)) {
+    return 0;
+  }
+  const categories = partnerDispatchCategories(partner);
+  if (!categories.length) {
+    return 0;
+  }
+
+  const cityRegex = new RegExp(escapeRegExp(partner.city || "Guwahati"), "i");
+  const candidates = await Booking.find({
+    partnerId: null,
+    rejectedPartners: { $ne: partner._id },
+    requestedPartners: { $ne: partner._id },
+    status: { $in: pendingAssignmentStatuses() },
+    serviceCategory: { $in: categories },
+    $or: [
+      { city: cityRegex },
+      { city: { $in: ["", null] } },
+      { requestedPartners: { $size: 0 } }
+    ]
+  }).sort({ createdAt: -1 }).limit(20);
+
+  let dispatched = 0;
+  for (const booking of candidates) {
+    const updated = await Booking.findOneAndUpdate(
+      {
+        _id: booking._id,
+        partnerId: null,
+        rejectedPartners: { $ne: partner._id },
+        requestedPartners: { $ne: partner._id },
+        status: { $in: pendingAssignmentStatuses() }
+      },
+      {
+        $addToSet: { requestedPartners: partner._id },
+        $set: { status: "sent_to_partner" },
+        $push: {
+          statusTimeline: {
+            status: "sent_to_partner",
+            at: new Date(),
+            by: "system",
+            note: "Dispatched when partner came online"
+          }
+        }
+      },
+      { new: true }
+    );
+    if (!updated) {
+      continue;
+    }
+    emitNewBookingToPartners(updated, [partner]);
+    dispatched += 1;
+  }
+  return dispatched;
 }
 
 function verifyAdminRealtimeToken(token) {
@@ -340,7 +414,8 @@ function initBookingSocket(httpServer) {
       }
       socket.partner = await Partner.findByIdAndUpdate(partner._id, { $set: update }, { new: true });
       socket.join(`partner:${partner._id}`);
-      socket.emit("partner:online", { ok: true });
+      const dispatchedBookings = await dispatchPendingBookingsToSocketPartner(socket.partner);
+      socket.emit("partner:online", { ok: true, dispatchedBookings });
     });
 
     handleSocketEvent(socket, "partner:offline", async () => {
