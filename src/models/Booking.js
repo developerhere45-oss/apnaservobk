@@ -48,11 +48,12 @@ const bookingSchema = new mongoose.Schema(
     quoteAmount: { type: Number, default: 0 },
     quoteStatus: {
       type: String,
-      enum: ["none", "pending", "approved", "countered", "expired", "rejected"],
+      enum: ["none", "pending", "payment_submitted", "approved", "countered", "expired", "rejected"],
       default: "none",
       index: true
     },
     quoteRequestedAt: { type: Date, default: null },
+    paymentSubmittedAt: { type: Date, default: null },
     quoteExpiresAt: { type: Date, default: null },
     quoteApprovedAt: { type: Date, default: null },
     quoteCounterAmount: { type: Number, default: 0 },

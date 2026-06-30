@@ -30,6 +30,7 @@ router.post("/:bookingId/sos", bookingWriteLimiter, controller.createTechnicianS
 router.post("/:bookingId/proof-photos", bookingWriteLimiter, proofUpload.single("photo"), validateUploadedImage(["image/jpeg", "image/png", "image/webp"]), controller.uploadJobProofPhoto);
 router.post("/:bookingId/revisit-request", bookingWriteLimiter, controller.createRevisitRequest);
 router.post("/:bookingId/quote/counter", bookingWriteLimiter, controller.counterOfferQuote);
+router.post("/:bookingId/payment-submitted", bookingWriteLimiter, controller.submitDirectPayment);
 router.get("/:bookingId/chat/messages", chatReadLimiter, chatController.listMessages);
 router.post("/:bookingId/chat/messages", bookingWriteLimiter, chatController.sendMessage);
 router.patch("/:bookingId/chat/seen", bookingWriteLimiter, chatController.markSeen);

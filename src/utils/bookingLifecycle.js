@@ -170,6 +170,9 @@ function transitionDecision({ currentStatus, nextStatus, actorRole, quoteStatus 
     if (current === "amount_pending" && next === "amount_pending" && quote !== "countered") {
       return { ok: false, reason: "A quote is already pending customer approval" };
     }
+    if (current === "amount_pending" && next === "completed" && quote !== "payment_submitted") {
+      return { ok: false, reason: "Customer payment confirmation is pending" };
+    }
     return { ok: true };
   }
 

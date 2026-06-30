@@ -952,7 +952,10 @@ async function updateStatus(req, res, next) {
 
     if (nextStatus === "completed") {
       const quoteStatus = approvalQuoteStatus(currentBooking);
-      if (quoteStatus !== "pending") {
+      if (partner && quoteStatus !== "payment_submitted") {
+        return res.status(409).json({ message: "Customer payment confirmation is pending" });
+      }
+      if (!partner && quoteStatus !== "pending") {
         return res.status(409).json({ message: "Quote is not ready for approval" });
       }
       if (currentBooking.quoteExpiresAt && new Date(currentBooking.quoteExpiresAt).getTime() <= now.getTime()) {
@@ -1045,6 +1048,9 @@ async function updateStatus(req, res, next) {
     };
     if (nextStatus === "completed") {
       atomicQuery.quoteStatus = "pending";
+      if (partner) {
+        atomicQuery.quoteStatus = "payment_submitted";
+      }
     }
     if (nextStatus === "amount_pending" && currentBooking.status === "amount_pending") {
       atomicQuery.quoteStatus = currentBooking.quoteStatus;
@@ -1486,6 +1492,67 @@ async function createCallLog(req, res, next) {
   }
 }
 
+async function submitDirectPayment(req, res, next) {
+  try {
+    const user = await User.findOne({ firebaseUid: req.auth.uid });
+    if (!user) {
+      return res.status(404).json({ message: "Customer profile not found" });
+    }
+    const booking = await Booking.findOne({
+      ...bookingIdFilter(String(req.params.bookingId || "")),
+      userId: user._id
+    });
+    if (!booking) {
+      return res.status(404).json({ message: "Booking not found" });
+    }
+    if (booking.status !== "amount_pending") {
+      return res.status(409).json({ message: "Payment can be submitted only after partner sends the final amount" });
+    }
+    const quoteStatus = approvalQuoteStatus(booking);
+    if (quoteStatus === "payment_submitted") {
+      return res.json({ booking: serializeBooking(booking), idempotent: true });
+    }
+    if (quoteStatus !== "pending") {
+      return res.status(409).json({ message: "Quote is not ready for payment" });
+    }
+    if (booking.quoteExpiresAt && new Date(booking.quoteExpiresAt).getTime() <= Date.now()) {
+      return res.status(410).json({ message: "Quote expired. Ask partner to send a fresh quote." });
+    }
+
+    const now = new Date();
+    booking.quoteStatus = "payment_submitted";
+    booking.paymentSubmittedAt = now;
+    booking.paymentStatus = "pending";
+    booking.statusTimeline.push({ status: "payment_submitted", at: now, by: "user" });
+    booking.quoteHistory.push({
+      kind: "payment_submitted",
+      amount: Number(booking.finalAmount || booking.quoteAmount || booking.price || 0),
+      by: "user",
+      message: "Customer marked direct payment as paid to partner",
+      at: now
+    });
+    await booking.save();
+
+    emitBookingStatusUpdate(booking);
+    emitAdminEvent("booking:payment_submitted", serializeBooking(booking));
+
+    const partnerForNotification = booking.partnerId ? await Partner.findById(booking.partnerId) : null;
+    await reliableNotify({
+      recipients: [partnerRecipient(partnerForNotification)].filter(Boolean),
+      title: "Payment Submitted",
+      body: `Customer marked Rs ${booking.finalAmount || booking.quoteAmount || booking.price || 0} as paid for booking ${booking.bookingCode}. Verify after receiving it.`,
+      category: "payment",
+      priority: "high",
+      data: { type: "booking:payment_submitted", status: "amount_pending", bookingId: booking._id, bookingCode: booking.bookingCode },
+      smsBody: `ApnaServo: Customer marked payment as paid for booking ${booking.bookingCode}. Verify after receiving it.`
+    });
+
+    return res.json({ booking: serializeBooking(booking) });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function getTracking(req, res, next) {
   try {
     const booking = await Booking.findOne(bookingIdFilter(String(req.params.bookingId || "")));
@@ -1756,6 +1823,7 @@ module.exports = {
   uploadJobProofPhoto,
   createRevisitRequest,
   counterOfferQuote,
+  submitDirectPayment,
   monitorBookingChat,
   reportCustomerNoResponse,
   getBooking,
