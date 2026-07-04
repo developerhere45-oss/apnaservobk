@@ -342,7 +342,7 @@ function bookingRow(booking) {
   };
 }
 
-function partnerRow(partner, bookingCount = 0) {
+function partnerRow(partner, bookingCount = 0, profilePhoto = "") {
   const approved = partner.isVerified === true && partner.kycStatus === "verified" && partner.trustStatus === "trusted";
   const blocked = partner.accountStatus === "blocked" || partner.accountStatus === "suspended" || partner.trustStatus === "suspended";
   return {
@@ -351,6 +351,7 @@ function partnerRow(partner, bookingCount = 0) {
     name: partner.name || "",
     phone: partner.phone || "",
     email: partner.email || "",
+    profilePhoto: profilePhoto || partner.photoUrl || partner.selfieUrl || "",
     dateOfBirth: partner.dateOfBirth || "",
     gender: partner.gender || "",
     residentialAddress: partner.residentialAddress || "",
@@ -1145,7 +1146,13 @@ async function listResourceRows(req, res, next) {
       const visiblePartnerFilter = { accountStatus: { $ne: "deleted" } };
       const partners = await Partner.find(visiblePartnerFilter).sort({ createdAt: -1 }).limit(limit);
       const countMap = await bookingCountByPartner(partners.map((partner) => partner._id));
-      rows = partners.map((partner) => partnerRow(partner, countMap.get(id(partner._id)) || 0));
+      const profileMap = await profileDocumentUrlMap(req, partners.map((partner) => partner._id));
+      rows = partners.map((partner) => {
+        const profilePhoto = partner.profilePhotoAssetId
+          ? partnerAssetUrl(req, partner.profilePhotoAssetId)
+          : profileMap.get(id(partner._id)) || "";
+        return partnerRow(partner, countMap.get(id(partner._id)) || 0, profilePhoto);
+      });
       metrics = {
         totalPartners: await Partner.countDocuments(visiblePartnerFilter),
         activePartners: await Partner.countDocuments({ accountStatus: "active", trustStatus: { $ne: "suspended" } }),
@@ -1186,7 +1193,13 @@ async function listResourceRows(req, res, next) {
       };
       const partners = await Partner.find(pendingPartnerFilter).sort({ createdAt: -1 }).limit(limit);
       const countMap = await bookingCountByPartner(partners.map((partner) => partner._id));
-      rows = partners.map((partner) => partnerRow(partner, countMap.get(id(partner._id)) || 0));
+      const profileMap = await profileDocumentUrlMap(req, partners.map((partner) => partner._id));
+      rows = partners.map((partner) => {
+        const profilePhoto = partner.profilePhotoAssetId
+          ? partnerAssetUrl(req, partner.profilePhotoAssetId)
+          : profileMap.get(id(partner._id)) || "";
+        return partnerRow(partner, countMap.get(id(partner._id)) || 0, profilePhoto);
+      });
       metrics = {
         needsAction: await Partner.countDocuments(pendingPartnerFilter),
         pendingApproval: await Partner.countDocuments({ ...pendingPartnerFilter, kycStatus: { $in: ["missing", "submitted", "pending_review"] } }),
@@ -1937,6 +1950,28 @@ function partnerDocumentUrl(req, document) {
   return document.url || "";
 }
 
+function latestPartnerProfileDocumentUrl(req, documents = []) {
+  const profileTypes = new Set(["profile_photo", "selfie_photo", "face_photo", "selfie_verification"]);
+  const document = documents.find((entry) => profileTypes.has(String(entry.documentType || "").toLowerCase()));
+  return document ? partnerDocumentUrl(req, document) : "";
+}
+
+async function profileDocumentUrlMap(req, partnerIds = []) {
+  if (!partnerIds.length) return new Map();
+  const documents = await PartnerDocument.find({
+    partnerId: { $in: partnerIds },
+    documentType: { $in: ["profile_photo", "selfie_photo", "face_photo", "selfie_verification"] }
+  }).sort({ createdAt: -1 });
+  const urls = new Map();
+  for (const document of documents) {
+    const partnerKey = id(document.partnerId);
+    if (!urls.has(partnerKey)) {
+      urls.set(partnerKey, partnerDocumentUrl(req, document));
+    }
+  }
+  return urls;
+}
+
 function serializePartnerDocument(document, req) {
   return {
     id: id(document._id),
@@ -1990,6 +2025,9 @@ async function partnerProfile(req, res, next) {
     const approved = partner.isVerified === true && partner.kycStatus === "verified" && partner.trustStatus === "trusted";
     const blocked = partner.accountStatus === "blocked" || partner.accountStatus === "suspended" || partner.trustStatus === "suspended";
     const rawProfile = partner.toObject({ getters: true });
+    const profilePhoto = partner.profilePhotoAssetId
+      ? partnerAssetUrl(req, partner.profilePhotoAssetId)
+      : (partner.photoUrl || partner.selfieUrl || latestPartnerProfileDocumentUrl(req, documents));
     delete rawProfile.fcmToken;
     delete rawProfile.deviceTokens;
     return res.json({
@@ -1997,7 +2035,9 @@ async function partnerProfile(req, res, next) {
         id: id(partner._id),
         firebaseUid: partner.firebaseUid || "",
         partnerCode: partner.partnerCode || "",
-        profilePhoto: partner.profilePhotoAssetId ? partnerAssetUrl(req, partner.profilePhotoAssetId) : (partner.photoUrl || partner.selfieUrl || ""),
+        profilePhoto,
+        photoUrl: partner.photoUrl || "",
+        selfieUrl: partner.selfieUrl || "",
         fullName: partner.name || "",
         mobileNumber: partner.phone || "",
         email: partner.email || "",
