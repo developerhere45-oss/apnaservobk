@@ -1144,7 +1144,9 @@ async function listResourceRows(req, res, next) {
       };
     } else if (resource === "partners") {
       const visiblePartnerFilter = { accountStatus: { $ne: "deleted" } };
-      const partners = await Partner.find(visiblePartnerFilter).sort({ createdAt: -1 }).limit(limit);
+      // Deleted records remain available to admins through the Deleted Partners metric.
+      // The dashboard hides them from the default list and reveals them on demand.
+      const partners = await Partner.find({}).sort({ createdAt: -1 }).limit(limit);
       const countMap = await bookingCountByPartner(partners.map((partner) => partner._id));
       const profileMap = await profileDocumentUrlMap(req, partners.map((partner) => partner._id));
       rows = partners.map((partner) => {
@@ -2030,6 +2032,43 @@ async function partnerProfile(req, res, next) {
       : (partner.photoUrl || partner.selfieUrl || latestPartnerProfileDocumentUrl(req, documents));
     delete rawProfile.fcmToken;
     delete rawProfile.deviceTokens;
+    const activityHistory = [
+      ...(partner.verificationHistory || []).map((entry, index) => ({
+        id: `${id(partner._id)}:verification:${index}`,
+        type: "verification",
+        title: `Verification ${String(entry.action || "updated").replace(/_/g, " ")}`,
+        description: [entry.note || "", entry.by ? `By ${entry.by}` : ""].filter(Boolean).join(" - "),
+        createdAt: iso(entry.at)
+      })),
+      ...documents.map((document) => ({
+        id: `${id(document._id)}:document`,
+        type: "document",
+        title: `${String(document.documentType || "Document").replace(/_/g, " ")} uploaded`,
+        description: `Validation status: ${document.validationStatus || "review"}`,
+        createdAt: iso(document.createdAt)
+      })),
+      ...bookings.map((booking) => ({
+        id: `${id(booking._id)}:booking`,
+        type: "booking",
+        title: `Booking ${booking.bookingCode || id(booking._id)}`,
+        description: `${booking.serviceName || booking.serviceCategory || "Service"} - ${booking.status || "pending"}`,
+        createdAt: iso(booking.updatedAt || booking.createdAt)
+      })),
+      ...tickets.map((ticket) => ({
+        id: `${id(ticket._id)}:support`,
+        type: "support",
+        title: ticket.subject || ticket.title || ticket.category || "Support ticket",
+        description: `Ticket ${ticket.ticketCode || id(ticket._id)} - ${ticket.status || "open"}`,
+        createdAt: iso(ticket.updatedAt || ticket.createdAt)
+      })),
+      {
+        id: `${id(partner._id)}:registered`,
+        type: "registration",
+        title: "Partner registered",
+        description: `${partner.name || "Partner"} submitted the registration profile.`,
+        createdAt: iso(partner.createdAt)
+      }
+    ].filter((entry) => entry.createdAt).sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
     return res.json({
       partner: {
         id: id(partner._id),
@@ -2073,7 +2112,8 @@ async function partnerProfile(req, res, next) {
       },
       documents: documents.map((document) => serializePartnerDocument(document, req)),
       bookingHistory: bookings.map(bookingRow),
-      supportTickets: tickets.map(serializeSupportTicket)
+      supportTickets: tickets.map(serializeSupportTicket),
+      activityHistory
     });
   } catch (error) {
     return next(error);
