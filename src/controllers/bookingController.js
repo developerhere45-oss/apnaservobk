@@ -552,12 +552,15 @@ function queueBookingDispatch(booking, category, lat, lng) {
 }
 
 async function getOrCreateUser(req, body) {
-  const phone = body.userPhone || req.auth.phone_number || "";
+  const existing = await User.findOne({ firebaseUid: req.auth.uid })
+    .select("_id phone phoneVerified phoneVerifiedAt")
+    .lean();
+  const phone = body.userPhone || req.auth.phone_number || existing?.phone || "";
   const normalizedPhone = normalizePhone(phone);
   const email = normalizeEmail(req.auth.email || "");
-  const verified = firebasePhoneVerified(req, phone);
+  const verified = firebasePhoneVerified(req, phone)
+    || Boolean(existing?.phoneVerified && normalizePhone(existing.phone) === normalizedPhone);
   const now = new Date();
-  const existing = await User.findOne({ firebaseUid: req.auth.uid }).select("_id").lean();
   const update = {
     $set: {
       name: body.userName || req.auth.name || "ApnaServo Customer",
