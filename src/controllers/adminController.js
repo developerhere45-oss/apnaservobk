@@ -319,6 +319,95 @@ function bookingAmount(booking) {
   return money(booking?.finalAmount || booking?.quoteAmount || booking?.price);
 }
 
+function safeLimit(value, fallback = 100, maximum = 250) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, maximum);
+}
+
+function numericField(path) {
+  return { $convert: { input: path, to: "double", onError: 0, onNull: 0 } };
+}
+
+function bookingAmountExpression() {
+  const finalAmount = numericField("$finalAmount");
+  const quoteAmount = numericField("$quoteAmount");
+  const price = numericField("$price");
+  return {
+    $switch: {
+      branches: [
+        { case: { $gt: [finalAmount, 0] }, then: finalAmount },
+        { case: { $gt: [quoteAmount, 0] }, then: quoteAmount }
+      ],
+      default: price
+    }
+  };
+}
+
+async function paymentSummaryTotals() {
+  const [summary] = await Payment.aggregate([
+    {
+      $group: {
+        _id: null,
+        totalCollection: { $sum: numericField("$amount") },
+        totalRevenue: {
+          $sum: { $cond: [{ $eq: ["$status", "paid"] }, numericField("$amount"), 0] }
+        },
+        pendingPayments: {
+          $sum: { $cond: [{ $in: ["$status", ["created", "failed"]] }, numericField("$amount"), 0] }
+        },
+        totalTransactions: { $sum: 1 }
+      }
+    }
+  ]);
+  return {
+    totalCollection: money(summary?.totalCollection),
+    totalRevenue: money(summary?.totalRevenue),
+    pendingPayments: money(summary?.pendingPayments),
+    totalTransactions: Number(summary?.totalTransactions || 0)
+  };
+}
+
+async function bookingSummaryTotals() {
+  const [summary] = await Booking.aggregate([
+    {
+      $match: {
+        status: { $in: ["completed", "amount_pending"] }
+      }
+    },
+    { $project: { status: 1, paymentStatus: 1, amount: bookingAmountExpression() } },
+    {
+      $group: {
+        _id: null,
+        totalCollection: { $sum: "$amount" },
+        totalRevenue: {
+          $sum: {
+            $cond: [
+              { $or: [{ $eq: ["$status", "completed"] }, { $eq: ["$paymentStatus", "paid"] }] },
+              "$amount",
+              0
+            ]
+          }
+        },
+        pendingPayments: {
+          $sum: {
+            $cond: [
+              { $or: [{ $eq: ["$status", "amount_pending"] }, { $eq: ["$paymentStatus", "pending"] }] },
+              "$amount",
+              0
+            ]
+          }
+        }
+      }
+    }
+  ]);
+  return {
+    totalCollection: money(summary?.totalCollection),
+    totalRevenue: money(summary?.totalRevenue),
+    pendingPayments: money(summary?.pendingPayments)
+  };
+}
+
 function bookingRow(booking) {
   return {
     id: id(booking._id),
@@ -849,7 +938,7 @@ async function smartAssignBooking(req, res, next) {
 
 async function smartBulkAssignPending(req, res, next) {
   try {
-    const limit = Math.max(1, Math.min(Number(req.body?.limit || 25), 50));
+    const limit = safeLimit(req.body?.limit, 25, 50);
     const service = String(req.body?.service || "").trim();
     const area = String(req.body?.area || "").trim();
     const query = {
@@ -941,14 +1030,13 @@ async function dashboard(req, res, next) {
       resolvedReviewDisputes,
       openSupportTickets,
       resolvedSupportTickets,
-      payments,
-      pendingPayments,
+      paymentTotals,
       recentBookings,
       recentDisputes,
       recentTickets,
       recentPayments,
       recentActivity,
-      amountBookings
+      bookingTotals
     ] = await Promise.all([
       User.countDocuments(),
       User.countDocuments({ accountStatus: "active" }),
@@ -966,35 +1054,18 @@ async function dashboard(req, res, next) {
       ReviewDispute.countDocuments({ status: { $in: ["accepted", "rejected"] } }),
       SupportTicket.countDocuments({ status: { $in: ["open", "assigned", "in_progress", "waiting_on_customer", "reopened", "escalated"] } }),
       SupportTicket.countDocuments({ status: { $in: ["resolved", "closed"] } }),
-      Payment.find().select("amount status"),
-      Payment.find({ status: { $in: ["created", "failed"] } }).select("amount status"),
-      Booking.find().sort({ createdAt: -1 }).limit(8),
-      ReviewDispute.find().sort({ createdAt: -1 }).limit(6),
-      SupportTicket.find().sort({ lastUpdatedAt: -1, createdAt: -1 }).limit(6),
-      Payment.find().sort({ createdAt: -1 }).limit(8).populate("partnerId", "name phone").populate("userId", "name phone").populate("bookingId", "bookingCode serviceName serviceCategory"),
-      AdminActivity.find().sort({ createdAt: -1 }).limit(12),
-      Booking.find({
-        status: { $in: ["completed", "amount_pending"] },
-        $or: [
-          { finalAmount: { $gt: 0 } },
-          { quoteAmount: { $gt: 0 } },
-          { price: { $gt: 0 } }
-        ]
-      }).select("finalAmount quoteAmount price paymentStatus status")
+      paymentSummaryTotals(),
+      Booking.find().sort({ createdAt: -1 }).limit(8).lean(),
+      ReviewDispute.find().sort({ createdAt: -1 }).limit(6).lean(),
+      SupportTicket.find().sort({ lastUpdatedAt: -1, createdAt: -1 }).limit(6).lean(),
+      Payment.find().sort({ createdAt: -1 }).limit(8).populate("partnerId", "name phone").populate("userId", "name phone").populate("bookingId", "bookingCode serviceName serviceCategory").lean(),
+      AdminActivity.find().sort({ createdAt: -1 }).limit(12).lean(),
+      bookingSummaryTotals()
     ]);
 
-    const paidPaymentRevenue = payments
-      .filter((payment) => payment.status === "paid")
-      .reduce((sum, payment) => sum + money(payment.amount), 0);
-    const bookingRevenueFallback = amountBookings
-      .filter((booking) => booking.status === "completed" || booking.paymentStatus === "paid")
-      .reduce((sum, booking) => sum + bookingAmount(booking), 0);
-    const totalRevenue = paidPaymentRevenue || bookingRevenueFallback;
-    const pendingPaymentFallback = amountBookings
-      .filter((booking) => booking.status === "amount_pending" || booking.paymentStatus === "pending")
-      .reduce((sum, booking) => sum + bookingAmount(booking), 0);
-    const pendingPaymentAmount = pendingPayments.reduce((sum, payment) => sum + money(payment.amount), 0) || pendingPaymentFallback;
-    const totalCollection = payments.reduce((sum, payment) => sum + money(payment.amount), 0) || amountBookings.reduce((sum, booking) => sum + bookingAmount(booking), 0);
+    const totalRevenue = paymentTotals.totalRevenue || bookingTotals.totalRevenue;
+    const pendingPaymentAmount = paymentTotals.pendingPayments || bookingTotals.pendingPayments;
+    const totalCollection = paymentTotals.totalCollection || bookingTotals.totalCollection;
     const platformCommission = Math.round(totalRevenue * 0.12);
     const partnerEarnings = Math.max(totalRevenue - platformCommission, 0);
     const recentComplaints = [
@@ -1040,7 +1111,7 @@ async function dashboard(req, res, next) {
         partnerEarnings,
         platformCommission,
         pendingPaymentAmount,
-        totalTransactions: payments.length
+        totalTransactions: paymentTotals.totalTransactions
       },
       bookingStatusBreakdown: [
         { status: "Completed", value: completedBookings },
@@ -1067,7 +1138,7 @@ async function dashboard(req, res, next) {
 
 async function listAdminActivity(req, res, next) {
   try {
-    const limit = Math.min(Math.max(Number(req.query.limit || 80), 1), 250);
+    const limit = safeLimit(req.query.limit, 80, 250);
     const query = {};
     const eventName = String(req.query.eventName || "").trim();
     const category = String(req.query.category || "").trim();
@@ -1104,12 +1175,12 @@ async function listAdminActivity(req, res, next) {
 async function listResourceRows(req, res, next) {
   try {
     const resource = String(req.params.resource || "").trim().toLowerCase();
-    const limit = Math.min(Number(req.query.limit || 100), 250);
+    const limit = safeLimit(req.query.limit, 100, 250);
     let rows = [];
     let metrics = {};
 
     if (resource === "users") {
-      const users = await User.find().sort({ createdAt: -1 }).limit(limit);
+      const users = await User.find().sort({ createdAt: -1 }).limit(limit).lean();
       const userIds = users.map((user) => user._id);
       const [bookingCounts, disputeCounts, ticketCounts] = userIds.length ? await Promise.all([
         Booking.aggregate([{ $match: { userId: { $in: userIds } } }, { $group: { _id: "$userId", total: { $sum: 1 } } }]),
@@ -1146,7 +1217,7 @@ async function listResourceRows(req, res, next) {
       const visiblePartnerFilter = { accountStatus: { $ne: "deleted" } };
       // Deleted records remain available to admins through the Deleted Partners metric.
       // The dashboard hides them from the default list and reveals them on demand.
-      const partners = await Partner.find({}).sort({ createdAt: -1 }).limit(limit);
+      const partners = await Partner.find({}).sort({ createdAt: -1 }).limit(limit).lean();
       const countMap = await bookingCountByPartner(partners.map((partner) => partner._id));
       const profileMap = await profileDocumentUrlMap(req, partners.map((partner) => partner._id));
       rows = partners.map((partner) => {
@@ -1193,7 +1264,7 @@ async function listResourceRows(req, res, next) {
         accountStatus: "active",
         trustStatus: { $ne: "suspended" }
       };
-      const partners = await Partner.find(pendingPartnerFilter).sort({ createdAt: -1 }).limit(limit);
+      const partners = await Partner.find(pendingPartnerFilter).sort({ createdAt: -1 }).limit(limit).lean();
       const countMap = await bookingCountByPartner(partners.map((partner) => partner._id));
       const profileMap = await profileDocumentUrlMap(req, partners.map((partner) => partner._id));
       rows = partners.map((partner) => {
@@ -1211,32 +1282,34 @@ async function listResourceRows(req, res, next) {
         verified: await Partner.countDocuments({ kycStatus: "verified" })
       };
     } else if (resource === "bookings" || resource === "quotes") {
-      const bookings = await Booking.find().sort({ createdAt: -1 }).limit(limit);
+      const bookings = await Booking.find().sort({ createdAt: -1 }).limit(limit).lean();
       rows = bookings.map(bookingRow);
-      const paidBookings = await Booking.find({ status: "completed" }).select("finalAmount quoteAmount price");
-      const totalRevenue = paidBookings.reduce((sum, booking) => sum + bookingAmount(booking), 0);
+      const [bookingTotals, totalBookings, completed, pending, cancelled] = await Promise.all([
+        bookingSummaryTotals(),
+        Booking.countDocuments(),
+        Booking.countDocuments({ status: "completed" }),
+        Booking.countDocuments({ status: { $in: ["pending", "sent_to_partner", "amount_pending"] } }),
+        Booking.countDocuments({ status: { $in: ["cancelled", "canceled"] } })
+      ]);
       metrics = {
-        totalBookings: await Booking.countDocuments(),
-        completed: await Booking.countDocuments({ status: "completed" }),
-        pending: await Booking.countDocuments({ status: { $in: ["pending", "sent_to_partner", "amount_pending"] } }),
-        cancelled: await Booking.countDocuments({ status: { $in: ["cancelled", "canceled"] } }),
-        totalRevenue,
-        avgOrderValue: paidBookings.length ? Math.round(totalRevenue / paidBookings.length) : 0
+        totalBookings,
+        completed,
+        pending,
+        cancelled,
+        totalRevenue: bookingTotals.totalRevenue,
+        avgOrderValue: completed ? Math.round(bookingTotals.totalRevenue / completed) : 0
       };
     } else if (resource === "payments") {
-      const payments = await Payment.find().sort({ createdAt: -1 }).limit(limit).populate("partnerId", "name phone").populate("userId", "name phone").populate("bookingId", "bookingCode serviceName serviceCategory");
+      const payments = await Payment.find().sort({ createdAt: -1 }).limit(limit).populate("partnerId", "name phone").populate("userId", "name phone").populate("bookingId", "bookingCode serviceName serviceCategory").lean();
       rows = payments.map(paymentRow);
-      const allPayments = await Payment.find().select("amount status");
-      const paid = allPayments.filter((payment) => payment.status === "paid");
-      const pending = allPayments.filter((payment) => ["created", "failed"].includes(payment.status));
-      const totalRevenue = paid.reduce((sum, payment) => sum + money(payment.amount), 0);
+      const paymentTotals = await paymentSummaryTotals();
       metrics = {
-        totalPlatformRevenue: totalRevenue,
-        totalPartnerEarnings: Math.round(totalRevenue * 0.88),
-        totalCollection: allPayments.reduce((sum, payment) => sum + money(payment.amount), 0),
-        pendingPayments: pending.reduce((sum, payment) => sum + money(payment.amount), 0),
+        totalPlatformRevenue: paymentTotals.totalRevenue,
+        totalPartnerEarnings: Math.round(paymentTotals.totalRevenue * 0.88),
+        totalCollection: paymentTotals.totalCollection,
+        pendingPayments: paymentTotals.pendingPayments,
         overduePayments: 0,
-        totalTransactions: allPayments.length
+        totalTransactions: paymentTotals.totalTransactions
       };
     } else if (resource === "services") {
       const services = await Service.find().sort({ createdAt: -1 }).limit(limit);
@@ -1285,7 +1358,7 @@ async function listResourceRows(req, res, next) {
         failed: await AdminNotification.countDocuments({ status: "failed" })
       };
     } else if (resource === "reports") {
-      const [users, partners, bookings, completed, cancelled, disputes, tickets, payments] = await Promise.all([
+      const [users, partners, bookings, completed, cancelled, disputes, tickets, paymentTotals] = await Promise.all([
         User.countDocuments(),
         Partner.countDocuments(),
         Booking.countDocuments(),
@@ -1293,9 +1366,9 @@ async function listResourceRows(req, res, next) {
         Booking.countDocuments({ status: { $in: ["cancelled", "canceled"] } }),
         ReviewDispute.countDocuments(),
         SupportTicket.countDocuments(),
-        Payment.find().select("amount status")
+        paymentSummaryTotals()
       ]);
-      const revenue = payments.filter((payment) => payment.status === "paid").reduce((sum, payment) => sum + money(payment.amount), 0);
+      const revenue = paymentTotals.totalRevenue;
       rows = [
         { id: "users", reportType: "Total Users", currentValue: users },
         { id: "partners", reportType: "Total Partners", currentValue: partners },
@@ -1589,8 +1662,8 @@ async function userRestrictSetFromBookings({ bookingId, serviceType, bookingStat
     ];
   }
   if (bookingStatus) filter.status = bookingStatus;
-  const bookings = await Booking.find(filter).select("userId");
-  return new Set(bookings.map((booking) => id(booking.userId)).filter(Boolean));
+  const userIds = await Booking.distinct("userId", filter);
+  return new Set(userIds.map(id).filter(Boolean));
 }
 
 async function userRestrictSetFromComplaints({ ticketId, complaintStatus }) {
@@ -1606,13 +1679,13 @@ async function userRestrictSetFromComplaints({ ticketId, complaintStatus }) {
   if (complaintStatus) ticketFilter.status = complaintStatus;
   const disputeFilter = {};
   if (complaintStatus) disputeFilter.status = complaintStatus;
-  const [tickets, disputes] = await Promise.all([
-    SupportTicket.find(ticketFilter).select("userId"),
-    ReviewDispute.find(disputeFilter).select("userId")
+  const [ticketUserIds, disputeUserIds] = await Promise.all([
+    SupportTicket.distinct("userId", ticketFilter),
+    ReviewDispute.distinct("userId", disputeFilter)
   ]);
   return new Set([
-    ...tickets.map((ticket) => id(ticket.userId)),
-    ...disputes.map((dispute) => id(dispute.userId))
+    ...ticketUserIds.map(id),
+    ...disputeUserIds.map(id)
   ].filter(Boolean));
 }
 
@@ -1629,6 +1702,9 @@ async function usersControlCenter(req, res, next) {
       complaintStatus: String(req.query.complaintStatus || "").trim(),
       registrationDate: String(req.query.registrationDate || "").trim()
     };
+    const page = safeLimit(req.query.page, 1, 100000);
+    const ticketPage = safeLimit(req.query.ticketPage, 1, 100000);
+    const pageSize = safeLimit(req.query.pageSize, 10, 100);
 
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
@@ -1642,9 +1718,7 @@ async function usersControlCenter(req, res, next) {
       openReviewDisputes,
       resolvedReviewDisputes,
       openSupportTickets,
-      resolvedSupportTickets,
-      allUsers,
-      allTickets
+      resolvedSupportTickets
     ] = await Promise.all([
       User.countDocuments(),
       User.countDocuments({ accountStatus: "active" }),
@@ -1655,9 +1729,7 @@ async function usersControlCenter(req, res, next) {
       ReviewDispute.countDocuments({ status: { $in: ["open", "reviewing"] } }),
       ReviewDispute.countDocuments({ status: { $in: ["accepted", "rejected"] } }),
       SupportTicket.countDocuments({ status: { $in: ["open", "assigned", "in_progress", "waiting_on_customer", "reopened", "escalated"] } }),
-      SupportTicket.countDocuments({ status: { $in: ["resolved", "closed"] } }),
-      User.find().sort({ createdAt: -1 }),
-      SupportTicket.find().sort({ lastUpdatedAt: -1, createdAt: -1 })
+      SupportTicket.countDocuments({ status: { $in: ["resolved", "closed"] } })
     ]);
 
     let bookingSearchSet = new Set();
@@ -1665,25 +1737,25 @@ async function usersControlCenter(req, res, next) {
     if (query.search) {
       const searchRegex = regex(query.search);
       const searchObjectId = objectId(query.search);
-      const [bookings, tickets] = await Promise.all([
-        Booking.find({
+      const [bookingUserIds, ticketUserIds] = await Promise.all([
+        Booking.distinct("userId", {
           $or: [
             ...(searchObjectId ? [{ _id: searchObjectId }] : []),
             { bookingCode: searchRegex },
             { serviceName: searchRegex },
             { serviceCategory: searchRegex }
           ]
-        }).select("userId"),
-        SupportTicket.find({
+        }),
+        SupportTicket.distinct("userId", {
           $or: [
             ...(searchObjectId ? [{ _id: searchObjectId }] : []),
             { ticketCode: searchRegex },
             { bookingCode: searchRegex }
           ]
-        }).select("userId")
+        })
       ]);
-      bookingSearchSet = new Set(bookings.map((booking) => id(booking.userId)).filter(Boolean));
-      ticketSearchSet = new Set(tickets.map((ticket) => id(ticket.userId)).filter(Boolean));
+      bookingSearchSet = new Set(bookingUserIds.map(id).filter(Boolean));
+      ticketSearchSet = new Set(ticketUserIds.map(id).filter(Boolean));
     }
 
     const [bookingRestrictSet, complaintRestrictSet] = await Promise.all([
@@ -1696,25 +1768,73 @@ async function usersControlCenter(req, res, next) {
       ? new Date(registrationDate.getTime() + 24 * 60 * 60 * 1000)
       : null;
 
-    let users = allUsers.filter((user) => {
-      const userId = id(user._id);
-      if (query.name && !includesText(user.name, query.name)) return false;
-      if (query.mobile && !digits(user.phone).includes(digits(query.mobile))) return false;
-      if (registrationDate && registrationEnd) {
-        const created = new Date(user.createdAt);
-        if (created < registrationDate || created >= registrationEnd) return false;
+    const userClauses = [];
+    if (query.name) userClauses.push({ name: regex(query.name) });
+    if (query.mobile) userClauses.push({ phone: regex(query.mobile) });
+    if (registrationDate && registrationEnd) userClauses.push({ createdAt: { $gte: registrationDate, $lt: registrationEnd } });
+    for (const restrictSet of [bookingRestrictSet, complaintRestrictSet]) {
+      if (restrictSet) {
+        userClauses.push({ _id: { $in: [...restrictSet].map(objectId).filter(Boolean) } });
       }
-      if (bookingRestrictSet && !bookingRestrictSet.has(userId)) return false;
-      if (complaintRestrictSet && !complaintRestrictSet.has(userId)) return false;
-      if (query.search) {
-        const textMatch = includesText(user.name, query.search)
-          || includesText(user.phone, query.search)
-          || includesText(user.email, query.search)
-          || includesText(user.city, query.search);
-        if (!textMatch && !bookingSearchSet.has(userId) && !ticketSearchSet.has(userId)) return false;
-      }
-      return true;
-    });
+    }
+    if (query.search) {
+      const searchRegex = regex(query.search);
+      const relatedIds = [...new Set([...bookingSearchSet, ...ticketSearchSet])].map(objectId).filter(Boolean);
+      userClauses.push({
+        $or: [
+          { name: searchRegex },
+          { phone: searchRegex },
+          { email: searchRegex },
+          { city: searchRegex },
+          ...(relatedIds.length ? [{ _id: { $in: relatedIds } }] : [])
+        ]
+      });
+    }
+    const userFilter = userClauses.length ? { $and: userClauses } : {};
+
+    const ticketClauses = [];
+    if (query.ticketId) {
+      const ticketObjectId = objectId(query.ticketId);
+      ticketClauses.push({
+        $or: [
+          ...(ticketObjectId ? [{ _id: ticketObjectId }] : []),
+          { ticketCode: regex(query.ticketId) }
+        ]
+      });
+    }
+    if (query.bookingId) {
+      const bookingObjectId = objectId(query.bookingId);
+      ticketClauses.push({
+        $or: [
+          ...(bookingObjectId ? [{ bookingId: bookingObjectId }] : []),
+          { bookingCode: regex(query.bookingId) }
+        ]
+      });
+    }
+    if (query.complaintStatus) ticketClauses.push({ status: query.complaintStatus });
+    if (query.mobile) ticketClauses.push({ mobileNumber: regex(query.mobile) });
+    if (query.name) ticketClauses.push({ userName: regex(query.name) });
+    if (query.search) {
+      const searchRegex = regex(query.search);
+      ticketClauses.push({
+        $or: [
+          { ticketCode: searchRegex },
+          { userName: searchRegex },
+          { mobileNumber: searchRegex },
+          { bookingCode: searchRegex },
+          { category: searchRegex },
+          { complaint: searchRegex }
+        ]
+      });
+    }
+    const ticketFilter = ticketClauses.length ? { $and: ticketClauses } : {};
+
+    const [filteredUserCount, users, filteredTicketCount, tickets] = await Promise.all([
+      User.countDocuments(userFilter),
+      User.find(userFilter).sort({ createdAt: -1 }).skip((page - 1) * pageSize).limit(pageSize).lean(),
+      SupportTicket.countDocuments(ticketFilter),
+      SupportTicket.find(ticketFilter).sort({ lastUpdatedAt: -1, createdAt: -1 }).skip((ticketPage - 1) * pageSize).limit(pageSize).lean()
+    ]);
 
     const userIds = users.map((user) => user._id);
     const [bookingCounts, disputeCounts, ticketCounts] = userIds.length ? await Promise.all([
@@ -1725,26 +1845,6 @@ async function usersControlCenter(req, res, next) {
     const bookingCountMap = new Map(bookingCounts.map((entry) => [id(entry._id), entry.total]));
     const disputeCountMap = new Map(disputeCounts.map((entry) => [id(entry._id), entry.total]));
     const ticketCountMap = new Map(ticketCounts.map((entry) => [id(entry._id), entry.total]));
-
-    let tickets = allTickets;
-    if (query.search || query.mobile || query.name || query.ticketId || query.complaintStatus || query.bookingId) {
-      tickets = allTickets.filter((ticket) => {
-        if (query.ticketId && !includesText(ticket.ticketCode, query.ticketId) && id(ticket._id) !== query.ticketId) return false;
-        if (query.bookingId && !includesText(ticket.bookingCode, query.bookingId) && id(ticket.bookingId) !== query.bookingId) return false;
-        if (query.complaintStatus && ticket.status !== query.complaintStatus) return false;
-        if (query.mobile && !digits(ticket.mobileNumber).includes(digits(query.mobile))) return false;
-        if (query.name && !includesText(ticket.userName, query.name)) return false;
-        if (query.search) {
-          return includesText(ticket.ticketCode, query.search)
-            || includesText(ticket.userName, query.search)
-            || includesText(ticket.mobileNumber, query.search)
-            || includesText(ticket.bookingCode, query.search)
-            || includesText(ticket.category, query.search)
-            || includesText(ticket.complaint, query.search);
-        }
-        return true;
-      });
-    }
 
     return res.json({
       analytics: {
@@ -1779,7 +1879,11 @@ async function usersControlCenter(req, res, next) {
           rawDeviceInformation: user.deviceInfo || {}
         };
       }),
-      supportTickets: tickets.map(serializeSupportTicket)
+      supportTickets: tickets.map(serializeSupportTicket),
+      pagination: {
+        users: { page, pageSize, total: filteredUserCount },
+        supportTickets: { page: ticketPage, pageSize, total: filteredTicketCount }
+      }
     });
   } catch (error) {
     return next(error);
@@ -2172,7 +2276,8 @@ async function listSupportTickets(req, res, next) {
   try {
     const status = String(req.query.status || "").trim();
     const filter = status ? { status } : {};
-    const tickets = await SupportTicket.find(filter).sort({ lastUpdatedAt: -1, createdAt: -1 });
+    const limit = safeLimit(req.query.limit, 100, 250);
+    const tickets = await SupportTicket.find(filter).sort({ lastUpdatedAt: -1, createdAt: -1 }).limit(limit).lean();
     return res.json({ tickets: tickets.map(serializeSupportTicket) });
   } catch (error) {
     return next(error);
