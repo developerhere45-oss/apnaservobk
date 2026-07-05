@@ -1056,7 +1056,7 @@ async function dashboard(req, res, next) {
       SupportTicket.countDocuments({ status: { $in: ["resolved", "closed"] } }),
       paymentSummaryTotals(),
       Booking.find().sort({ createdAt: -1 }).limit(8).lean(),
-      ReviewDispute.find().sort({ createdAt: -1 }).limit(6).lean(),
+      ReviewDispute.find().sort({ createdAt: -1 }).limit(6).populate("userId", "name phone").lean(),
       SupportTicket.find().sort({ lastUpdatedAt: -1, createdAt: -1 }).limit(6).lean(),
       Payment.find().sort({ createdAt: -1 }).limit(8).populate("partnerId", "name phone").populate("userId", "name phone").populate("bookingId", "bookingCode serviceName serviceCategory").lean(),
       AdminActivity.find().sort({ createdAt: -1 }).limit(12).lean(),
@@ -1072,7 +1072,7 @@ async function dashboard(req, res, next) {
       ...recentDisputes.map((entry) => ({
         id: id(entry._id),
         complaintId: entry.bookingCode || id(entry._id),
-        userName: "",
+        userName: entry.userId?.name || "",
         type: entry.reason || "review_dispute",
         status: entry.status || "",
         createdAt: iso(entry.createdAt),
