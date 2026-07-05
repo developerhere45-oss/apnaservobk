@@ -77,6 +77,7 @@ app.get("/health", (req, res) => {
   res.json({
     ok: true,
     service: "apnaservo-backend",
+    release: String(process.env.RENDER_GIT_COMMIT || process.env.APP_RELEASE || "local").slice(0, 7),
     realtime: "socket.io",
     dataStore: "mongodb",
     capabilities: {
