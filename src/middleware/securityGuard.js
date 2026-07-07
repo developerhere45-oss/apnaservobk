@@ -39,6 +39,33 @@ function isBlockedSensitiveKey(key) {
   return false;
 }
 
+function isPasswordPath(path) {
+  return normalizeKey(path).includes("password");
+}
+
+function isAllowedPasswordEndpoint(req) {
+  const method = String(req.method || "").toUpperCase();
+  const path = String(req.originalUrl || req.path || "").split("?")[0].replace(/\/+$/, "");
+
+  if (method === "POST" && ["/api/admin/login", "/api/employee/login"].includes(path)) {
+    return true;
+  }
+
+  if (method === "PATCH" && ["/api/admin/change-password", "/api/employee/change-password"].includes(path)) {
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/admin/employees") {
+    return true;
+  }
+
+  if (method === "PATCH" && /^\/api\/admin\/employees\/[^/]+\/reset-password$/.test(path)) {
+    return true;
+  }
+
+  return false;
+}
+
 function findSensitivePaths(value, prefix = "", found = []) {
   if (!value || typeof value !== "object") {
     return found;
@@ -59,8 +86,13 @@ function rejectPlainSensitiveFields(req, res, next) {
   const bodyFields = findSensitivePaths(req.body);
   const queryFields = findSensitivePaths(req.query);
   const fields = [...bodyFields, ...queryFields];
+  const passwordOnly = fields.length > 0 && fields.every(isPasswordPath);
 
   if (!fields.length) {
+    return next();
+  }
+
+  if (passwordOnly && isAllowedPasswordEndpoint(req)) {
     return next();
   }
 
