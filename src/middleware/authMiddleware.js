@@ -1,6 +1,10 @@
 const { admin } = require("../config/firebase");
+const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
+const Admin = require("../models/Admin");
+const Employee = require("../models/Employee");
+const ChatAssignment = require("../models/ChatAssignment");
 
 function csvSet(value, options = {}) {
   return new Set(String(value || "")
@@ -118,6 +122,134 @@ function timingSafeEqualString(left, right) {
   return require("crypto").timingSafeEqual(leftBuffer, rightBuffer);
 }
 
+function authJwtSecret() {
+  return String(
+    process.env.JWT_SECRET
+    || process.env.ADMIN_JWT_SECRET
+    || process.env.ADMIN_API_SECRET
+    || "dev-only-apnaservo-role-secret-change-me"
+  );
+}
+
+function bearerToken(req) {
+  const header = String(req.headers.authorization || "");
+  return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+}
+
+function signRoleToken(payload) {
+  const secret = authJwtSecret();
+  if (process.env.NODE_ENV === "production" && (!secret || secret.length < 32 || secret.startsWith("dev-only"))) {
+    throw new Error("JWT_SECRET or ADMIN_JWT_SECRET must be a 32+ character secret in production");
+  }
+  return jwt.sign(payload, secret, { expiresIn: "8h" });
+}
+
+function verifyRoleToken(req) {
+  const token = bearerToken(req);
+  if (!token) return null;
+  try {
+    return jwt.verify(token, authJwtSecret());
+  } catch {
+    return null;
+  }
+}
+
+async function authAdminJwt(req, res, next) {
+  try {
+    const payload = verifyRoleToken(req);
+    if (!payload || payload.type !== "admin" || !["super_admin", "admin"].includes(payload.role)) {
+      return res.status(401).json({ message: "Admin token required" });
+    }
+    const adminProfile = await Admin.findById(payload.id);
+    if (!adminProfile || adminProfile.status !== "active") {
+      return res.status(403).json({ message: "Admin account inactive" });
+    }
+    req.adminProfile = adminProfile;
+    req.auth = {
+      uid: String(adminProfile._id),
+      email: adminProfile.email,
+      email_verified: true,
+      role: adminProfile.role,
+      type: "admin"
+    };
+    req.authType = "admin_jwt";
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function authEmployee(req, res, next) {
+  try {
+    const payload = verifyRoleToken(req);
+    if (!payload || payload.type !== "employee" || payload.role !== "employee") {
+      return res.status(401).json({ message: "Employee token required" });
+    }
+    const employee = await Employee.findById(payload.id);
+    if (!employee || employee.status !== "active") {
+      return res.status(403).json({ message: "Employee account inactive" });
+    }
+    req.employeeProfile = employee;
+    req.auth = {
+      uid: String(employee._id),
+      email: employee.email,
+      email_verified: true,
+      role: "employee",
+      type: "employee",
+      permissions: employee.permissions || {}
+    };
+    req.authType = "employee_jwt";
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
+function requireRole(...roles) {
+  return (req, res, next) => {
+    const role = req.adminProfile?.role || req.employeeProfile?.role || req.auth?.role;
+    if (!roles.includes(role)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    return next();
+  };
+}
+
+function requirePermission(permissionName) {
+  return (req, res, next) => {
+    const permissions = req.employeeProfile?.permissions || req.auth?.permissions || {};
+    if (permissions[permissionName] !== true) {
+      return res.status(403).json({ message: "Permission denied" });
+    }
+    return next();
+  };
+}
+
+async function checkChatAssignment(req, res, next) {
+  try {
+    const employeeId = req.employeeProfile?._id;
+    const chatId = req.params.chatId || req.params.assignmentId;
+    const objectFilters = [];
+    if (require("mongoose").Types.ObjectId.isValid(chatId)) {
+      objectFilters.push({ _id: chatId }, { chatId }, { bookingId: chatId });
+    }
+    if (!objectFilters.length) {
+      return res.status(403).json({ message: "Access denied for this chat" });
+    }
+    const assignment = await ChatAssignment.findOne({
+      $or: objectFilters,
+      assignedTo: employeeId
+    });
+    if (!assignment) {
+      return res.status(403).json({ message: "Access denied for this chat" });
+    }
+    req.chatAssignment = assignment;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
 function verifyAdminSecret(req, res, next) {
   const configured = String(process.env.ADMIN_API_SECRET || "").trim();
   const supplied = String(req.headers["x-admin-secret"] || "").trim();
@@ -131,6 +263,11 @@ function verifyAdminSecret(req, res, next) {
     return next();
   }
 
+  const rolePayload = verifyRoleToken(req);
+  if (rolePayload?.type === "admin" && ["super_admin", "admin"].includes(rolePayload.role)) {
+    return authAdminJwt(req, res, next);
+  }
+
   return verifyFirebaseToken(req, res, (error) => {
     if (error) return next(error);
     return requireAdmin(req, res, next);
@@ -138,9 +275,15 @@ function verifyAdminSecret(req, res, next) {
 }
 
 module.exports = {
+  authAdminJwt,
+  authEmployee,
+  checkChatAssignment,
   verifyFirebaseToken,
   verifyAdminSecret,
   requireAdmin,
+  requirePermission,
+  requireRole,
+  signRoleToken,
   attachUser,
   attachPartner
 };

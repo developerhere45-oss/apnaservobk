@@ -7,7 +7,7 @@ const bookingMessageSchema = new mongoose.Schema(
     bookingCode: { type: String, default: "", trim: true, index: true },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     partnerId: { type: mongoose.Schema.Types.ObjectId, ref: "Partner", required: true, index: true },
-    senderRole: { type: String, enum: ["user", "partner"], required: true, index: true },
+    senderRole: { type: String, enum: ["user", "partner", "employee", "admin", "support"], required: true, index: true },
     senderFirebaseUid: { type: String, default: "", trim: true, index: true },
     senderName: { type: String, default: "", trim: true },
     message: { type: String, required: true, trim: true },

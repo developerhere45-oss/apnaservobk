@@ -17,6 +17,7 @@ const partnerRoutes = require("./routes/partnerRoutes");
 const bookingRoutes = require("./routes/bookingRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const employeeRoutes = require("./routes/employeeRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const reviewRoutes = require("./routes/reviewRoutes");
 const { initBookingSocket } = require("./sockets/bookingSocket");
@@ -108,6 +109,7 @@ app.use("/api/payments", paymentRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/employee", employeeRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

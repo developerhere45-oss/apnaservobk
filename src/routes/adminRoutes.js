@@ -1,10 +1,14 @@
 const router = require("express").Router();
 const multer = require("multer");
 const { verifyAdminSecret } = require("../middleware/authMiddleware");
-const { adminNotificationLimiter } = require("../middleware/securityRateLimits");
+const { authAdminJwt } = require("../middleware/authMiddleware");
+const { adminNotificationLimiter, loginLimiter } = require("../middleware/securityRateLimits");
 const { validateUploadedImage } = require("../utils/uploadSecurity");
 const controller = require("../controllers/adminController");
 const notifications = require("../controllers/adminNotificationController");
+const roleAuth = require("../controllers/roleAuthController");
+const employees = require("../controllers/adminEmployeeController");
+const chats = require("../controllers/adminChatController");
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -21,7 +25,28 @@ const upload = multer({
 
 router.get("/notifications/assets/:assetId", notifications.asset);
 router.get("/partners/assets/:assetId", controller.partnerUploadAsset);
+router.post("/login", loginLimiter, roleAuth.loginAdmin);
+router.post("/logout", roleAuth.logout);
+router.get("/me", authAdminJwt, roleAuth.adminMe);
+router.patch("/change-password", authAdminJwt, roleAuth.changeAdminPassword);
 router.use(verifyAdminSecret);
+router.get("/employees", employees.listEmployees);
+router.post("/employees", employees.createEmployee);
+router.get("/employees/:id", employees.getEmployee);
+router.put("/employees/:id", employees.updateEmployee);
+router.patch("/employees/:id/status", employees.updateEmployeeStatus);
+router.patch("/employees/:id/reset-password", employees.resetEmployeePassword);
+router.get("/employees/:id/activity", employees.employeeActivity);
+router.get("/chats", chats.listChats);
+router.get("/chats/:chatId", chats.getChat);
+router.post("/chats/:chatId/assign", chats.assignChat);
+router.patch("/chats/:chatId/transfer", chats.transferChat);
+router.patch("/chats/:chatId/remove-assignment", chats.removeAssignment);
+router.patch("/chats/:chatId/priority", chats.updatePriority);
+router.patch("/chats/:chatId/close", chats.closeChat);
+router.patch("/chats/:chatId/status", chats.updateStatus);
+router.post("/chats/:chatId/note", chats.addNote);
+router.get("/chats/:chatId/assignment-history", chats.assignmentHistory);
 router.get("/dashboard", controller.dashboard);
 router.get("/activity", controller.listAdminActivity);
 router.post("/actions", controller.performAdminAction);

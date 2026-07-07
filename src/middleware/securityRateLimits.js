@@ -66,6 +66,12 @@ const adminNotificationLimiter = limiter({
   message: "Too many admin notification requests. Please wait and try again."
 });
 
+const loginLimiter = limiter({
+  windowMs: 10 * 60 * 1000,
+  limit: 12,
+  message: "Too many login attempts. Please wait and try again."
+});
+
 const locationUpdateLimiter = limiter({
   windowMs: 60 * 1000,
   limit: 90,
@@ -86,6 +92,7 @@ module.exports = {
   chatReadLimiter,
   fcmTokenLimiter,
   locationUpdateLimiter,
+  loginLimiter,
   paymentLimiter,
   profileWriteLimiter,
   verificationLimiter
