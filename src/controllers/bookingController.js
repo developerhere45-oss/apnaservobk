@@ -966,12 +966,13 @@ async function updateStatus(req, res, next) {
       }
     }
 
-    if (partner && ["on_the_way", "arrived", "started"].includes(nextStatus)) {
+    const hasLocationPayload = Number.isFinite(Number(req.body?.lat)) && Number.isFinite(Number(req.body?.lng));
+    if (partner && ["on_the_way", "arrived", "started"].includes(nextStatus) && hasLocationPayload) {
       const validation = validatePartnerLocation({
         partner,
         booking: currentBooking,
         payload: req.body || {},
-        requireNearCustomer: nextStatus === "arrived"
+        requireNearCustomer: false
       });
       await LocationLog.create({
         partnerId: partner._id,
@@ -988,11 +989,11 @@ async function updateStatus(req, res, next) {
         distanceToCustomerM: validation.distanceToCustomerM,
         recordedAt: validation.recordedAt
       });
-      if (!validation.valid) {
-        await Partner.findByIdAndUpdate(partner._id, { $set: { locationTrustStatus: "suspicious" } });
-        return res.status(422).json({ message: validation.reason });
+      // Location is audit-only until live GPS enforcement is enabled. Manual
+      // workflow updates must succeed even when permission/GPS is unavailable.
+      if (validation.valid) {
+        await Partner.findByIdAndUpdate(partner._id, { $set: partnerLocationUpdate(validation) });
       }
-      await Partner.findByIdAndUpdate(partner._id, { $set: partnerLocationUpdate(validation) });
     }
 
     const update = {
@@ -1081,15 +1082,23 @@ async function updateStatus(req, res, next) {
     }
 
     const userForNotification = await User.findById(booking.userId);
-    if (["on_the_way", "amount_pending", "completed"].includes(nextStatus)) {
+    if (["on_the_way", "arrived", "started", "amount_pending", "completed"].includes(nextStatus)) {
       const notificationTitle = nextStatus === "completed"
         ? "Booking Completed"
         : nextStatus === "amount_pending"
           ? "Approve Price Quote"
-          : "Partner On The Way";
+          : nextStatus === "arrived"
+            ? "Partner Arrived"
+            : nextStatus === "started"
+              ? "Work Started"
+              : "Partner On The Way";
       const notificationBody = nextStatus === "amount_pending"
         ? `Partner sent Rs ${booking.finalAmount}. Approve within 24 hours or send a counter offer.`
-        : `${booking.serviceName} is ${nextStatus.replace(/_/g, " ")}`;
+        : nextStatus === "arrived"
+          ? `${booking.serviceName} partner has arrived at your location.`
+          : nextStatus === "started"
+            ? `${booking.serviceName} work is now in progress.`
+            : `${booking.serviceName} is ${nextStatus.replace(/_/g, " ")}`;
       await reliableNotify({
         recipients: [userRecipient(userForNotification)],
         title: notificationTitle,
