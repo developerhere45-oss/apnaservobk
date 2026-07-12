@@ -231,8 +231,8 @@ async function sendMessage(req, res, next) {
       const recipient = recipientFor(context.actor, context.booking, context.user, context.partner);
       await reliableNotify({
         recipients: [recipient],
-        title: context.actor.role === "user" ? "Customer message" : "Partner message",
-        body: body.message.length > 80 ? `${body.message.slice(0, 77)}...` : body.message,
+        title: `Message from ${context.actor.name}`,
+        body: `${context.booking.bookingCode}: ${body.message.length > 65 ? `${body.message.slice(0, 62)}...` : body.message}`,
         type: "booking_chat",
         category: "chat",
         priority: "normal",
@@ -241,7 +241,8 @@ async function sendMessage(req, res, next) {
           bookingId: String(context.booking._id),
           bookingCode: context.booking.bookingCode,
           messageId: String(message._id),
-          senderRole: context.actor.role
+          senderRole: context.actor.role,
+          senderName: context.actor.name
         },
         smsBody: `ApnaServo: New chat message for booking ${context.booking.bookingCode}. Open the app to reply.`
       });
