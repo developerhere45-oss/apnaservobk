@@ -8,7 +8,8 @@ const LocationLog = require("../models/LocationLog");
 const AdminActivity = require("../models/AdminActivity");
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
 const { serviceCategoryVariants } = require("../utils/serviceCategory");
-const { lifecycleLabel, lifecycleStatusForBooking, pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
+const { lifecycleLabel, lifecycleStatusForBooking } = require("../utils/bookingLifecycle");
+const findNearbyPartners = require("../utils/findNearbyPartners");
 
 let io;
 
@@ -75,10 +76,6 @@ function handleSocketEvent(socket, event, handler) {
   });
 }
 
-function escapeRegExp(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function partnerCanReceiveOpenBookings(partner) {
   if (!partner) return false;
   if (partner.accountStatus !== "active") return false;
@@ -101,39 +98,53 @@ async function dispatchPendingBookingsToSocketPartner(partner) {
     return 0;
   }
 
-  const cityRegex = new RegExp(escapeRegExp(partner.city || "Guwahati"), "i");
   const candidates = await Booking.find({
     partnerId: null,
-    rejectedPartners: { $ne: partner._id },
-    requestedPartners: { $ne: partner._id },
-    status: { $in: pendingAssignmentStatuses() },
+    requestedPartners: { $size: 0 },
+    status: "pending",
     serviceCategory: { $in: categories },
-    $or: [
-      { city: cityRegex },
-      { city: { $in: ["", null] } },
-      { requestedPartners: { $size: 0 } }
-    ]
   }).sort({ createdAt: -1 }).limit(20);
 
   let dispatched = 0;
   for (const booking of candidates) {
+    const coordinates = booking.location?.coordinates || [];
+    const lat = findNearbyPartners.validCoordinates(coordinates[1], coordinates[0]) ? coordinates[1] : null;
+    const lng = findNearbyPartners.validCoordinates(coordinates[1], coordinates[0]) ? coordinates[0] : null;
+    const match = await findNearbyPartners.withMetadata({
+      serviceCategory: booking.serviceCategory,
+      city: booking.city,
+      lat,
+      lng,
+      excludePartnerIds: booking.rejectedPartners || []
+    });
+    if (!match.partners.some((entry) => String(entry._id) === String(partner._id))) {
+      continue;
+    }
+    const now = new Date();
     const updated = await Booking.findOneAndUpdate(
       {
         _id: booking._id,
         partnerId: null,
-        rejectedPartners: { $ne: partner._id },
-        requestedPartners: { $ne: partner._id },
-        status: { $in: pendingAssignmentStatuses() }
+        requestedPartners: { $size: 0 },
+        status: "pending"
       },
       {
-        $addToSet: { requestedPartners: partner._id },
-        $set: { status: "sent_to_partner" },
+        $set: {
+          requestedPartners: match.partners.map((entry) => entry._id),
+          status: "sent_to_partner",
+          dispatchRadiusKm: match.radiusKm,
+          dispatchMode: match.mode,
+          dispatchedAt: now
+        },
+        $inc: { dispatchAttempt: 1 },
         $push: {
           statusTimeline: {
             status: "sent_to_partner",
-            at: new Date(),
+            at: now,
             by: "system",
-            note: "Dispatched when partner came online"
+            note: match.mode === "customer_location"
+              ? `Dispatched within ${match.radiusKm} km when a partner came online`
+              : "Dispatched by city when a partner came online"
           }
         }
       },
@@ -142,7 +153,7 @@ async function dispatchPendingBookingsToSocketPartner(partner) {
     if (!updated) {
       continue;
     }
-    emitNewBookingToPartners(updated, [partner]);
+    emitNewBookingToPartners(updated, match.partners);
     dispatched += 1;
   }
   return dispatched;
@@ -238,6 +249,10 @@ function serializeBooking(booking) {
     partnerPhotoUrl: doc.partnerSnapshot?.photoUrl || "",
     partnerRating: Number(doc.partnerSnapshot?.rating || 0),
     partnerRatingCount: Number(doc.partnerSnapshot?.ratingCount || 0),
+    dispatchRadiusKm: Number(doc.dispatchRadiusKm || 0),
+    dispatchMode: doc.dispatchMode || "",
+    dispatchedAt: doc.dispatchedAt || null,
+    dispatchedAtMillis: millis(doc.dispatchedAt),
     createdAt: doc.createdAt,
     createdAtMillis: millis(doc.createdAt),
     acceptedAt: doc.acceptedAt,

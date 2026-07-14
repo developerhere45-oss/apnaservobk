@@ -5,6 +5,7 @@ const {
   activeJobStatuses,
   isTerminalBookingStatus
 } = require("../src/utils/bookingLifecycle");
+const findNearbyPartners = require("../src/utils/findNearbyPartners");
 
 const checks = [];
 
@@ -91,6 +92,23 @@ record("multiple-device races require atomic current-status filters", () => {
   expectBlocked("accepted", "amount_pending", "partner");
   expectOk("amount_pending", "arrived", "partner", "pending", { idempotent: true });
   expectBlocked("cancelled", "completed", "user");
+});
+
+record("partner search expands from 5 km to 10 km", () => {
+  const customer = { lat: 26.1445, lng: 91.7362 };
+  const partners = [
+    { name: "near", location: { coordinates: [91.7722, 26.1445] } },
+    { name: "expanded", location: { coordinates: [91.7992, 26.1445] } },
+    { name: "outside", location: { coordinates: [91.8442, 26.1445] } }
+  ];
+  assert.deepEqual(findNearbyPartners.partnersWithinRadius(partners, customer.lat, customer.lng, 5).map((item) => item.partner.name), ["near"]);
+  assert.deepEqual(findNearbyPartners.partnersWithinRadius(partners, customer.lat, customer.lng, 10).map((item) => item.partner.name), ["near", "expanded"]);
+});
+
+record("partner search requires a valid customer location for radius matching", () => {
+  assert.equal(findNearbyPartners.validCoordinates(26.1445, 91.7362), true);
+  assert.equal(findNearbyPartners.validCoordinates(0, 0), false);
+  assert.equal(findNearbyPartners.validCoordinates(null, 91.7362), false);
 });
 
 const failures = checks.filter((check) => !check.ok);

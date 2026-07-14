@@ -7,7 +7,10 @@ const checks = [
   {
     name: "booking detail route has explicit authorization guard",
     file: "src/controllers/bookingController.js",
-    pass: (text) => text.includes("Not allowed to access this booking") && text.includes("canSeeOpenRequest") && text.includes("canSeeFallbackPending")
+    pass: (text) => text.includes("Not allowed to access this booking")
+      && text.includes("canSeeOpenRequest")
+      && text.includes("isRequestedPartner")
+      && !text.includes("canSeeFallbackPending")
   },
   {
     name: "socket booking requests are not broadcast to service/city rooms",

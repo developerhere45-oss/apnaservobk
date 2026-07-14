@@ -86,6 +86,10 @@ const bookingSchema = new mongoose.Schema(
     },
     requestedPartners: [{ type: mongoose.Schema.Types.ObjectId, ref: "Partner" }],
     rejectedPartners: [{ type: mongoose.Schema.Types.ObjectId, ref: "Partner" }],
+    dispatchRadiusKm: { type: Number, default: 0 },
+    dispatchMode: { type: String, enum: ["", "customer_location", "city_fallback"], default: "" },
+    dispatchAttempt: { type: Number, default: 0 },
+    dispatchedAt: { type: Date, default: null },
     userSnapshot: {
       name: String,
       phone: String,
@@ -97,6 +101,7 @@ const bookingSchema = new mongoose.Schema(
       phone: String,
       rating: Number,
       ratingCount: { type: Number, default: 0 },
+      photoUrl: String,
       fcmToken: String
     },
     slot: { type: String, default: "" },
@@ -127,7 +132,8 @@ const bookingSchema = new mongoose.Schema(
       {
         status: String,
         at: Date,
-        by: String
+        by: String,
+        note: String
       }
     ]
   },

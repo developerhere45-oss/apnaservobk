@@ -382,27 +382,13 @@ function partnerCategoryVariants(partner) {
 }
 
 function partnerOpenBookingVisibility(partner, categories) {
-  const cityRegex = new RegExp(escapeRegExp(partner.city || "Guwahati"), "i");
   return {
     partnerId: null,
     rejectedPartners: { $ne: partner._id },
     status: { $in: pendingAssignmentStatuses() },
-    $or: [
-      { requestedPartners: partner._id },
-      {
-        serviceCategory: { $in: categories },
-        $or: [
-          { requestedPartners: { $size: 0 } },
-          { city: cityRegex },
-          { city: { $in: ["", null] } }
-        ]
-      }
-    ]
+    serviceCategory: { $in: categories },
+    requestedPartners: partner._id
   };
-}
-
-function escapeRegExp(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function partnerAcceptBlockReason(partner) {
@@ -468,13 +454,14 @@ function emergencyPayload(body) {
 }
 
 async function dispatchBookingToPartners(booking, category, lat, lng) {
-  let partners = [];
+  let match = { partners: [], radiusKm: 0, mode: "" };
   try {
-    partners = await findNearbyPartners({
+    match = await findNearbyPartners.withMetadata({
       serviceCategory: category,
       city: booking.city,
       lat,
-      lng
+      lng,
+      excludePartnerIds: booking.rejectedPartners || []
     });
   } catch (error) {
     console.error("Partner matching failed", {
@@ -483,8 +470,9 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
       message: error.message
     });
     emitNewBookingToPartners(booking, []);
-    return partners;
+    return match.partners;
   }
+  const partners = match.partners;
 
   if (!partners.length) {
     emitNewBookingToPartners(booking, []);
@@ -502,9 +490,22 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
       {
         $set: {
           requestedPartners: partners.map((partner) => partner._id),
-          status: "sent_to_partner"
+          status: "sent_to_partner",
+          dispatchRadiusKm: match.radiusKm,
+          dispatchMode: match.mode,
+          dispatchedAt: new Date()
         },
-        $push: { statusTimeline: { status: "sent_to_partner", at: new Date(), by: "system" } }
+        $inc: { dispatchAttempt: 1 },
+        $push: {
+          statusTimeline: {
+            status: "sent_to_partner",
+            at: new Date(),
+            by: "system",
+            note: match.mode === "customer_location"
+              ? `Matched verified partners within ${match.radiusKm} km`
+              : "Matched verified partners using city fallback"
+          }
+        }
       },
       { new: true }
     );
@@ -645,8 +646,11 @@ async function createBooking(req, res, next) {
       return res.status(403).json({ message: "Phone OTP verification required before booking" });
     }
     const category = normalizeServiceCategory(body.serviceCategory || serviceCategoryForEmergency(body.emergencyType));
-    const lat = Number.isFinite(body.lat) ? body.lat : 26.1445;
-    const lng = Number.isFinite(body.lng) ? body.lng : 91.7362;
+    const hasCustomerLocation = findNearbyPartners.validCoordinates(body.lat, body.lng);
+    const lat = hasCustomerLocation ? Number(body.lat) : 26.1445;
+    const lng = hasCustomerLocation ? Number(body.lng) : 91.7362;
+    const dispatchLat = hasCustomerLocation ? lat : null;
+    const dispatchLng = hasCustomerLocation ? lng : null;
     const requestedBookingCode = body.bookingCode || bookingCode();
     const emergency = emergencyPayload(body);
 
@@ -657,7 +661,7 @@ async function createBooking(req, res, next) {
       }
 
       if (!existingBooking.requestedPartners?.length && !existingBooking.partnerId) {
-        queueBookingDispatch(existingBooking, existingBooking.serviceCategory || category, lat, lng);
+        queueBookingDispatch(existingBooking, existingBooking.serviceCategory || category, dispatchLat, dispatchLng);
       }
 
       return res.status(200).json({
@@ -703,7 +707,7 @@ async function createBooking(req, res, next) {
         const duplicate = await Booking.findOne({ bookingCode: requestedBookingCode });
         if (duplicate && String(duplicate.userId) === String(user._id)) {
           if (!duplicate.requestedPartners?.length && !duplicate.partnerId) {
-            queueBookingDispatch(duplicate, duplicate.serviceCategory || category, lat, lng);
+            queueBookingDispatch(duplicate, duplicate.serviceCategory || category, dispatchLat, dispatchLng);
           }
           return res.status(200).json({
             booking: serializeBooking(duplicate),
@@ -717,7 +721,7 @@ async function createBooking(req, res, next) {
     }
 
     emitAdminEvent("booking:new_request", serializeBooking(booking));
-    queueBookingDispatch(booking, category, lat, lng);
+    queueBookingDispatch(booking, category, dispatchLat, dispatchLng);
     User.findByIdAndUpdate(user._id, { $set: { lastBookingAt: new Date() } }).catch((error) => {
       console.error("Failed to update user last booking time", { userId: String(user._id), message: error.message });
     });
@@ -743,7 +747,7 @@ async function listUserBookings(req, res, next) {
       ? await User.find({ $or: identityFilters }).select("_id")
       : [];
     const userIds = [...new Set([String(user._id), ...linkedUsers.map((entry) => String(entry._id))])];
-    const bookings = await Booking.find({ userId: { $in: userIds } }).sort({ createdAt: -1 }).limit(500);
+    const bookings = await Booking.find({ userId: { $in: userIds } }).sort({ createdAt: -1 });
     await expireQuotesIfNeeded(bookings);
     return res.json({ bookings: bookings.map(serializeBooking) });
   } catch (error) {
@@ -821,6 +825,10 @@ async function acceptBooking(req, res, next) {
     );
 
     if (!booking) {
+      const current = await Booking.findOne(idFilter);
+      if (current && String(current.partnerId || "") === String(partner._id)) {
+        return res.json({ booking: serializeBooking(current), idempotent: true });
+      }
       return res.status(409).json({ message: "Booking already accepted or unavailable" });
     }
 
@@ -878,6 +886,13 @@ async function rejectBooking(req, res, next) {
         booking.requestedPartners = [];
         booking.statusTimeline.push({ status: "awaiting_partner_after_rejection", at: now, by: "system" });
         await booking.save();
+        const coordinates = booking.location?.coordinates || [];
+        queueBookingDispatch(
+          booking,
+          booking.serviceCategory,
+          findNearbyPartners.validCoordinates(coordinates[1], coordinates[0]) ? coordinates[1] : null,
+          findNearbyPartners.validCoordinates(coordinates[1], coordinates[0]) ? coordinates[0] : null
+        );
       }
       emitBookingRejected(booking, partner._id);
     }
@@ -1411,21 +1426,13 @@ async function getBooking(req, res, next) {
     if (partner) {
       const isAssignedPartner = String(booking.partnerId || "") === String(partner._id);
       const isRequestedPartner = (booking.requestedPartners || []).some((partnerId) => String(partnerId) === String(partner._id));
-      const partnerCategories = partnerCategoryVariants(partner);
       const canViewOpenJobs = partnerCanViewOpenJobs(partner);
       const canSeeOpenRequest = !booking.partnerId
         && pendingAssignmentStatuses().includes(booking.status)
         && canViewOpenJobs
         && isRequestedPartner
         && !booking.rejectedPartners?.some((partnerId) => String(partnerId) === String(partner._id));
-      const canSeeFallbackPending = !booking.partnerId
-        && booking.status === "pending"
-        && canViewOpenJobs
-        && (!booking.requestedPartners || booking.requestedPartners.length === 0)
-        && partnerCategories.includes(booking.serviceCategory)
-        && String(booking.city || "").toLowerCase() === String(partner.city || "Guwahati").toLowerCase()
-        && !booking.rejectedPartners?.some((partnerId) => String(partnerId) === String(partner._id));
-      if (!isAssignedPartner && !canSeeOpenRequest && !canSeeFallbackPending) {
+      if (!isAssignedPartner && !canSeeOpenRequest) {
         return res.status(403).json({ message: "Not allowed to access this booking" });
       }
       return res.json({ booking: protectCustomerPhoneForPartner(serializeBooking(booking), booking, partner) });
