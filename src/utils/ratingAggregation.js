@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const Partner = require("../models/Partner");
 const Review = require("../models/Review");
+const { Booking } = require("../models/Booking");
 
 async function recomputePartnerRating(partnerId) {
   if (!partnerId) {
@@ -26,11 +27,22 @@ async function recomputePartnerRating(partnerId) {
   const ratingCount = Number(summary?.count || 0);
   const rating = ratingCount > 0
     ? Math.round(Number(summary.average || 0) * 10) / 10
-    : 4.8;
+    : 0;
 
-  await Partner.findByIdAndUpdate(partnerId, {
-    $set: { rating, ratingCount }
-  });
+  await Promise.all([
+    Partner.findByIdAndUpdate(partnerId, {
+      $set: { rating, ratingCount }
+    }),
+    Booking.updateMany(
+      { partnerId },
+      {
+        $set: {
+          "partnerSnapshot.rating": rating,
+          "partnerSnapshot.ratingCount": ratingCount
+        }
+      }
+    )
+  ]);
 
   return { rating, ratingCount };
 }

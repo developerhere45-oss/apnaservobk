@@ -462,6 +462,7 @@ function partnerRow(partner, bookingCount = 0, profilePhoto = "") {
     trust: partner.trustStatus || "",
     status: blocked ? "blocked" : (partner.accountStatus || "active"),
     rating: Number(partner.rating || 0),
+    ratingCount: Number(partner.ratingCount || 0),
     approvalVersion: Number(partner.approvalVersion || 0),
     approvedAt: iso(partner.approvedAt),
     rejectedAt: iso(partner.rejectedAt),
@@ -663,6 +664,7 @@ function smartPartnerRow(partner, activeJobs = 0) {
     area: partner.serviceArea || partner.city || "Guwahati",
     city: partner.city || "",
     rating: Number(partner.rating || 0),
+    ratingCount: Number(partner.ratingCount || 0),
     totalJobs: Number(partner.totalJobs || 0),
     activeJobs,
     isOnline: Boolean(partner.isOnline),
@@ -1055,10 +1057,10 @@ async function dashboard(req, res, next) {
       SupportTicket.countDocuments({ status: { $in: ["open", "assigned", "in_progress", "waiting_on_customer", "reopened", "escalated"] } }),
       SupportTicket.countDocuments({ status: { $in: ["resolved", "closed"] } }),
       paymentSummaryTotals(),
-      Booking.find().sort({ createdAt: -1 }).limit(8),
-      ReviewDispute.find().sort({ createdAt: -1 }).limit(6).populate("userId", "name phone"),
-      SupportTicket.find().sort({ lastUpdatedAt: -1, createdAt: -1 }).limit(6),
-      Payment.find().sort({ createdAt: -1 }).limit(8).populate("partnerId", "name phone").populate("userId", "name phone").populate("bookingId", "bookingCode serviceName serviceCategory"),
+      Booking.find().sort({ createdAt: -1 }).limit(8).lean(),
+      ReviewDispute.find().sort({ createdAt: -1 }).limit(6).lean(),
+      SupportTicket.find().sort({ lastUpdatedAt: -1, createdAt: -1 }).limit(6).lean(),
+      Payment.find().sort({ createdAt: -1 }).limit(8).populate("partnerId", "name phone").populate("userId", "name phone").populate("bookingId", "bookingCode serviceName serviceCategory").lean(),
       AdminActivity.find().sort({ createdAt: -1 }).limit(12).lean(),
       bookingSummaryTotals()
     ]);
@@ -1072,7 +1074,7 @@ async function dashboard(req, res, next) {
       ...recentDisputes.map((entry) => ({
         id: id(entry._id),
         complaintId: entry.bookingCode || id(entry._id),
-        userName: entry.userId?.name || "",
+        userName: "",
         type: entry.reason || "review_dispute",
         status: entry.status || "",
         createdAt: iso(entry.createdAt),
@@ -1180,7 +1182,7 @@ async function listResourceRows(req, res, next) {
     let metrics = {};
 
     if (resource === "users") {
-      const users = await User.find().sort({ createdAt: -1 }).limit(limit);
+      const users = await User.find().sort({ createdAt: -1 }).limit(limit).lean();
       const userIds = users.map((user) => user._id);
       const [bookingCounts, disputeCounts, ticketCounts] = userIds.length ? await Promise.all([
         Booking.aggregate([{ $match: { userId: { $in: userIds } } }, { $group: { _id: "$userId", total: { $sum: 1 } } }]),
@@ -1217,7 +1219,7 @@ async function listResourceRows(req, res, next) {
       const visiblePartnerFilter = { accountStatus: { $ne: "deleted" } };
       // Deleted records remain available to admins through the Deleted Partners metric.
       // The dashboard hides them from the default list and reveals them on demand.
-      const partners = await Partner.find({}).sort({ createdAt: -1 }).limit(limit);
+      const partners = await Partner.find({}).sort({ createdAt: -1 }).limit(limit).lean();
       const countMap = await bookingCountByPartner(partners.map((partner) => partner._id));
       const profileMap = await profileDocumentUrlMap(req, partners.map((partner) => partner._id));
       rows = partners.map((partner) => {
@@ -1264,7 +1266,7 @@ async function listResourceRows(req, res, next) {
         accountStatus: "active",
         trustStatus: { $ne: "suspended" }
       };
-      const partners = await Partner.find(pendingPartnerFilter).sort({ createdAt: -1 }).limit(limit);
+      const partners = await Partner.find(pendingPartnerFilter).sort({ createdAt: -1 }).limit(limit).lean();
       const countMap = await bookingCountByPartner(partners.map((partner) => partner._id));
       const profileMap = await profileDocumentUrlMap(req, partners.map((partner) => partner._id));
       rows = partners.map((partner) => {
@@ -1282,7 +1284,7 @@ async function listResourceRows(req, res, next) {
         verified: await Partner.countDocuments({ kycStatus: "verified" })
       };
     } else if (resource === "bookings" || resource === "quotes") {
-      const bookings = await Booking.find().sort({ createdAt: -1 }).limit(limit);
+      const bookings = await Booking.find().sort({ createdAt: -1 }).limit(limit).lean();
       rows = bookings.map(bookingRow);
       const [bookingTotals, totalBookings, completed, pending, cancelled] = await Promise.all([
         bookingSummaryTotals(),
@@ -1300,7 +1302,7 @@ async function listResourceRows(req, res, next) {
         avgOrderValue: completed ? Math.round(bookingTotals.totalRevenue / completed) : 0
       };
     } else if (resource === "payments") {
-      const payments = await Payment.find().sort({ createdAt: -1 }).limit(limit).populate("partnerId", "name phone").populate("userId", "name phone").populate("bookingId", "bookingCode serviceName serviceCategory");
+      const payments = await Payment.find().sort({ createdAt: -1 }).limit(limit).populate("partnerId", "name phone").populate("userId", "name phone").populate("bookingId", "bookingCode serviceName serviceCategory").lean();
       rows = payments.map(paymentRow);
       const paymentTotals = await paymentSummaryTotals();
       metrics = {
@@ -1831,9 +1833,9 @@ async function usersControlCenter(req, res, next) {
 
     const [filteredUserCount, users, filteredTicketCount, tickets] = await Promise.all([
       User.countDocuments(userFilter),
-      User.find(userFilter).sort({ createdAt: -1 }).skip((page - 1) * pageSize).limit(pageSize),
+      User.find(userFilter).sort({ createdAt: -1 }).skip((page - 1) * pageSize).limit(pageSize).lean(),
       SupportTicket.countDocuments(ticketFilter),
-      SupportTicket.find(ticketFilter).sort({ lastUpdatedAt: -1, createdAt: -1 }).skip((ticketPage - 1) * pageSize).limit(pageSize)
+      SupportTicket.find(ticketFilter).sort({ lastUpdatedAt: -1, createdAt: -1 }).skip((ticketPage - 1) * pageSize).limit(pageSize).lean()
     ]);
 
     const userIds = users.map((user) => user._id);
@@ -2123,10 +2125,11 @@ async function partnerProfile(req, res, next) {
     if (!partnerObjectId) return res.status(400).json({ message: "Invalid partner id" });
     const partner = await Partner.findById(partnerObjectId);
     if (!partner) return res.status(404).json({ message: "Partner not found" });
-    const [documents, bookings, tickets] = await Promise.all([
+    const [documents, bookings, tickets, reviews] = await Promise.all([
       PartnerDocument.find({ partnerId: partner._id }).sort({ documentType: 1, createdAt: -1 }),
       Booking.find({ partnerId: partner._id }).sort({ createdAt: -1 }).limit(100),
-      SupportTicket.find({ partnerId: partner._id }).sort({ createdAt: -1 }).limit(100)
+      SupportTicket.find({ partnerId: partner._id }).sort({ createdAt: -1 }).limit(100),
+      Review.find({ partnerId: partner._id }).sort({ createdAt: -1 }).limit(100)
     ]);
     const approved = partner.isVerified === true && partner.kycStatus === "verified" && partner.trustStatus === "trusted";
     const blocked = partner.accountStatus === "blocked" || partner.accountStatus === "suspended" || partner.trustStatus === "suspended";
@@ -2164,6 +2167,13 @@ async function partnerProfile(req, res, next) {
         title: ticket.subject || ticket.title || ticket.category || "Support ticket",
         description: `Ticket ${ticket.ticketCode || id(ticket._id)} - ${ticket.status || "open"}`,
         createdAt: iso(ticket.updatedAt || ticket.createdAt)
+      })),
+      ...reviews.map((review) => ({
+        id: `${id(review._id)}:review`,
+        type: "review",
+        title: `${Number(review.rating || 0)} star customer rating`,
+        description: review.comment || "Customer submitted a rating.",
+        createdAt: iso(review.createdAt)
       })),
       {
         id: `${id(partner._id)}:registered`,
@@ -2209,6 +2219,8 @@ async function partnerProfile(req, res, next) {
         trustStatus: partner.trustStatus || "",
         accountStatus: partner.accountStatus || "active",
         online: Boolean(partner.isOnline),
+        rating: Number(partner.rating || 0),
+        ratingCount: Number(partner.ratingCount || 0),
         aadhaarStatus: partner.aadhaarStatus || "",
         idProofStatus: partner.idProofStatus || "",
         skillCertificateStatus: partner.skillCertificateStatus || "",
@@ -2217,6 +2229,20 @@ async function partnerProfile(req, res, next) {
       documents: documents.map((document) => serializePartnerDocument(document, req)),
       bookingHistory: bookings.map(bookingRow),
       supportTickets: tickets.map(serializeSupportTicket),
+      reviewHistory: reviews.map((review) => {
+        const booking = bookings.find((item) => String(item._id) === String(review.bookingId));
+        return {
+          id: id(review._id),
+          bookingId: id(review.bookingId),
+          bookingCode: booking?.bookingCode || id(review.bookingId),
+          customerName: booking?.userSnapshot?.name || "Customer",
+          rating: Number(review.rating || 0),
+          comment: review.comment || "",
+          status: review.status || "published",
+          disputeStatus: review.disputeStatus || "none",
+          createdAt: iso(review.createdAt)
+        };
+      }),
       activityHistory
     });
   } catch (error) {
@@ -2277,7 +2303,7 @@ async function listSupportTickets(req, res, next) {
     const status = String(req.query.status || "").trim();
     const filter = status ? { status } : {};
     const limit = safeLimit(req.query.limit, 100, 250);
-    const tickets = await SupportTicket.find(filter).sort({ lastUpdatedAt: -1, createdAt: -1 }).limit(limit);
+    const tickets = await SupportTicket.find(filter).sort({ lastUpdatedAt: -1, createdAt: -1 }).limit(limit).lean();
     return res.json({ tickets: tickets.map(serializeSupportTicket) });
   } catch (error) {
     return next(error);

@@ -96,6 +96,7 @@ const bookingSchema = new mongoose.Schema(
       name: String,
       phone: String,
       rating: Number,
+      ratingCount: { type: Number, default: 0 },
       fcmToken: String
     },
     slot: { type: String, default: "" },

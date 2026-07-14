@@ -146,6 +146,18 @@ async function submitReview(req, res, next) {
       }
     });
 
+    emitAdminEvent("review:created", {
+      reviewId: String(review._id),
+      bookingId: String(booking._id),
+      bookingCode: booking.bookingCode,
+      userId: String(user._id),
+      partnerId: String(booking.partnerId),
+      rating: review.rating,
+      comment: review.comment || "",
+      partnerRating: ratingSummary?.rating || 0,
+      partnerRatingCount: ratingSummary?.ratingCount || 0
+    });
+
     return res.status(201).json({ review: serializeReview(review), partnerRating: ratingSummary });
   } catch (error) {
     if (error?.code === 11000) {

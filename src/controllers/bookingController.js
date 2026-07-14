@@ -109,6 +109,10 @@ const QUOTE_EXPIRY_MS = 24 * 60 * 60 * 1000;
 const PARTNER_STATUS_UPDATES = ["on_the_way", "arrived", "started", "amount_pending", "completed", "cancelled"];
 const CUSTOMER_STATUS_UPDATES = ["cancelled", "completed", "disputed"];
 
+function hasStatusLocationPayload(body = {}) {
+  return Number.isFinite(Number(body.lat)) && Number.isFinite(Number(body.lng));
+}
+
 function bookingCode() {
   return `AS${Date.now().toString(36).toUpperCase()}${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 }
@@ -806,6 +810,7 @@ async function acceptBooking(req, res, next) {
             name: partner.name,
             phone: partner.phone,
             rating: partner.rating,
+            ratingCount: partner.ratingCount || 0,
             photoUrl: partner.photoUrl || partner.selfieUrl || "",
             fcmToken: partner.fcmToken
           }
@@ -966,13 +971,12 @@ async function updateStatus(req, res, next) {
       }
     }
 
-    const hasLocationPayload = Number.isFinite(Number(req.body?.lat)) && Number.isFinite(Number(req.body?.lng));
-    if (partner && ["on_the_way", "arrived", "started"].includes(nextStatus) && hasLocationPayload) {
+    if (partner && ["on_the_way", "arrived", "started"].includes(nextStatus) && hasStatusLocationPayload(req.body)) {
       const validation = validatePartnerLocation({
         partner,
         booking: currentBooking,
         payload: req.body || {},
-        requireNearCustomer: false
+        requireNearCustomer: nextStatus === "arrived"
       });
       await LocationLog.create({
         partnerId: partner._id,
@@ -989,9 +993,15 @@ async function updateStatus(req, res, next) {
         distanceToCustomerM: validation.distanceToCustomerM,
         recordedAt: validation.recordedAt
       });
-      // Location is audit-only until live GPS enforcement is enabled. Manual
-      // workflow updates must succeed even when permission/GPS is unavailable.
-      if (validation.valid) {
+      if (!validation.valid) {
+        await Partner.findByIdAndUpdate(partner._id, { $set: { locationTrustStatus: "suspicious" } });
+        console.warn("Ignoring non-blocking status location validation failure", {
+          bookingId: String(currentBooking._id),
+          partnerId: String(partner._id),
+          status: nextStatus,
+          reason: validation.reason
+        });
+      } else {
         await Partner.findByIdAndUpdate(partner._id, { $set: partnerLocationUpdate(validation) });
       }
     }
@@ -1083,22 +1093,30 @@ async function updateStatus(req, res, next) {
 
     const userForNotification = await User.findById(booking.userId);
     if (["on_the_way", "arrived", "started", "amount_pending", "completed"].includes(nextStatus)) {
-      const notificationTitle = nextStatus === "completed"
-        ? "Booking Completed"
-        : nextStatus === "amount_pending"
-          ? "Approve Price Quote"
-          : nextStatus === "arrived"
-            ? "Partner Arrived"
-            : nextStatus === "started"
-              ? "Work Started"
-              : "Partner On The Way";
-      const notificationBody = nextStatus === "amount_pending"
-        ? `Partner sent Rs ${booking.finalAmount}. Approve within 24 hours or send a counter offer.`
-        : nextStatus === "arrived"
-          ? `${booking.serviceName} partner has arrived at your location.`
-          : nextStatus === "started"
-            ? `${booking.serviceName} work is now in progress.`
-            : `${booking.serviceName} is ${nextStatus.replace(/_/g, " ")}`;
+      const statusNotificationCopy = {
+        on_the_way: {
+          title: "Partner On The Way",
+          body: `${booking.serviceName} partner is on the way.`
+        },
+        arrived: {
+          title: "Partner Arrived",
+          body: `${booking.serviceName} partner has arrived at your location.`
+        },
+        started: {
+          title: "Service Started",
+          body: `${booking.serviceName} work has started.`
+        },
+        amount_pending: {
+          title: "Approve Price Quote",
+          body: `Partner sent Rs ${booking.finalAmount}. Approve within 24 hours or send a counter offer.`
+        },
+        completed: {
+          title: "Booking Completed",
+          body: `${booking.serviceName} is completed.`
+        }
+      };
+      const notificationTitle = statusNotificationCopy[nextStatus].title;
+      const notificationBody = statusNotificationCopy[nextStatus].body;
       await reliableNotify({
         recipients: [userRecipient(userForNotification)],
         title: notificationTitle,

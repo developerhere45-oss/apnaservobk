@@ -236,6 +236,8 @@ function serializeBooking(booking) {
     partnerPhone: doc.partnerSnapshot?.phone || "",
     partnerPhoto: doc.partnerSnapshot?.photoUrl || "",
     partnerPhotoUrl: doc.partnerSnapshot?.photoUrl || "",
+    partnerRating: Number(doc.partnerSnapshot?.rating || 0),
+    partnerRatingCount: Number(doc.partnerSnapshot?.ratingCount || 0),
     createdAt: doc.createdAt,
     createdAtMillis: millis(doc.createdAt),
     acceptedAt: doc.acceptedAt,

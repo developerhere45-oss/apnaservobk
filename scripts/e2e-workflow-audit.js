@@ -83,12 +83,13 @@ record("partner rejection and unavailable cases stay before assignment", () => {
 
 record("offline retry and app restart duplicate events are idempotent", () => {
   expectOk("on_the_way", "on_the_way", "partner", "none", { idempotent: true });
+  expectOk("started", "on_the_way", "partner", "none", { idempotent: true });
   expectOk("completed", "completed", "user", "approved", { idempotent: true });
 });
 
 record("multiple-device races require atomic current-status filters", () => {
   expectBlocked("accepted", "amount_pending", "partner");
-  expectBlocked("amount_pending", "arrived", "partner");
+  expectOk("amount_pending", "arrived", "partner", "pending", { idempotent: true });
   expectBlocked("cancelled", "completed", "user");
 });
 

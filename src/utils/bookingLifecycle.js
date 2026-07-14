@@ -47,6 +47,15 @@ const STORAGE_STATUS_ALIASES = {
   negotiating: "amount_pending"
 };
 
+const PARTNER_STATUS_RANK = {
+  accepted: 1,
+  on_the_way: 2,
+  arrived: 3,
+  started: 4,
+  amount_pending: 5,
+  completed: 6
+};
+
 const LIFECYCLE_LABELS = {
   draft: "Draft",
   pending: "Pending",
@@ -156,24 +165,34 @@ function transitionDecision({ currentStatus, nextStatus, actorRole, quoteStatus 
   }
 
   if (actor === "partner") {
-    const partnerTransitions = {
-      accepted: ["on_the_way", "cancelled"],
-      on_the_way: ["arrived", "cancelled"],
-      arrived: ["started", "cancelled"],
-      started: ["amount_pending"],
-      amount_pending: ["amount_pending", "completed"]
-    };
-    const allowed = partnerTransitions[current] || [];
-    if (!allowed.includes(next)) {
-      return { ok: false, reason: `Partner cannot move booking from ${current} to ${next}` };
+    if (next === "cancelled") {
+      return ["accepted", "on_the_way", "arrived"].includes(current)
+        ? { ok: true }
+        : { ok: false, reason: "Booking cannot be cancelled after work starts" };
     }
-    if (current === "amount_pending" && next === "amount_pending" && quote !== "countered") {
-      return { ok: false, reason: "A quote is already pending customer approval" };
+
+    const currentRank = PARTNER_STATUS_RANK[current] || 0;
+    const nextRank = PARTNER_STATUS_RANK[next] || 0;
+    if (currentRank && nextRank) {
+      if (nextRank < currentRank) {
+        return { ok: true, idempotent: true, alreadyAdvanced: true };
+      }
+      if (nextRank > currentRank + 1) {
+        return { ok: false, reason: `Refresh booking before moving from ${current} to ${next}` };
+      }
+      if (next === "amount_pending" && current !== "started") {
+        return { ok: false, reason: "Service must be started before sending final amount" };
+      }
+      if (next === "completed" && current !== "amount_pending") {
+        return { ok: false, reason: "Customer payment confirmation is pending" };
+      }
+      if (current === "amount_pending" && next === "completed" && quote !== "payment_submitted") {
+        return { ok: false, reason: "Customer payment confirmation is pending" };
+      }
+      return { ok: true };
     }
-    if (current === "amount_pending" && next === "completed" && quote !== "payment_submitted") {
-      return { ok: false, reason: "Customer payment confirmation is pending" };
-    }
-    return { ok: true };
+
+    return { ok: false, reason: `Partner cannot move booking from ${current} to ${next}` };
   }
 
   if (actor === "user") {

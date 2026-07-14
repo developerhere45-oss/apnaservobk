@@ -100,7 +100,7 @@ const partnerSchema = new mongoose.Schema(
     trustStatus: { type: String, enum: ["trusted", "warning", "review_required", "suspended"], default: "review_required", index: true },
     lastFraudWarningAt: { type: Date, default: null },
     earnings: { type: Number, default: 0 },
-    rating: { type: Number, default: 4.8 },
+    rating: { type: Number, default: 0 },
     ratingCount: { type: Number, default: 0 },
     totalJobs: { type: Number, default: 0 },
     responseRate: { type: Number, default: 92 },
