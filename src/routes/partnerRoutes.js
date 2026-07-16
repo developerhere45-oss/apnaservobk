@@ -22,6 +22,11 @@ const upload = multer({
 router.use(verifyFirebaseToken);
 router.post("/profile", profileWriteLimiter, controller.upsertProfile);
 router.get("/me", controller.me);
+router.post("/staff/session", profileWriteLimiter, controller.staffSession);
+router.get("/staff/bookings", controller.listStaffBookings);
+router.patch("/staff/online", profileWriteLimiter, controller.setStaffOnline);
+router.patch("/staff/bookings/:bookingId/status", profileWriteLimiter, controller.updateStaffBookingStatus);
+router.patch("/laundry/bookings/:bookingId/assign-staff", profileWriteLimiter, controller.assignLaundryStaff);
 router.post("/verification", verificationLimiter, controller.submitVerification);
 router.post("/profile-photo", verificationLimiter, upload.single("photo"), validateUploadedImage(["image/jpeg", "image/png"]), rejectPlainSensitiveFields, controller.uploadProfilePhoto);
 router.post("/documents", verificationLimiter, upload.single("document"), validateUploadedImage(["image/jpeg", "image/png"]), rejectPlainSensitiveFields, controller.uploadDocument);

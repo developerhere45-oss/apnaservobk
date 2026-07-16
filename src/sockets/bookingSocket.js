@@ -249,6 +249,7 @@ function serializeBooking(booking) {
     partnerPhotoUrl: doc.partnerSnapshot?.photoUrl || "",
     partnerRating: Number(doc.partnerSnapshot?.rating || 0),
     partnerRatingCount: Number(doc.partnerSnapshot?.ratingCount || 0),
+    laundryAssignment: doc.laundryAssignment || {},
     dispatchRadiusKm: Number(doc.dispatchRadiusKm || 0),
     dispatchMode: doc.dispatchMode || "",
     dispatchedAt: doc.dispatchedAt || null,

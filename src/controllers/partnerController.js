@@ -12,7 +12,8 @@ const { normalizeServiceCategory, serviceCategoryVariants } = require("../utils/
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
 const { validateDocumentUpload } = require("../utils/documentValidation");
 const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
-const { emitAdminEvent, emitNewBookingToPartners } = require("../sockets/bookingSocket");
+const { reliableNotify } = require("../utils/reliableNotify");
+const { emitAdminEvent, emitNewBookingToPartners, serializeBooking } = require("../sockets/bookingSocket");
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 const { partnerAssetUrl } = require("../utils/partnerUploadAssets");
 
@@ -31,6 +32,25 @@ const profileSchema = z.object({
   serviceArea: z.string().trim().max(200).optional(),
   workingAreas: z.union([z.string().trim().max(500), z.array(z.string().trim().max(120)).max(30)]).optional(),
   languagesKnown: z.union([z.string().trim().max(300), z.array(z.string().trim().max(60)).max(20)]).optional(),
+  businessType: z.enum(["laundry"]).optional(),
+  laundryBusiness: z.object({
+    shopName: z.string().trim().min(2).max(120),
+    shopLicenseNumber: z.string().trim().min(2).max(100),
+    shopLocation: z.string().trim().min(3).max(700),
+    ownerName: z.string().trim().min(2).max(80),
+    ownerPhone: z.string().trim().max(20),
+    staffMembers: z.array(z.object({
+      sequence: z.coerce.number().int().min(1).max(100),
+      name: z.string().trim().min(2).max(80),
+      phone: z.string().trim().max(20),
+      idNumber: z.string().trim().min(4).max(100),
+      idType: z.string().trim().min(2).max(60),
+      documentType: z.string().trim().max(80).optional(),
+      documentTitle: z.string().trim().max(120).optional(),
+      role: z.string().trim().max(80).optional(),
+      photoUrl: z.string().trim().max(1000).optional()
+    })).min(1).max(20)
+  }).optional(),
   yearsOfExperience: z.coerce.number().min(0).max(80).optional(),
   serviceRadiusKm: z.coerce.number().min(1).max(250).optional(),
   lat: z.coerce.number().min(-90).max(90).optional(),
@@ -77,11 +97,18 @@ const partnerDocumentTypes = [
   "training_certificate",
   "government_license",
   "trade_license",
-  "other_supporting_document"
+  "other_supporting_document",
+  "laundry_shop_license",
+  "laundry_staff_identity"
 ];
 
 const documentUploadSchema = z.object({
-  documentType: z.enum(partnerDocumentTypes),
+  documentType: z.string().trim().min(2).max(80)
+    .transform((value) => value.toLowerCase().replace(/[\s-]+/g, "_"))
+    .refine(
+      (value) => partnerDocumentTypes.includes(value) || /^laundry_staff_\d+_identity$/.test(value),
+      "Unsupported partner document type"
+    ),
   aadhaarLast4: z.string().regex(/^\d{4}$/).optional(),
   compressedByClient: z.coerce.boolean().optional(),
   originalSizeBytes: z.coerce.number().min(0).max(20 * 1024 * 1024).optional()
@@ -201,6 +228,109 @@ function identityHash(value) {
   return crypto.createHmac("sha256", secret).update(normalized).digest("hex");
 }
 
+function bookingIdentityFilter(value) {
+  const bookingId = String(value || "").trim();
+  return /^[a-f0-9]{24}$/i.test(bookingId)
+    ? { $or: [{ _id: bookingId }, { bookingCode: bookingId }] }
+    : { bookingCode: bookingId };
+}
+
+function staffPublicProfile(partner, staff) {
+  const approved = partner.businessVerificationStatus === "approved"
+    && partner.accountStatus === "active"
+    && partner.trustStatus !== "suspended";
+  return {
+    sequence: Number(staff.sequence || 0),
+    name: staff.name || "Laundry Staff",
+    phone: staff.phone || "",
+    role: staff.role || "Laundry Staff",
+    photoUrl: staff.photoUrl || "",
+    verificationStatus: staff.verificationStatus === "blocked"
+      ? "blocked"
+      : (approved && staff.verificationStatus === "verified" ? "verified" : (staff.verificationStatus || "pending_review")),
+    isOnline: Boolean(staff.isOnline),
+    shopName: partner.laundryBusiness?.shopName || "ApnaServo Laundry",
+    shopLocation: partner.laundryBusiness?.shopLocation || partner.serviceArea || "Guwahati, Assam",
+    ownerPartnerId: String(partner._id),
+    ownerName: partner.laundryBusiness?.ownerName || partner.name || ""
+  };
+}
+
+async function findStaffContext(req, { requireApproved = true } = {}) {
+  const phone = normalizePhone(req.auth?.phone_number || "");
+  if (!phone || req.auth?.development_device) {
+    const error = new Error("Verified phone OTP is required for staff access");
+    error.status = 401;
+    throw error;
+  }
+  const phoneHash = identityHash(phone);
+  let partner = await Partner.findOne({
+    businessType: "laundry",
+    $or: [
+      { "laundryBusiness.staffMembers.firebaseUid": req.auth.uid },
+      { "laundryBusiness.staffMembers.phoneHash": phoneHash }
+    ]
+  });
+
+  if (!partner) {
+    const candidates = await Partner.find({ businessType: "laundry" }).limit(500);
+    partner = candidates.find((entry) => (entry.laundryBusiness?.staffMembers || [])
+      .some((member) => normalizePhone(member.phone) === phone));
+  }
+  if (!partner) {
+    const error = new Error("No Laundry staff invitation was found for this phone number");
+    error.status = 404;
+    throw error;
+  }
+
+  const staff = (partner.laundryBusiness?.staffMembers || []).find((member) =>
+    member.firebaseUid === req.auth.uid
+      || member.phoneHash === phoneHash
+      || normalizePhone(member.phone) === phone
+  );
+  if (!staff) {
+    const error = new Error("Laundry staff profile not found");
+    error.status = 404;
+    throw error;
+  }
+  if (staff.firebaseUid && staff.firebaseUid !== req.auth.uid) {
+    const error = new Error("This staff phone is already linked to another account");
+    error.status = 409;
+    throw error;
+  }
+  if (["blocked", "rejected"].includes(staff.verificationStatus)) {
+    const error = new Error("Staff access is blocked. Contact the Laundry shop owner or ApnaServo Support");
+    error.status = 403;
+    throw error;
+  }
+  if (requireApproved && (
+    partner.businessVerificationStatus !== "approved"
+    || partner.accountStatus !== "active"
+    || partner.trustStatus === "suspended"
+    || staff.verificationStatus !== "verified"
+  )) {
+    const error = new Error("Laundry shop or staff verification is still pending");
+    error.status = 403;
+    throw error;
+  }
+  let contextChanged = false;
+  if (staff.phoneHash !== phoneHash) {
+    staff.phoneHash = phoneHash;
+    contextChanged = true;
+  }
+  if (staff.firebaseUid !== req.auth.uid) {
+    staff.firebaseUid = req.auth.uid;
+    contextChanged = true;
+  }
+  const now = Date.now();
+  const previousLoginAt = staff.lastLoginAt ? new Date(staff.lastLoginAt).getTime() : 0;
+  if (!Number.isFinite(previousLoginAt) || now - previousLoginAt >= 5 * 60 * 1000) {
+    staff.lastLoginAt = new Date(now);
+    contextChanged = true;
+  }
+  return { partner, staff, phoneHash, contextChanged };
+}
+
 function tokenHasVerifiedEmail(req, email) {
   return Boolean(
     email
@@ -212,7 +342,7 @@ function tokenHasVerifiedEmail(req, email) {
 async function findVerifiedEmailPartner(req, email, emailHash) {
   if (!emailHash || !tokenHasVerifiedEmail(req, email)) return null;
   return Partner.findOne({ firebaseUid: { $ne: req.auth.uid }, emailHash })
-    .select("_id firebaseUid phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken")
+    .select("_id firebaseUid phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken businessType businessVerificationStatus laundryBusiness")
     .lean();
 }
 
@@ -371,17 +501,59 @@ async function upsertProfile(req, res, next) {
     if (!categories.length) {
       return res.status(400).json({ message: "At least one valid service category is required" });
     }
+    const isLaundryRegistration = body.businessType === "laundry";
+    if (isLaundryRegistration && (!categories.includes("laundry") || !body.laundryBusiness)) {
+      return res.status(400).json({ message: "Complete laundry business and staff details are required" });
+    }
+    if (isLaundryRegistration && !normalizePhone(body.laundryBusiness.ownerPhone)) {
+      return res.status(400).json({ message: "Valid laundry owner phone number is required" });
+    }
+    if (isLaundryRegistration && body.laundryBusiness.staffMembers.some((staff) => !normalizePhone(staff.phone))) {
+      return res.status(400).json({ message: "Every laundry staff member requires a valid phone number" });
+    }
+    const ownerPhone = isLaundryRegistration ? normalizePhone(body.laundryBusiness.ownerPhone) : "";
+    const normalizedLaundryStaff = isLaundryRegistration
+      ? body.laundryBusiness.staffMembers.map((staff) => {
+          const staffPhone = normalizePhone(staff.phone);
+          return {
+            ...staff,
+            phone: staffPhone,
+            phoneHash: identityHash(staffPhone),
+            role: staff.role || "Laundry Staff",
+            photoUrl: staff.photoUrl || ""
+          };
+        })
+      : [];
+    if (isLaundryRegistration) {
+      const staffHashes = normalizedLaundryStaff.map((staff) => staff.phoneHash);
+      if (new Set(staffHashes).size !== staffHashes.length) {
+        return res.status(400).json({ message: "Each Laundry staff member must use a different phone number" });
+      }
+      if (normalizedLaundryStaff.some((staff) => staff.phone === ownerPhone)) {
+        return res.status(400).json({ message: "Owner and staff phone numbers must be different" });
+      }
+      const claimedByAnotherShop = await Partner.exists({
+        firebaseUid: { $ne: req.auth.uid },
+        "laundryBusiness.staffMembers.phoneHash": { $in: staffHashes }
+      });
+      if (claimedByAnotherShop) {
+        return res.status(409).json({ message: "A staff phone number is already registered with another Laundry shop" });
+      }
+    }
     const phoneHash = identityHash(phone);
     const emailHash = identityHash(email);
     const existingPartner = await Partner.findOne({ firebaseUid: req.auth.uid })
-      .select("_id phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken")
+      .select("_id phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken businessType businessVerificationStatus laundryBusiness")
       .lean();
     const emailPartner = await findVerifiedEmailPartner(req, email, emailHash);
     const targetPartner = emailPartner || existingPartner;
     await ensureUniquePartnerIdentity({ uid: req.auth.uid, partnerId: targetPartner?._id, phoneHash, emailHash });
-    const adminApproved = targetPartner?.isVerified === true
+    const standardApproval = targetPartner?.isVerified === true
       && targetPartner?.kycStatus === "verified"
       && targetPartner?.trustStatus === "trusted";
+    const laundryApproval = targetPartner?.businessType === "laundry"
+      && targetPartner?.businessVerificationStatus === "approved";
+    const adminApproved = standardApproval && (!isLaundryRegistration || laundryApproval);
     const currentTrustStatus = targetPartner?.trustStatus || "review_required";
     const update = {
       firebaseUid: req.auth.uid,
@@ -403,11 +575,33 @@ async function upsertProfile(req, res, next) {
       languagesKnown: listFromBody(body.languagesKnown || "Hindi, English"),
       yearsOfExperience: Number.isFinite(body.yearsOfExperience) ? body.yearsOfExperience : 0,
       serviceRadiusKm: body.serviceRadiusKm || 25,
-      isOnline: body.isOnline !== false,
+      isOnline: isLaundryRegistration && !adminApproved ? false : body.isOnline !== false,
       isVerified: adminApproved,
       trustStatus: currentTrustStatus === "suspended"
         ? "suspended"
-        : (adminApproved ? "trusted" : "review_required")
+        : (adminApproved ? "trusted" : "review_required"),
+      ...(isLaundryRegistration ? {
+        businessType: "laundry",
+        businessVerificationStatus: adminApproved ? "approved" : "pending_review",
+        laundryBusiness: {
+          ...body.laundryBusiness,
+          ownerPhone,
+          staffMembers: normalizedLaundryStaff.map((staff) => {
+            const previous = (targetPartner?.laundryBusiness?.staffMembers || []).find((entry) =>
+              entry.phoneHash === staff.phoneHash || normalizePhone(entry.phone) === staff.phone
+            );
+            return {
+              ...staff,
+              firebaseUid: previous?.firebaseUid || "",
+              verificationStatus: previous?.verificationStatus || "pending_review",
+              isOnline: Boolean(previous?.isOnline),
+              fcmToken: previous?.fcmToken || "",
+              lastLoginAt: previous?.lastLoginAt || null
+            };
+          })
+        },
+        kycStatus: adminApproved ? "verified" : "pending_review"
+      } : {})
     };
     if (!adminApproved && currentTrustStatus !== "suspended" && targetPartner?.kycStatus !== "rejected") {
       update.kycStatus = targetPartner?.kycStatus || "pending_review";
@@ -458,7 +652,7 @@ async function upsertProfile(req, res, next) {
 async function me(req, res, next) {
   try {
     let partner = await Partner.findOne({ firebaseUid: req.auth.uid })
-      .select("_id firebaseUid partnerCode name phone email dateOfBirth gender residentialAddress city state pinCode emergencyContactNumber serviceCategory yearsOfExperience workingAreas languagesKnown serviceArea serviceRadiusKm photoUrl accountStatus phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken approvalVersion approvedAt rejectedAt rejectionReason");
+      .select("_id firebaseUid partnerCode name phone email dateOfBirth gender residentialAddress city state pinCode emergencyContactNumber serviceCategory yearsOfExperience workingAreas languagesKnown serviceArea serviceRadiusKm photoUrl accountStatus phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken approvalVersion approvedAt rejectedAt rejectionReason businessType businessVerificationStatus laundryBusiness");
     if (req.auth.email_verified === true && req.auth.email) {
       const email = normalizeEmail(req.auth.email);
       const emailHash = identityHash(email);
@@ -547,6 +741,9 @@ async function uploadDocument(req, res, next) {
     if (!partner) {
       return res.status(404).json({ message: "Partner profile not found" });
     }
+    const isLaundryDocument = body.documentType === "laundry_shop_license"
+      || body.documentType === "laundry_staff_identity"
+      || /^laundry_staff_\d+_identity$/.test(body.documentType);
     if (["id_proof", "aadhaar_front", "aadhaar_back"].includes(body.documentType) && !body.aadhaarLast4) {
       return res.status(400).json({ message: "Aadhaar last 4 digits required for ID proof" });
     }
@@ -651,7 +848,7 @@ async function uploadDocument(req, res, next) {
       update.skillCertificateUrl = uploaded.url;
       update.skillCertificateStatus = "submitted";
     }
-    update.kycStatus = kycStatusFor(update, partner);
+    update.kycStatus = isLaundryDocument ? "pending_review" : kycStatusFor(update, partner);
     partner.set(update);
     await partner.save();
 
@@ -820,6 +1017,172 @@ async function setOnline(req, res, next) {
     );
     const dispatchedBookings = isOnline ? await dispatchPendingBookingsToPartner(partner) : 0;
     return res.json({ ok: true, partner, dispatchedBookings });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function staffJobsFor(partner, staff) {
+  return Booking.find({
+    partnerId: partner._id,
+    $or: [
+      { "laundryAssignment.staffFirebaseUid": staff.firebaseUid },
+      { "laundryAssignment.staffPhoneHash": staff.phoneHash }
+    ]
+  }).sort({ updatedAt: -1, createdAt: -1 }).limit(200);
+}
+
+async function staffSession(req, res, next) {
+  try {
+    const { partner, staff } = await findStaffContext(req);
+    const fcmToken = String(req.body?.fcmToken || "").trim();
+    if (fcmToken && fcmToken.length <= 4096) staff.fcmToken = fcmToken;
+    staff.isOnline = req.body?.isOnline !== false;
+    partner.markModified("laundryBusiness.staffMembers");
+    await partner.save();
+    const bookings = await staffJobsFor(partner, staff);
+    return res.json({
+      ok: true,
+      sessionRole: "laundry_staff",
+      staff: staffPublicProfile(partner, staff),
+      bookings: bookings.map(serializeBooking)
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function listStaffBookings(req, res, next) {
+  try {
+    const { partner, staff, contextChanged } = await findStaffContext(req);
+    if (contextChanged) {
+      partner.markModified("laundryBusiness.staffMembers");
+      await partner.save();
+    }
+    const bookings = await staffJobsFor(partner, staff);
+    return res.json({
+      staff: staffPublicProfile(partner, staff),
+      bookings: bookings.map(serializeBooking)
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function setStaffOnline(req, res, next) {
+  try {
+    const { partner, staff } = await findStaffContext(req);
+    staff.isOnline = req.body?.isOnline !== false;
+    const fcmToken = String(req.body?.fcmToken || "").trim();
+    if (fcmToken && fcmToken.length <= 4096) staff.fcmToken = fcmToken;
+    partner.markModified("laundryBusiness.staffMembers");
+    await partner.save();
+    return res.json({ ok: true, staff: staffPublicProfile(partner, staff) });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function assignLaundryStaff(req, res, next) {
+  try {
+    const owner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    if (!owner || owner.businessType !== "laundry" || owner.businessVerificationStatus !== "approved") {
+      return res.status(403).json({ message: "Approved Laundry owner access required" });
+    }
+    const sequence = Number(req.body?.staffSequence || 0);
+    const staff = (owner.laundryBusiness?.staffMembers || []).find((member) => Number(member.sequence) === sequence);
+    if (!staff || staff.verificationStatus !== "verified") {
+      return res.status(404).json({ message: "Verified Laundry staff member not found" });
+    }
+    const booking = await Booking.findOne({
+      ...bookingIdentityFilter(req.params.bookingId),
+      partnerId: owner._id
+    });
+    if (!booking) {
+      return res.status(404).json({ message: "Laundry order not found for this shop" });
+    }
+    if (["completed", "cancelled"].includes(booking.status)) {
+      return res.status(409).json({ message: "Completed or cancelled Laundry orders cannot be assigned" });
+    }
+    if (["in_progress", "completed"].includes(booking.laundryAssignment?.taskStatus)) {
+      return res.status(409).json({ message: "A Laundry task already in progress cannot be reassigned" });
+    }
+    booking.laundryAssignment = {
+      ownerPartnerId: owner._id,
+      staffSequence: Number(staff.sequence || 0),
+      staffName: staff.name || "Laundry Staff",
+      staffPhoneHash: staff.phoneHash || identityHash(normalizePhone(staff.phone)),
+      staffFirebaseUid: staff.firebaseUid || "",
+      taskStatus: "assigned",
+      assignedAt: new Date(),
+      startedAt: null,
+      completedAt: null
+    };
+    await booking.save();
+    if (staff.fcmToken) {
+      await reliableNotify({
+        recipients: [{
+          role: "partner",
+          partnerId: owner._id,
+          firebaseUid: staff.firebaseUid || "",
+          token: staff.fcmToken,
+          phone: staff.phone
+        }],
+        title: "New Laundry Task Assigned",
+        body: `${owner.laundryBusiness?.shopName || "Your shop"} assigned order ${booking.bookingCode}`,
+        category: "laundry_staff_assignment",
+        priority: "high",
+        data: {
+          type: "laundry:staff_assignment",
+          targetApp: "partner",
+          actionType: "OPEN_LAUNDRY_JOB",
+          bookingId: String(booking._id),
+          bookingCode: booking.bookingCode
+        }
+      });
+    }
+    return res.json({ ok: true, booking: serializeBooking(booking), staff: staffPublicProfile(owner, staff) });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function updateStaffBookingStatus(req, res, next) {
+  try {
+    const { partner, staff, contextChanged } = await findStaffContext(req);
+    if (contextChanged) {
+      partner.markModified("laundryBusiness.staffMembers");
+      await partner.save();
+    }
+    const status = String(req.body?.status || "").trim().toLowerCase();
+    if (!["in_progress", "completed"].includes(status)) {
+      return res.status(400).json({ message: "Invalid Laundry task status" });
+    }
+    const booking = await Booking.findOne({
+      ...bookingIdentityFilter(req.params.bookingId),
+      partnerId: partner._id,
+      $or: [
+        { "laundryAssignment.staffFirebaseUid": staff.firebaseUid },
+        { "laundryAssignment.staffPhoneHash": staff.phoneHash }
+      ]
+    });
+    if (!booking) return res.status(404).json({ message: "Assigned Laundry order not found" });
+    const current = booking.laundryAssignment?.taskStatus || "assigned";
+    if (status === "in_progress" && !["assigned", "in_progress"].includes(current)) {
+      return res.status(409).json({ message: "Only assigned tasks can be started" });
+    }
+    if (status === "completed" && !["in_progress", "completed"].includes(current)) {
+      return res.status(409).json({ message: "Start the task before completing it" });
+    }
+    booking.laundryAssignment.taskStatus = status;
+    if (status === "in_progress" && !booking.laundryAssignment.startedAt) {
+      booking.laundryAssignment.startedAt = new Date();
+    }
+    if (status === "completed" && !booking.laundryAssignment.completedAt) {
+      booking.laundryAssignment.completedAt = new Date();
+    }
+    await booking.save();
+    return res.json({ ok: true, booking: serializeBooking(booking) });
   } catch (error) {
     return next(error);
   }
@@ -1070,6 +1433,11 @@ module.exports = {
   createSupportTicket,
   requestDeletion,
   setOnline,
+  staffSession,
+  listStaffBookings,
+  setStaffOnline,
+  assignLaundryStaff,
+  updateStaffBookingStatus,
   updateLocation,
   statement
 };

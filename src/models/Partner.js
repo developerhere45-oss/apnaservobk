@@ -37,6 +37,51 @@ const verificationHistorySchema = new mongoose.Schema(
   { _id: true }
 );
 
+const laundryStaffSchema = new mongoose.Schema(
+  {
+    sequence: { type: Number, required: true, min: 1 },
+    name: { type: String, trim: true, default: "" },
+    phone: { type: String, trim: true, default: "" },
+    phoneHash: { type: String, trim: true, default: "" },
+    firebaseUid: { type: String, trim: true, default: "" },
+    role: { type: String, trim: true, default: "Laundry Staff" },
+    photoUrl: { type: String, trim: true, default: "" },
+    verificationStatus: {
+      type: String,
+      enum: ["pending_review", "verified", "rejected", "blocked"],
+      default: "pending_review"
+    },
+    isOnline: { type: Boolean, default: false },
+    fcmToken: { type: String, trim: true, default: "" },
+    lastLoginAt: { type: Date, default: null },
+    idNumber: { type: String, trim: true, default: "" },
+    idType: { type: String, trim: true, default: "" },
+    documentType: { type: String, trim: true, default: "" },
+    documentTitle: { type: String, trim: true, default: "" }
+  },
+  { _id: false }
+);
+
+laundryStaffSchema.plugin(encryptedFieldsPlugin, {
+  fields: ["name", "phone", "role", "photoUrl", "fcmToken", "idNumber", "documentTitle"]
+});
+
+const laundryBusinessSchema = new mongoose.Schema(
+  {
+    shopName: { type: String, trim: true, default: "" },
+    shopLicenseNumber: { type: String, trim: true, default: "" },
+    shopLocation: { type: String, trim: true, default: "" },
+    ownerName: { type: String, trim: true, default: "" },
+    ownerPhone: { type: String, trim: true, default: "" },
+    staffMembers: { type: [laundryStaffSchema], default: [] }
+  },
+  { _id: false }
+);
+
+laundryBusinessSchema.plugin(encryptedFieldsPlugin, {
+  fields: ["shopName", "shopLicenseNumber", "shopLocation", "ownerName", "ownerPhone"]
+});
+
 const partnerSchema = new mongoose.Schema(
   {
     firebaseUid: { type: String, required: true, unique: true, index: true },
@@ -56,6 +101,14 @@ const partnerSchema = new mongoose.Schema(
     yearsOfExperience: { type: Number, default: 0 },
     workingAreas: { type: [String], default: [] },
     languagesKnown: { type: [String], default: [] },
+    businessType: { type: String, enum: ["", "laundry"], default: "", index: true },
+    businessVerificationStatus: {
+      type: String,
+      enum: ["not_required", "pending_review", "approved", "rejected"],
+      default: "not_required",
+      index: true
+    },
+    laundryBusiness: { type: laundryBusinessSchema, default: undefined },
     isOnline: { type: Boolean, default: true, index: true },
     isVerified: { type: Boolean, default: false },
     city: { type: String, trim: true, default: "Guwahati" },
@@ -125,6 +178,8 @@ partnerSchema.index({ kycStatus: 1, approvedAt: -1, rejectedAt: -1 });
 partnerSchema.index({ phoneHash: 1 }, { unique: true, partialFilterExpression: { phoneHash: { $type: "string", $gt: "" } } });
 partnerSchema.index({ emailHash: 1 }, { unique: true, partialFilterExpression: { emailHash: { $type: "string", $gt: "" } } });
 partnerSchema.index({ "deviceTokens.tokenHash": 1, "deviceTokens.isActive": 1 });
+partnerSchema.index({ "laundryBusiness.staffMembers.phoneHash": 1 });
+partnerSchema.index({ "laundryBusiness.staffMembers.firebaseUid": 1 });
 partnerSchema.plugin(encryptedFieldsPlugin, {
   fields: ["name", "phone", "email", "dateOfBirth", "gender", "residentialAddress", "state", "pinCode", "emergencyContactNumber", "workingAreas", "languagesKnown", "serviceArea", "fcmToken", "deviceTokens.token", "deviceTokens.deviceId", "photoUrl", "selfieUrl", "faceLivenessSessionId", "aadhaarLast4", "idProofUrl", "skillCertificateUrl", "deletionReason", "rejectionReason"]
 });

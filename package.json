@@ -14,6 +14,7 @@
     "check:unix": "find src -name '*.js' -print0 | xargs -0 -n1 node --check",
     "audit:e2e": "node scripts/e2e-workflow-audit.js",
     "audit:booking-race": "node scripts/booking-acceptance-race-audit.js",
+    "audit:laundry-workflow": "node scripts/laundry-workflow-audit.js",
     "db:audit": "node scripts/db-audit.js",
     "db:audit:schema": "node scripts/db-audit.js --schema-only",
     "db:migrate": "node scripts/db-migrate-fixes.js",
@@ -44,5 +45,8 @@
   "devDependencies": {
     "mongodb-memory-server": "^11.2.0",
     "nodemon": "^3.1.11"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

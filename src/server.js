@@ -87,6 +87,8 @@ app.get("/health", (req, res) => {
       partnerUploadAssets: true,
       partnerPaymentVerification: true,
       broadPartnerDispatch: true,
+      laundryBusinessOnboarding: true,
+      laundryStaffWorkspace: true,
       deviceAuthFallback: process.env.DISABLE_DEVICE_AUTH_FALLBACK !== "true"
     }
   });

@@ -431,6 +431,32 @@ function bookingRow(booking) {
   };
 }
 
+function laundryBusinessView(partner) {
+  const business = partner?.laundryBusiness;
+  if (!business) return null;
+  return {
+    shopName: business.shopName || "",
+    shopLicenseNumber: business.shopLicenseNumber || "",
+    shopLocation: business.shopLocation || "",
+    ownerName: business.ownerName || "",
+    ownerPhone: business.ownerPhone || "",
+    staffMembers: (business.staffMembers || []).map((staff) => ({
+      sequence: Number(staff.sequence || 0),
+      name: staff.name || "",
+      phone: staff.phone || "",
+      role: staff.role || "Laundry Staff",
+      photoUrl: staff.photoUrl || "",
+      verificationStatus: staff.verificationStatus || "pending_review",
+      isOnline: Boolean(staff.isOnline),
+      lastLoginAt: iso(staff.lastLoginAt),
+      idNumber: staff.idNumber || "",
+      idType: staff.idType || "",
+      documentType: staff.documentType || "",
+      documentTitle: staff.documentTitle || ""
+    }))
+  };
+}
+
 function partnerRow(partner, bookingCount = 0, profilePhoto = "") {
   const approved = partner.isVerified === true && partner.kycStatus === "verified" && partner.trustStatus === "trusted";
   const blocked = partner.accountStatus === "blocked" || partner.accountStatus === "suspended" || partner.trustStatus === "suspended";
@@ -454,6 +480,9 @@ function partnerRow(partner, bookingCount = 0, profilePhoto = "") {
     pinCode: partner.pinCode || "",
     emergencyContactNumber: partner.emergencyContactNumber || "",
     serviceArea: partner.serviceArea || "",
+    businessType: partner.businessType || "",
+    businessVerificationStatus: partner.businessVerificationStatus || "not_required",
+    laundryBusiness: laundryBusinessView(partner),
     online: Boolean(partner.isOnline),
     totalBookings: bookingCount,
     approval: blocked ? "Blocked" : (approved ? "Approved" : (partner.kycStatus === "rejected" ? "Denied" : "Waiting Approval")),
@@ -1402,7 +1431,7 @@ async function performAdminAction(req, res, next) {
     }
 
     if (action === "approve-technician") {
-      const existingPartner = await Partner.findById(targetId).select("kycStatus accountStatus approvalVersion");
+      const existingPartner = await Partner.findById(targetId).select("kycStatus accountStatus approvalVersion businessType laundryBusiness");
       if (!existingPartner) return res.status(404).json({ message: "Partner not found" });
       if (existingPartner.accountStatus === "deleted") {
         return res.status(409).json({ message: "Deleted partner cannot be approved" });
@@ -1416,9 +1445,11 @@ async function performAdminAction(req, res, next) {
         targetId,
         {
           $set: {
+            isOnline: true,
             isVerified: true,
             trustStatus: "trusted",
             kycStatus: "verified",
+            businessVerificationStatus: existingPartner.businessType === "laundry" ? "approved" : "not_required",
             accountStatus: "active",
             approvedAt: now,
             rejectedAt: null,
@@ -1436,6 +1467,13 @@ async function performAdminAction(req, res, next) {
         },
         { new: true }
       );
+      if (partner.businessType === "laundry" && partner.laundryBusiness?.staffMembers?.length) {
+        for (const staff of partner.laundryBusiness.staffMembers) {
+          if (staff.verificationStatus !== "blocked") staff.verificationStatus = "verified";
+        }
+        partner.markModified("laundryBusiness.staffMembers");
+        await partner.save();
+      }
       await cache.del("admin:dashboard:v1");
       emitAdminEvent(isReapproval ? "partner:reapproved" : "partner:approved", {
         partnerId: String(partner._id),
@@ -1501,6 +1539,15 @@ async function performAdminAction(req, res, next) {
         { new: true }
       );
       if (!partner) return res.status(404).json({ message: "Partner not found" });
+      if (partner.businessType === "laundry" && !isSuspend) {
+        partner.businessVerificationStatus = "rejected";
+        for (const staff of partner.laundryBusiness?.staffMembers || []) {
+          if (staff.verificationStatus !== "blocked") staff.verificationStatus = "rejected";
+          staff.isOnline = false;
+        }
+        partner.markModified("laundryBusiness.staffMembers");
+        await partner.save();
+      }
       await cache.del("admin:dashboard:v1");
       emitAdminEvent(isBlock ? "partner:blocked" : (isSuspend ? "partner:suspended" : "partner:rejected"), {
         partnerId: String(partner._id),
@@ -2139,6 +2186,7 @@ async function partnerProfile(req, res, next) {
       : (partner.photoUrl || partner.selfieUrl || latestPartnerProfileDocumentUrl(req, documents));
     delete rawProfile.fcmToken;
     delete rawProfile.deviceTokens;
+    rawProfile.laundryBusiness = laundryBusinessView(partner);
     const activityHistory = [
       ...(partner.verificationHistory || []).map((entry, index) => ({
         id: `${id(partner._id)}:verification:${index}`,
@@ -2207,6 +2255,9 @@ async function partnerProfile(req, res, next) {
         serviceArea: partner.serviceArea || "",
         serviceRadiusKm: Number(partner.serviceRadiusKm || 0),
         languagesKnown: partner.languagesKnown || [],
+        businessType: partner.businessType || "",
+        businessVerificationStatus: partner.businessVerificationStatus || "not_required",
+        laundryBusiness: laundryBusinessView(partner),
         registrationDate: iso(partner.createdAt),
         currentVerificationStatus: blocked ? "Blocked" : (approved ? "Approved" : (partner.kycStatus === "rejected" ? "Rejected" : "Under Verification")),
         approvalVersion: Number(partner.approvalVersion || 0),
