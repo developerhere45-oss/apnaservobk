@@ -419,7 +419,10 @@ function fileDataUri(file) {
 }
 
 function normalizedImageMime(mimeType) {
-  return String(mimeType || "").toLowerCase() === "image/jpg" ? "image/jpeg" : String(mimeType || "").toLowerCase();
+  const value = String(mimeType || "").toLowerCase();
+  if (value === "image/jpg") return "image/jpeg";
+  if (value === "application/x-pdf") return "application/pdf";
+  return value;
 }
 
 async function uploadDocumentToCloudinary(file, partnerId, documentType, req, kind = "document") {
@@ -441,14 +444,18 @@ async function uploadDocumentToCloudinary(file, partnerId, documentType, req, ki
       partnerUploadAssetId: asset._id
     };
   }
-  const result = await cloudinary.uploader.upload(fileDataUri(file), {
+  const isPdf = normalizedImageMime(file.mimetype) === "application/pdf";
+  const uploadOptions = {
     folder: `apnaservo/partner_documents/${partnerId}`,
-    public_id: `${documentType}_${Date.now()}`,
-    resource_type: "image",
-    overwrite: false,
-    quality: "auto:good",
-    fetch_format: "auto"
-  });
+    public_id: `${documentType}_${Date.now()}${isPdf ? ".pdf" : ""}`,
+    resource_type: isPdf ? "raw" : "image",
+    overwrite: false
+  };
+  if (!isPdf) {
+    uploadOptions.quality = "auto:good";
+    uploadOptions.fetch_format = "auto";
+  }
+  const result = await cloudinary.uploader.upload(fileDataUri(file), uploadOptions);
   return {
     storageProvider: "cloudinary",
     url: result.secure_url || result.url || "",
@@ -737,7 +744,7 @@ async function uploadDocument(req, res, next) {
     const body = documentUploadSchema.parse(req.body || {});
     const file = req.file;
     if (!file) {
-      return res.status(400).json({ message: "Document image is required" });
+      return res.status(400).json({ message: "Document file is required" });
     }
 
     const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
@@ -805,7 +812,9 @@ async function uploadDocument(req, res, next) {
         aadhaarLast4: body.aadhaarLast4 || ""
       });
       return res.status(422).json({
-        message: "Document image is not clear enough. Retake a sharp photo.",
+        message: file.mimetype === "application/pdf"
+          ? "The PDF document could not be validated. Upload a valid PDF."
+          : "Document image is not clear enough. Retake a sharp photo.",
         documentId: document._id,
         validation
       });

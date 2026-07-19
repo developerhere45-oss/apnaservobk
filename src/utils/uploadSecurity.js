@@ -14,9 +14,22 @@ function detectImageMime(buffer) {
   return "";
 }
 
+function detectDocumentMime(buffer) {
+  const imageMime = detectImageMime(buffer);
+  if (imageMime) {
+    return imageMime;
+  }
+  if (buffer && buffer.length >= 5 && buffer.slice(0, 5).toString("ascii") === "%PDF-") {
+    return "application/pdf";
+  }
+  return "";
+}
+
 function normalizeMime(mimeType) {
   const value = String(mimeType || "").toLowerCase();
-  return value === "image/jpg" ? "image/jpeg" : value;
+  if (value === "image/jpg") return "image/jpeg";
+  if (value === "application/x-pdf") return "application/pdf";
+  return value;
 }
 
 function validateUploadedImage(allowedMimeTypes) {
@@ -35,7 +48,25 @@ function validateUploadedImage(allowedMimeTypes) {
   };
 }
 
+function validateUploadedDocument(allowedMimeTypes) {
+  const allowed = new Set(allowedMimeTypes.map(normalizeMime));
+  return function uploadedDocumentValidator(req, res, next) {
+    const file = req.file;
+    if (!file) {
+      return next();
+    }
+    const declaredMime = normalizeMime(file.mimetype);
+    const detectedMime = detectDocumentMime(file.buffer);
+    if (!allowed.has(declaredMime) || !allowed.has(detectedMime) || declaredMime !== detectedMime) {
+      return res.status(415).json({ message: "Upload a valid JPG, PNG, or PDF document" });
+    }
+    return next();
+  };
+}
+
 module.exports = {
   detectImageMime,
-  validateUploadedImage
+  detectDocumentMime,
+  validateUploadedImage,
+  validateUploadedDocument
 };

@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 
 const MIN_BYTES = 20 * 1024;
-const MAX_BYTES = 4 * 1024 * 1024;
+const MAX_BYTES = 5 * 1024 * 1024;
 const MIN_UNIQUE_SAMPLE_BYTES = 32;
 
 function jpegDimensions(buffer) {
@@ -104,29 +104,41 @@ async function callOcrProvider(buffer, mimeType) {
 
 async function validateDocumentUpload({ buffer, mimeType, documentType, aadhaarLast4 }) {
   const reasons = [];
-  if (!["image/jpeg", "image/jpg", "image/png"].includes(mimeType)) {
+  const normalizedMime = mimeType === "image/jpg"
+    ? "image/jpeg"
+    : mimeType === "application/x-pdf" ? "application/pdf" : mimeType;
+  const isPdf = normalizedMime === "application/pdf";
+  if (!["image/jpeg", "image/png", "application/pdf"].includes(normalizedMime)) {
     reasons.push("unsupported_file_type");
   }
-  if (!buffer || buffer.length < MIN_BYTES) {
+  if (!buffer || buffer.length < (isPdf ? 1024 : MIN_BYTES)) {
     reasons.push("image_too_small_or_blurry");
   }
   if (buffer && buffer.length > MAX_BYTES) {
     reasons.push("image_too_large");
   }
 
-  const dimensions = imageDimensions(buffer, mimeType);
-  if (!dimensions || dimensions.width < 480 || dimensions.height < 320) {
-    reasons.push("resolution_too_low");
+  if (isPdf && (!buffer || buffer.slice(0, 5).toString("ascii") !== "%PDF-")) {
+    reasons.push("invalid_pdf_document");
   }
 
-  const quality = estimateImageQuality(buffer);
-  if (quality.uniqueBytes < MIN_UNIQUE_SAMPLE_BYTES || quality.contrastScore < 38) {
-    reasons.push("low_contrast_or_blur");
+  if (!isPdf) {
+    const dimensions = imageDimensions(buffer, normalizedMime);
+    if (!dimensions || dimensions.width < 480 || dimensions.height < 320) {
+      reasons.push("resolution_too_low");
+    }
+
+    const quality = estimateImageQuality(buffer);
+    if (quality.uniqueBytes < MIN_UNIQUE_SAMPLE_BYTES || quality.contrastScore < 38) {
+      reasons.push("low_contrast_or_blur");
+    }
+  } else if (!reasons.length) {
+    reasons.push("pdf_manual_review");
   }
 
   let ocrStatus = "skipped";
   let ocrText = "";
-  if (["id_proof", "aadhaar_front", "aadhaar_back"].includes(documentType)) {
+  if (!isPdf && ["id_proof", "aadhaar_front", "aadhaar_back"].includes(documentType)) {
     const ocr = await callOcrProvider(buffer, mimeType);
     ocrStatus = ocr.status;
     ocrText = ocr.text || "";
@@ -141,8 +153,10 @@ async function validateDocumentUpload({ buffer, mimeType, documentType, aadhaarL
     }
   }
 
-  const score = Math.max(0, 100 - reasons.length * 24);
-  const hardRejected = reasons.some((reason) => ["unsupported_file_type", "image_too_large", "resolution_too_low", "aadhaar_ocr_mismatch"].includes(reason));
+  const score = isPdf && reasons.length === 1 && reasons[0] === "pdf_manual_review"
+    ? 88
+    : Math.max(0, 100 - reasons.length * 24);
+  const hardRejected = reasons.some((reason) => ["unsupported_file_type", "image_too_large", "resolution_too_low", "aadhaar_ocr_mismatch", "invalid_pdf_document"].includes(reason));
   const validationStatus = hardRejected ? "rejected" : reasons.length ? "review" : "accepted";
   return {
     validationStatus,

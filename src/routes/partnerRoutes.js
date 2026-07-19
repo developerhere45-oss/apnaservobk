@@ -3,17 +3,30 @@ const multer = require("multer");
 const { verifyFirebaseToken } = require("../middleware/authMiddleware");
 const { rejectPlainSensitiveFields } = require("../middleware/securityGuard");
 const { fcmTokenLimiter, locationUpdateLimiter, profileWriteLimiter, verificationLimiter } = require("../middleware/securityRateLimits");
-const { validateUploadedImage } = require("../utils/uploadSecurity");
+const { validateUploadedImage, validateUploadedDocument } = require("../utils/uploadSecurity");
 const controller = require("../controllers/partnerController");
 
-const upload = multer({
+const imageUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 4 * 1024 * 1024 },
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter(req, file, callback) {
     if (["image/jpeg", "image/jpg", "image/png"].includes(file.mimetype)) {
       return callback(null, true);
     }
     const error = new Error("Only JPG/PNG document images are allowed");
+    error.status = 415;
+    return callback(error);
+  }
+});
+
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter(req, file, callback) {
+    if (["image/jpeg", "image/jpg", "image/png", "application/pdf", "application/x-pdf"].includes(file.mimetype)) {
+      return callback(null, true);
+    }
+    const error = new Error("Only JPG, PNG, or PDF documents are allowed");
     error.status = 415;
     return callback(error);
   }
@@ -28,8 +41,8 @@ router.patch("/staff/online", profileWriteLimiter, controller.setStaffOnline);
 router.patch("/staff/bookings/:bookingId/status", profileWriteLimiter, controller.updateStaffBookingStatus);
 router.patch("/laundry/bookings/:bookingId/assign-staff", profileWriteLimiter, controller.assignLaundryStaff);
 router.post("/verification", verificationLimiter, controller.submitVerification);
-router.post("/profile-photo", verificationLimiter, upload.single("photo"), validateUploadedImage(["image/jpeg", "image/png"]), rejectPlainSensitiveFields, controller.uploadProfilePhoto);
-router.post("/documents", verificationLimiter, upload.single("document"), validateUploadedImage(["image/jpeg", "image/png"]), rejectPlainSensitiveFields, controller.uploadDocument);
+router.post("/profile-photo", verificationLimiter, imageUpload.single("photo"), validateUploadedImage(["image/jpeg", "image/png"]), rejectPlainSensitiveFields, controller.uploadProfilePhoto);
+router.post("/documents", verificationLimiter, documentUpload.single("document"), validateUploadedDocument(["image/jpeg", "image/png", "application/pdf"]), rejectPlainSensitiveFields, controller.uploadDocument);
 router.post("/support-tickets", profileWriteLimiter, controller.createSupportTicket);
 router.post("/fcm-token", fcmTokenLimiter, controller.saveFcmToken);
 router.post("/delete-account-request", profileWriteLimiter, controller.requestDeletion);
