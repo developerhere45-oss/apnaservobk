@@ -34,11 +34,11 @@ const profileSchema = z.object({
   languagesKnown: z.union([z.string().trim().max(300), z.array(z.string().trim().max(60)).max(20)]).optional(),
   businessType: z.enum(["laundry"]).optional(),
   laundryBusiness: z.object({
-    shopName: z.string().trim().min(2).max(120),
-    shopLicenseNumber: z.string().trim().min(2).max(100),
-    shopLocation: z.string().trim().min(3).max(700),
-    ownerName: z.string().trim().min(2).max(80),
-    ownerPhone: z.string().trim().max(20),
+    shopName: z.string().trim().max(120).optional().or(z.literal("")),
+    shopLicenseNumber: z.string().trim().max(100).optional().or(z.literal("")),
+    shopLocation: z.string().trim().max(700).optional().or(z.literal("")),
+    ownerName: z.string().trim().max(80).optional().or(z.literal("")),
+    ownerPhone: z.string().trim().max(20).optional().or(z.literal("")),
     staffMembers: z.array(z.object({
       sequence: z.coerce.number().int().min(1).max(100),
       name: z.string().trim().min(2).max(80),
@@ -51,7 +51,7 @@ const profileSchema = z.object({
       documentTitle: z.string().trim().max(120).optional(),
       role: z.string().trim().max(80).optional(),
       photoUrl: z.string().trim().max(1000).optional()
-    })).min(1).max(20)
+    })).max(20).default([])
   }).optional(),
   yearsOfExperience: z.coerce.number().min(0).max(80).optional(),
   serviceRadiusKm: z.coerce.number().min(1).max(250).optional(),
@@ -514,13 +514,10 @@ async function upsertProfile(req, res, next) {
     if (isLaundryRegistration && (!categories.includes("laundry") || !body.laundryBusiness)) {
       return res.status(400).json({ message: "Complete laundry business and staff details are required" });
     }
-    if (isLaundryRegistration && !normalizePhone(body.laundryBusiness.ownerPhone)) {
-      return res.status(400).json({ message: "Valid laundry owner phone number is required" });
-    }
     if (isLaundryRegistration && body.laundryBusiness.staffMembers.some((staff) => !normalizePhone(staff.phone))) {
       return res.status(400).json({ message: "Every laundry staff member requires a valid phone number" });
     }
-    const ownerPhone = isLaundryRegistration ? normalizePhone(body.laundryBusiness.ownerPhone) : "";
+    const ownerPhone = isLaundryRegistration ? normalizePhone(body.laundryBusiness.ownerPhone || phone) : "";
     const normalizedLaundryStaff = isLaundryRegistration
       ? body.laundryBusiness.staffMembers.map((staff) => {
           const staffPhone = normalizePhone(staff.phone);
@@ -542,12 +539,14 @@ async function upsertProfile(req, res, next) {
       if (normalizedLaundryStaff.some((staff) => staff.phone === ownerPhone)) {
         return res.status(400).json({ message: "Owner and staff phone numbers must be different" });
       }
-      const claimedByAnotherShop = await Partner.exists({
-        firebaseUid: { $ne: req.auth.uid },
-        "laundryBusiness.staffMembers.phoneHash": { $in: staffHashes }
-      });
-      if (claimedByAnotherShop) {
-        return res.status(409).json({ message: "A staff phone number is already registered with another Laundry shop" });
+      if (staffHashes.length) {
+        const claimedByAnotherShop = await Partner.exists({
+          firebaseUid: { $ne: req.auth.uid },
+          "laundryBusiness.staffMembers.phoneHash": { $in: staffHashes }
+        });
+        if (claimedByAnotherShop) {
+          return res.status(409).json({ message: "A staff phone number is already registered with another Laundry shop" });
+        }
       }
     }
     const phoneHash = identityHash(phone);
@@ -595,6 +594,10 @@ async function upsertProfile(req, res, next) {
         businessVerificationStatus: adminApproved ? "approved" : "pending_review",
         laundryBusiness: {
           ...body.laundryBusiness,
+          shopName: body.laundryBusiness.shopName || `${body.name || req.auth.name || "Laundry Owner"} Laundry`,
+          shopLicenseNumber: body.laundryBusiness.shopLicenseNumber || "Submitted with uploaded proof",
+          shopLocation: body.laundryBusiness.shopLocation || body.serviceArea || "Guwahati, Assam",
+          ownerName: body.laundryBusiness.ownerName || body.name || req.auth.name || "Laundry Owner",
           ownerPhone,
           staffMembers: normalizedLaundryStaff.map((staff) => {
             const previous = (targetPartner?.laundryBusiness?.staffMembers || []).find((entry) =>

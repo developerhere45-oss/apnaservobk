@@ -108,6 +108,9 @@ async function validateDocumentUpload({ buffer, mimeType, documentType, aadhaarL
     ? "image/jpeg"
     : mimeType === "application/x-pdf" ? "application/pdf" : mimeType;
   const isPdf = normalizedMime === "application/pdf";
+  const isLaundryVerification = documentType === "laundry_shop_license"
+    || documentType === "laundry_staff_identity"
+    || /^laundry_staff_\d+_identity$/.test(String(documentType || ""));
   if (!["image/jpeg", "image/png", "application/pdf"].includes(normalizedMime)) {
     reasons.push("unsupported_file_type");
   }
@@ -156,7 +159,10 @@ async function validateDocumentUpload({ buffer, mimeType, documentType, aadhaarL
   const score = isPdf && reasons.length === 1 && reasons[0] === "pdf_manual_review"
     ? 88
     : Math.max(0, 100 - reasons.length * 24);
-  const hardRejected = reasons.some((reason) => ["unsupported_file_type", "image_too_large", "resolution_too_low", "aadhaar_ocr_mismatch", "invalid_pdf_document"].includes(reason));
+  const hardRejectReasons = isLaundryVerification
+    ? ["unsupported_file_type", "image_too_large", "invalid_pdf_document"]
+    : ["unsupported_file_type", "image_too_large", "resolution_too_low", "aadhaar_ocr_mismatch", "invalid_pdf_document"];
+  const hardRejected = reasons.some((reason) => hardRejectReasons.includes(reason));
   const validationStatus = hardRejected ? "rejected" : reasons.length ? "review" : "accepted";
   return {
     validationStatus,
