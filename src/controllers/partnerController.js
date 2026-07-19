@@ -595,7 +595,7 @@ async function upsertProfile(req, res, next) {
         laundryBusiness: {
           ...body.laundryBusiness,
           shopName: body.laundryBusiness.shopName || `${body.name || req.auth.name || "Laundry Owner"} Laundry`,
-          shopLicenseNumber: body.laundryBusiness.shopLicenseNumber || "Submitted with uploaded proof",
+          shopLicenseNumber: body.laundryBusiness.shopLicenseNumber || "Not provided",
           shopLocation: body.laundryBusiness.shopLocation || body.serviceArea || "Guwahati, Assam",
           ownerName: body.laundryBusiness.ownerName || body.name || req.auth.name || "Laundry Owner",
           ownerPhone,
