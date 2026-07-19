@@ -43,7 +43,9 @@ const profileSchema = z.object({
       sequence: z.coerce.number().int().min(1).max(100),
       name: z.string().trim().min(2).max(80),
       phone: z.string().trim().max(20),
-      idNumber: z.string().trim().min(4).max(100),
+      // Staff identity is verified from the uploaded document. The Android
+      // registration form intentionally does not collect the document number.
+      idNumber: z.string().trim().max(100).optional().or(z.literal("")),
       idType: z.string().trim().min(2).max(60),
       documentType: z.string().trim().max(80).optional(),
       documentTitle: z.string().trim().max(120).optional(),
@@ -519,6 +521,7 @@ async function upsertProfile(req, res, next) {
             ...staff,
             phone: staffPhone,
             phoneHash: identityHash(staffPhone),
+            idNumber: staff.idNumber || "",
             role: staff.role || "Laundry Staff",
             photoUrl: staff.photoUrl || ""
           };
