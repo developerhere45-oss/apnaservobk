@@ -30,6 +30,19 @@ function msg91Configured() {
   return Boolean(process.env.MSG91_AUTHKEY && process.env.MSG91_WIDGET_ID);
 }
 
+function otpStatus() {
+  const authkey = String(process.env.MSG91_AUTHKEY || "").trim();
+  const widgetId = String(process.env.MSG91_WIDGET_ID || "").trim();
+  return {
+    configured: Boolean(authkey && widgetId),
+    authkeyPresent: Boolean(authkey),
+    widgetIdPresent: Boolean(widgetId),
+    widgetIdMasked: widgetId ? `${widgetId.slice(0, 4)}...${widgetId.slice(-4)}` : null,
+    sendEndpoint: MSG91_SENDOTP_URL,
+    verifyEndpoint: MSG91_VERIFYOTP_URL
+  };
+}
+
 function localFallbackAllowed() {
   return process.env.NODE_ENV !== "production" || process.env.OTP_ALLOW_LOCAL_FALLBACK === "true";
 }
@@ -251,5 +264,6 @@ async function verifyOtp(input = {}) {
 
 module.exports = {
   sendOtp,
+  otpStatus,
   verifyOtp
 };

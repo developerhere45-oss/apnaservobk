@@ -3,6 +3,7 @@ const otpController = require("../controllers/otpController");
 
 const router = express.Router();
 
+router.get("/status", otpController.status);
 router.post("/send", otpController.sendOtp);
 router.post("/verify", otpController.verifyOtp);
 

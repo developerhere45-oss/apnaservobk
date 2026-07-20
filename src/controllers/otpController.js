@@ -18,7 +18,12 @@ async function verifyOtp(req, res, next) {
   }
 }
 
+function status(req, res) {
+  res.json({ success: true, ...otpService.otpStatus() });
+}
+
 module.exports = {
   sendOtp,
+  status,
   verifyOtp
 };
