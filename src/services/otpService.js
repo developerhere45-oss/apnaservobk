@@ -87,6 +87,16 @@ function providerRequestId(payload) {
   );
 }
 
+function providerRejectReason(errors = []) {
+  for (const item of errors) {
+    const message = item?.message || item?.error || item?.description || item?.data?.message || item?.data?.error;
+    if (message) {
+      return String(message);
+    }
+  }
+  return "MSG91 rejected the OTP request";
+}
+
 async function sendProviderOtp(phone) {
   const widgetId = String(process.env.MSG91_WIDGET_ID || "").trim();
   const attempts = [
@@ -114,8 +124,10 @@ async function sendProviderOtp(phone) {
     endpoint: MSG91_SENDOTP_URL,
     errors
   });
-  const error = new Error("OTP provider rejected request. Check MSG91 auth key, widget ID, and mobile integration settings.");
-  error.statusCode = 502;
+  const reason = providerRejectReason(errors);
+  const error = new Error(reason);
+  error.publicMessage = `OTP provider rejected the request: ${reason}. Check MSG91 auth key, widget ID, and mobile integration settings.`;
+  error.statusCode = 400;
   error.details = { provider: "msg91", errors };
   throw error;
 }

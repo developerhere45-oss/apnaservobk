@@ -28,9 +28,11 @@ function errorHandler(error, req, res, next) {
         ? "Uploaded file is too large"
         : isDuplicateKey
           ? "Duplicate record already exists"
-          : status >= 500
-            ? "Internal server error"
-            : error.message
+          : error.publicMessage
+            ? error.publicMessage
+            : status >= 500
+              ? "Internal server error"
+              : error.message
   };
 
   if (process.env.NODE_ENV !== "production") {
