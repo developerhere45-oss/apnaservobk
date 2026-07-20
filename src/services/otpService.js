@@ -3,8 +3,13 @@ const admin = require("firebase-admin");
 const OtpChallenge = require("../models/OtpChallenge");
 
 const OTP_TTL_SECONDS = Number(process.env.OTP_TTL_SECONDS || 300);
-const MSG91_SENDOTP_URL = process.env.MSG91_SENDOTP_URL || "https://control.msg91.com/api/v5/widget/sendOtp";
-const MSG91_VERIFYOTP_URL = process.env.MSG91_VERIFYOTP_URL || "https://control.msg91.com/api/v5/widget/verifyOtp";
+function msg91Endpoint(name, fallback) {
+  const configured = String(process.env[name] || fallback).trim();
+  return configured.replace("https://control.msg91.com/", "https://api.msg91.com/");
+}
+
+const MSG91_SENDOTP_URL = msg91Endpoint("MSG91_SENDOTP_URL", "https://api.msg91.com/api/v5/widget/sendOtp");
+const MSG91_VERIFYOTP_URL = msg91Endpoint("MSG91_VERIFYOTP_URL", "https://api.msg91.com/api/v5/widget/verifyOtp");
 
 function normalizeIndianPhone(phone) {
   const digits = String(phone || "").replace(/\D/g, "");
@@ -29,13 +34,23 @@ function localFallbackAllowed() {
   return process.env.NODE_ENV !== "production" || process.env.OTP_ALLOW_LOCAL_FALLBACK === "true";
 }
 
+function maskedPhone(phone) {
+  const value = String(phone || "");
+  return value.length > 4 ? `${value.slice(0, 2)}******${value.slice(-4)}` : "hidden";
+}
+
+function msg91Headers() {
+  return {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    authkey: String(process.env.MSG91_AUTHKEY || "").trim()
+  };
+}
+
 async function requestJson(url, payload) {
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      authkey: process.env.MSG91_AUTHKEY
-    },
+    headers: msg91Headers(),
     body: JSON.stringify(payload)
   });
   const text = await response.text();
@@ -46,7 +61,7 @@ async function requestJson(url, payload) {
     json = { message: text };
   }
   if (!response.ok) {
-    const error = new Error(json.message || "OTP provider request failed");
+    const error = new Error(json.message || json.error || "OTP provider request failed");
     error.statusCode = response.status;
     error.details = json;
     throw error;
@@ -73,23 +88,41 @@ function providerRequestId(payload) {
 }
 
 async function sendProviderOtp(phone) {
-  const payload = {
-    widgetId: process.env.MSG91_WIDGET_ID,
-    identifier: `91${phone}`
-  };
-  const result = await requestJson(MSG91_SENDOTP_URL, payload);
-  if (!providerAccepted(result)) {
-    const error = new Error(result.message || "OTP provider rejected request");
-    error.statusCode = 502;
-    error.details = result;
-    throw error;
+  const widgetId = String(process.env.MSG91_WIDGET_ID || "").trim();
+  const attempts = [
+    { widgetId, identifier: `91${phone}` },
+    { widgetId, identifier: `+91${phone}` },
+    { widgetId, identifier: phone }
+  ];
+  const errors = [];
+
+  for (const payload of attempts) {
+    try {
+      const result = await requestJson(MSG91_SENDOTP_URL, payload);
+      if (providerAccepted(result)) {
+        return result;
+      }
+      errors.push(result);
+    } catch (error) {
+      errors.push(error.details || { message: error.message, statusCode: error.statusCode });
+    }
   }
-  return result;
+
+  console.warn("MSG91 OTP send rejected", {
+    phone: maskedPhone(phone),
+    widgetId: widgetId ? `${widgetId.slice(0, 4)}...${widgetId.slice(-4)}` : "missing",
+    endpoint: MSG91_SENDOTP_URL,
+    errors
+  });
+  const error = new Error("OTP provider rejected request. Check MSG91 auth key, widget ID, and mobile integration settings.");
+  error.statusCode = 502;
+  error.details = { provider: "msg91", errors };
+  throw error;
 }
 
 async function verifyProviderOtp(challenge, otp) {
   const payload = {
-    widgetId: process.env.MSG91_WIDGET_ID,
+    widgetId: String(process.env.MSG91_WIDGET_ID || "").trim(),
     reqId: challenge.providerRequestId,
     otp
   };
