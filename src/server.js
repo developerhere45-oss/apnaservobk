@@ -20,6 +20,7 @@ const adminRoutes = require("./routes/adminRoutes");
 const employeeRoutes = require("./routes/employeeRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const reviewRoutes = require("./routes/reviewRoutes");
+const otpRoutes = require("./routes/otpRoutes");
 const { initBookingSocket } = require("./sockets/bookingSocket");
 const { startNotificationScheduler } = require("./utils/notificationScheduler");
 const cache = require("./config/cache");
@@ -110,6 +111,7 @@ app.use("/api/bookings", bookingRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/reviews", reviewRoutes);
+app.use("/api/otp", otpRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/employee", employeeRoutes);
 

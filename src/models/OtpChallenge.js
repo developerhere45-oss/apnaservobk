@@ -17,6 +17,10 @@ const otpChallengeSchema = new mongoose.Schema(
     otpHash: { type: String, required: true },
     attempts: { type: Number, default: 0 },
     maxAttempts: { type: Number, default: 5 },
+    role: { type: String, enum: ["user", "partner", "staff", "admin"], default: "user", index: true },
+    provider: { type: String, default: "local" },
+    providerRequestId: { type: String, default: "" },
+    providerPayload: { type: mongoose.Schema.Types.Mixed, default: null },
     expiresAt: { type: Date, default: otpExpiresAt },
     consumedAt: { type: Date, default: null }
   },
@@ -36,6 +40,10 @@ otpChallengeSchema.statics.createForOtp = async function createForOtp(input = {}
     phone: input.phone || "",
     email: input.email || "",
     purpose: input.purpose || "login",
+    role: input.role || "user",
+    provider: input.provider || "local",
+    providerRequestId: input.providerRequestId || "",
+    providerPayload: input.providerPayload || null,
     otpHash,
     expiresAt: input.expiresAt || otpExpiresAt()
   });
