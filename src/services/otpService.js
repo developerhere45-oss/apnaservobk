@@ -30,24 +30,38 @@ function msg91Authkey() {
   return String(process.env.MSG91_AUTHKEY || process.env.MSG91_AUTH_KEY || "").trim();
 }
 
+function msg91TokenAuth() {
+  return String(
+    process.env.MSG91_TOKEN_AUTH ||
+    process.env.MSG91_TOKEN ||
+    process.env.MSG91_AUTH_TOKEN ||
+    ""
+  ).trim();
+}
+
 function msg91WidgetId() {
   return String(process.env.MSG91_WIDGET_ID || process.env.MSG91_WIDGETID || "").trim();
 }
 
 function msg91Configured() {
-  return Boolean(msg91Authkey() && msg91WidgetId());
+  return Boolean(msg91WidgetId() && (msg91TokenAuth() || msg91Authkey()));
 }
 
 function otpStatus() {
   const authkey = msg91Authkey();
+  const tokenAuth = msg91TokenAuth();
   const widgetId = msg91WidgetId();
   return {
-    configured: Boolean(authkey && widgetId),
+    configured: Boolean(widgetId && (tokenAuth || authkey)),
     authkeyPresent: Boolean(authkey),
+    tokenAuthPresent: Boolean(tokenAuth),
+    effectiveWidgetCredential: tokenAuth ? "tokenAuth" : authkey ? "authkey-compatibility" : null,
     widgetIdPresent: Boolean(widgetId),
     widgetIdMasked: widgetId ? `${widgetId.slice(0, 4)}...${widgetId.slice(-4)}` : null,
     authkeyLength: authkey.length,
     authkeyLooksMasked: /[*\s]/.test(authkey),
+    tokenAuthLength: tokenAuth.length,
+    tokenAuthLooksMasked: /[*\s]/.test(tokenAuth),
     sendEndpoint: MSG91_SENDOTP_URL,
     verifyEndpoint: MSG91_VERIFYOTP_URL
   };
@@ -62,18 +76,18 @@ function maskedPhone(phone) {
   return value.length > 4 ? `${value.slice(0, 2)}******${value.slice(-4)}` : "hidden";
 }
 
-function msg91Headers() {
+function msg91Headers(extraHeaders = {}) {
   return {
     "Content-Type": "application/json",
     Accept: "application/json",
-    authkey: msg91Authkey()
+    ...extraHeaders
   };
 }
 
-async function requestJson(url, payload) {
+async function requestJson(url, payload, extraHeaders = {}) {
   const response = await fetch(url, {
     method: "POST",
-    headers: msg91Headers(),
+    headers: msg91Headers(extraHeaders),
     body: JSON.stringify(payload)
   });
   const text = await response.text();
@@ -122,22 +136,30 @@ function providerRejectReason(errors = []) {
 
 async function sendProviderOtp(phone) {
   const widgetId = msg91WidgetId();
-  const attempts = [
-    { widgetId, identifier: `91${phone}` },
-    { widgetId, identifier: `+91${phone}` },
-    { widgetId, identifier: phone }
+  const tokenAuth = msg91TokenAuth();
+  const compatibilityCredential = tokenAuth || msg91Authkey();
+  const identifiers = [`91${phone}`, `+91${phone}`, phone];
+  const credentialVariants = [
+    { headers: { token: compatibilityCredential }, body: {} },
+    { headers: {}, body: { tokenAuth: compatibilityCredential } }
   ];
+  if (msg91Authkey()) {
+    credentialVariants.push({ headers: { authkey: msg91Authkey() }, body: {} });
+  }
   const errors = [];
 
-  for (const payload of attempts) {
-    try {
-      const result = await requestJson(MSG91_SENDOTP_URL, payload);
-      if (providerAccepted(result)) {
-        return result;
+  for (const identifier of identifiers) {
+    for (const credential of credentialVariants) {
+      const payload = { widgetId, identifier, ...credential.body };
+      try {
+        const result = await requestJson(MSG91_SENDOTP_URL, payload, credential.headers);
+        if (providerAccepted(result)) {
+          return result;
+        }
+        errors.push(result);
+      } catch (error) {
+        errors.push(error.details || { message: error.message, statusCode: error.statusCode });
       }
-      errors.push(result);
-    } catch (error) {
-      errors.push(error.details || { message: error.message, statusCode: error.statusCode });
     }
   }
 
@@ -149,25 +171,50 @@ async function sendProviderOtp(phone) {
   });
   const reason = providerRejectReason(errors);
   const error = new Error(reason);
-  error.publicMessage = `OTP provider rejected the request: ${reason}. Check MSG91 auth key, widget ID, and mobile integration settings.`;
+  error.publicMessage = `OTP provider rejected the request: ${reason}. Check MSG91 OTP Widget token, Widget ID, Mobile Integration, Captcha, and Invisible OTP settings.`;
   error.statusCode = 400;
   error.details = { provider: "msg91", errors };
   throw error;
 }
 
 async function verifyProviderOtp(challenge, otp) {
-  const payload = {
-    widgetId: msg91WidgetId(),
-    reqId: challenge.providerRequestId,
-    otp
-  };
-  const result = await requestJson(MSG91_VERIFYOTP_URL, payload);
-  if (!providerAccepted(result)) {
-    return false;
+  const tokenAuth = msg91TokenAuth();
+  const compatibilityCredential = tokenAuth || msg91Authkey();
+  const variants = [
+    {
+      headers: { token: compatibilityCredential },
+      payload: { widgetId: msg91WidgetId(), reqId: challenge.providerRequestId, otp }
+    },
+    {
+      headers: {},
+      payload: {
+        widgetId: msg91WidgetId(),
+        reqId: challenge.providerRequestId,
+        otp,
+        tokenAuth: compatibilityCredential
+      }
+    }
+  ];
+  if (msg91Authkey()) {
+    variants.push({
+      headers: { authkey: msg91Authkey() },
+      payload: { widgetId: msg91WidgetId(), reqId: challenge.providerRequestId, otp }
+    });
   }
-  challenge.consumedAt = new Date();
-  await challenge.save();
-  return true;
+
+  for (const variant of variants) {
+    try {
+      const result = await requestJson(MSG91_VERIFYOTP_URL, variant.payload, variant.headers);
+      if (providerAccepted(result)) {
+        challenge.consumedAt = new Date();
+        await challenge.save();
+        return true;
+      }
+    } catch (_) {
+      // Try the next supported MSG91 credential transport.
+    }
+  }
+  return false;
 }
 
 async function firebaseCustomTokenForPhone(phone, role) {
