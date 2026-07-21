@@ -62,6 +62,7 @@ function otpStatus() {
     authkeyLooksMasked: /[*\s]/.test(authkey),
     tokenAuthLength: tokenAuth.length,
     tokenAuthLooksMasked: /[*\s]/.test(tokenAuth),
+    credentialsIdentical: Boolean(authkey && tokenAuth && authkey === tokenAuth),
     sendEndpoint: MSG91_SENDOTP_URL,
     verifyEndpoint: MSG91_VERIFYOTP_URL
   };
@@ -137,30 +138,21 @@ function providerRejectReason(errors = []) {
 async function sendProviderOtp(phone) {
   const widgetId = msg91WidgetId();
   const tokenAuth = msg91TokenAuth();
-  const compatibilityCredential = tokenAuth || msg91Authkey();
-  const identifiers = [`91${phone}`, `+91${phone}`, phone];
-  const credentialVariants = [
-    { headers: { token: compatibilityCredential }, body: {} },
-    { headers: {}, body: { tokenAuth: compatibilityCredential } }
-  ];
-  if (msg91Authkey()) {
-    credentialVariants.push({ headers: { authkey: msg91Authkey() }, body: {} });
-  }
+  const authkey = msg91Authkey();
+  const usingWidgetToken = Boolean(tokenAuth);
+  const credential = tokenAuth || authkey;
+  const payload = { widgetId, identifier: `91${phone}` };
+  const headers = usingWidgetToken ? { token: credential } : { authkey: credential };
   const errors = [];
 
-  for (const identifier of identifiers) {
-    for (const credential of credentialVariants) {
-      const payload = { widgetId, identifier, ...credential.body };
-      try {
-        const result = await requestJson(MSG91_SENDOTP_URL, payload, credential.headers);
-        if (providerAccepted(result)) {
-          return result;
-        }
-        errors.push(result);
-      } catch (error) {
-        errors.push(error.details || { message: error.message, statusCode: error.statusCode });
-      }
+  try {
+    const result = await requestJson(MSG91_SENDOTP_URL, payload, headers);
+    if (providerAccepted(result)) {
+      return result;
     }
+    errors.push(result);
+  } catch (error) {
+    errors.push(error.details || { message: error.message, statusCode: error.statusCode });
   }
 
   console.warn("MSG91 OTP send rejected", {
@@ -171,7 +163,8 @@ async function sendProviderOtp(phone) {
   });
   const reason = providerRejectReason(errors);
   const error = new Error(reason);
-  error.publicMessage = `OTP provider rejected the request: ${reason}. Check MSG91 OTP Widget token, Widget ID, Mobile Integration, Captcha, and Invisible OTP settings.`;
+  const credentialName = usingWidgetToken ? "MSG91_TOKEN_AUTH" : "MSG91_AUTHKEY";
+  error.publicMessage = `MSG91 rejected ${credentialName} for this OTP Widget: ${reason}. Copy the token generated for this widget, enable Mobile Integration, disable Captcha for the native app flow, save the widget, and redeploy.`;
   error.statusCode = 400;
   error.details = { provider: "msg91", errors };
   throw error;
@@ -179,40 +172,25 @@ async function sendProviderOtp(phone) {
 
 async function verifyProviderOtp(challenge, otp) {
   const tokenAuth = msg91TokenAuth();
-  const compatibilityCredential = tokenAuth || msg91Authkey();
-  const variants = [
-    {
-      headers: { token: compatibilityCredential },
-      payload: { widgetId: msg91WidgetId(), reqId: challenge.providerRequestId, otp }
-    },
-    {
-      headers: {},
-      payload: {
-        widgetId: msg91WidgetId(),
-        reqId: challenge.providerRequestId,
-        otp,
-        tokenAuth: compatibilityCredential
-      }
+  const authkey = msg91Authkey();
+  const credential = tokenAuth || authkey;
+  const headers = tokenAuth ? { token: credential } : { authkey: credential };
+  try {
+    const result = await requestJson(
+      MSG91_VERIFYOTP_URL,
+      { widgetId: msg91WidgetId(), reqId: challenge.providerRequestId, otp },
+      headers
+    );
+    if (providerAccepted(result)) {
+      challenge.consumedAt = new Date();
+      await challenge.save();
+      return true;
     }
-  ];
-  if (msg91Authkey()) {
-    variants.push({
-      headers: { authkey: msg91Authkey() },
-      payload: { widgetId: msg91WidgetId(), reqId: challenge.providerRequestId, otp }
+  } catch (error) {
+    console.warn("MSG91 OTP verify rejected", {
+      phone: maskedPhone(challenge.phone),
+      reason: error.message
     });
-  }
-
-  for (const variant of variants) {
-    try {
-      const result = await requestJson(MSG91_VERIFYOTP_URL, variant.payload, variant.headers);
-      if (providerAccepted(result)) {
-        challenge.consumedAt = new Date();
-        await challenge.save();
-        return true;
-      }
-    } catch (_) {
-      // Try the next supported MSG91 credential transport.
-    }
   }
   return false;
 }
