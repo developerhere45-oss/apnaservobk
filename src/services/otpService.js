@@ -26,18 +26,28 @@ function generateOtp() {
   return String(crypto.randomInt(100000, 999999));
 }
 
+function msg91Authkey() {
+  return String(process.env.MSG91_AUTHKEY || process.env.MSG91_AUTH_KEY || "").trim();
+}
+
+function msg91WidgetId() {
+  return String(process.env.MSG91_WIDGET_ID || process.env.MSG91_WIDGETID || "").trim();
+}
+
 function msg91Configured() {
-  return Boolean(process.env.MSG91_AUTHKEY && process.env.MSG91_WIDGET_ID);
+  return Boolean(msg91Authkey() && msg91WidgetId());
 }
 
 function otpStatus() {
-  const authkey = String(process.env.MSG91_AUTHKEY || "").trim();
-  const widgetId = String(process.env.MSG91_WIDGET_ID || "").trim();
+  const authkey = msg91Authkey();
+  const widgetId = msg91WidgetId();
   return {
     configured: Boolean(authkey && widgetId),
     authkeyPresent: Boolean(authkey),
     widgetIdPresent: Boolean(widgetId),
     widgetIdMasked: widgetId ? `${widgetId.slice(0, 4)}...${widgetId.slice(-4)}` : null,
+    authkeyLength: authkey.length,
+    authkeyLooksMasked: /[*\s]/.test(authkey),
     sendEndpoint: MSG91_SENDOTP_URL,
     verifyEndpoint: MSG91_VERIFYOTP_URL
   };
@@ -56,7 +66,7 @@ function msg91Headers() {
   return {
     "Content-Type": "application/json",
     Accept: "application/json",
-    authkey: String(process.env.MSG91_AUTHKEY || "").trim()
+    authkey: msg91Authkey()
   };
 }
 
@@ -111,7 +121,7 @@ function providerRejectReason(errors = []) {
 }
 
 async function sendProviderOtp(phone) {
-  const widgetId = String(process.env.MSG91_WIDGET_ID || "").trim();
+  const widgetId = msg91WidgetId();
   const attempts = [
     { widgetId, identifier: `91${phone}` },
     { widgetId, identifier: `+91${phone}` },
@@ -147,7 +157,7 @@ async function sendProviderOtp(phone) {
 
 async function verifyProviderOtp(challenge, otp) {
   const payload = {
-    widgetId: String(process.env.MSG91_WIDGET_ID || "").trim(),
+    widgetId: msg91WidgetId(),
     reqId: challenge.providerRequestId,
     otp
   };
