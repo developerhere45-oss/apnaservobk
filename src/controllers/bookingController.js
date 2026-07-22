@@ -765,6 +765,12 @@ async function listPartnerBookings(req, res, next) {
     const bookings = await Booking.find({
       $or: [
         { partnerId: partner._id },
+        {
+          partnerId: null,
+          requestedPartners: partner._id,
+          rejectedPartners: { $ne: partner._id },
+          status: { $in: pendingAssignmentStatuses() }
+        },
         canViewOpenJobs ? partnerOpenBookingVisibility(partner, categories) : { _id: null }
       ]
     }).sort({ createdAt: -1 }).limit(80);

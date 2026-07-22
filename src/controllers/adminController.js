@@ -1430,6 +1430,50 @@ async function performAdminAction(req, res, next) {
       return res.status(400).json({ message: "action and targetId are required" });
     }
 
+    if (action === "assign-booking") {
+      const booking = await Booking.findOne({
+        $or: [
+          { _id: objectId(targetId) || undefined },
+          { bookingCode: targetId }
+        ].filter((entry) => Object.values(entry)[0])
+      });
+      if (!booking) return res.status(404).json({ message: "Booking not found" });
+      if (booking.partnerId) return res.status(409).json({ message: "Booking already has an assigned partner" });
+      if (!pendingAssignmentStatuses().includes(String(booking.status || ""))) {
+        return res.status(409).json({ message: `Booking cannot be forwarded while status is ${booking.status}` });
+      }
+
+      const requestedPartnerIds = [
+        req.body?.partnerId,
+        req.body?.payload?.partnerId,
+        ...(Array.isArray(req.body?.partnerIds) ? req.body.partnerIds : []),
+        ...(Array.isArray(req.body?.payload?.partnerIds) ? req.body.payload.partnerIds : [])
+      ].filter(Boolean);
+      const partners = await availablePartnersForBooking(booking, {
+        partnerIds: requestedPartnerIds,
+        onlineOnly: requestedPartnerIds.length === 0,
+        limit: requestedPartnerIds.length ? 10 : 30
+      });
+      if (!partners.length) {
+        return res.status(404).json({ message: "No approved partner found for this booking area/service" });
+      }
+
+      const result = await forwardBookingToPartners({
+        booking,
+        partners,
+        reason: String(req.body?.payload?.reason || "Admin dashboard assignment"),
+        mode: requestedPartnerIds.length ? "individual" : "area"
+      });
+      return res.json({
+        ok: true,
+        action,
+        targetId,
+        booking: smartBookingRow(result.booking),
+        assignedPartnerIds: result.partnerIds,
+        addedPartnerIds: result.addedPartnerIds
+      });
+    }
+
     if (action === "approve-technician") {
       const existingPartner = await Partner.findById(targetId).select("kycStatus accountStatus approvalVersion businessType laundryBusiness");
       if (!existingPartner) return res.status(404).json({ message: "Partner not found" });
