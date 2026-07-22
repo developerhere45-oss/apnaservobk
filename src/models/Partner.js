@@ -99,7 +99,7 @@ const partnerSchema = new mongoose.Schema(
     state: { type: String, trim: true, default: "" },
     pinCode: { type: String, trim: true, default: "" },
     emergencyContactNumber: { type: String, trim: true, default: "" },
-    serviceCategory: { type: [String], default: ["ac"] },
+    serviceCategory: { type: [String], default: [] },
     yearsOfExperience: { type: Number, default: 0 },
     workingAreas: { type: [String], default: [] },
     languagesKnown: { type: [String], default: [] },

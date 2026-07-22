@@ -175,6 +175,27 @@ function partnerDispatchCategories(partner) {
   return [...new Set((partner.serviceCategory || []).flatMap(serviceCategoryVariants))].filter(Boolean);
 }
 
+function isolatedCompanyCategories(partner) {
+  if (!partner || partner.businessType !== "laundry") return null;
+  const normalized = [...new Set((partner.serviceCategory || []).map(normalizeServiceCategory).filter(Boolean))];
+  const operational = normalized.filter((category) => ["laundry", "cleaning"].includes(category));
+  if (operational.length === 1 && normalized.length === 1) return operational;
+  const businessName = `${partner.laundryBusiness?.shopName || ""} ${partner.name || ""}`.toLowerCase();
+  if (/laundry|dry\s*clean|wash|iron/.test(businessName)) return ["laundry"];
+  if (/cleaning|cleaner|housekeeping|deep\s*clean/.test(businessName)) return ["cleaning"];
+  return operational.includes("laundry") ? ["laundry"] : (operational.includes("cleaning") ? ["cleaning"] : ["laundry"]);
+}
+
+async function enforceCompanyServiceIsolation(partner) {
+  const isolated = isolatedCompanyCategories(partner);
+  if (!isolated) return partner;
+  const current = (partner.serviceCategory || []).map(normalizeServiceCategory);
+  if (current.length === isolated.length && current.every((value, index) => value === isolated[index])) return partner;
+  partner.serviceCategory = isolated;
+  await partner.save();
+  return partner;
+}
+
 async function dispatchPendingBookingsToPartner(partner) {
   if (!partnerCanReceiveOpenBookings(partner)) {
     return 0;
@@ -255,7 +276,11 @@ function staffPublicProfile(partner, staff) {
     phone: staff.phone || "",
     email: staff.email || "",
     role: staff.role || "Laundry Staff",
+    staffCode: `${partner.partnerCode || `ASP${String(partner._id).slice(-6).toUpperCase()}`}-S${String(Number(staff.sequence || 0)).padStart(2, "0")}`,
+    serviceCategory: isolatedCompanyCategories(partner) || partner.serviceCategory || [],
     photoUrl: staff.photoUrl || "",
+    idType: staff.idType || "Government ID",
+    identityVerified: staff.verificationStatus === "verified",
     verificationStatus: staff.verificationStatus === "blocked"
       ? "blocked"
       : (approved && staff.verificationStatus === "verified" ? "verified" : (staff.verificationStatus || "pending_review")),
@@ -534,8 +559,8 @@ async function upsertProfile(req, res, next) {
       return res.status(400).json({ message: "At least one valid service category is required" });
     }
     const isLaundryRegistration = body.businessType === "laundry";
-    if (isLaundryRegistration && (!categories.includes("laundry") || !body.laundryBusiness)) {
-      return res.status(400).json({ message: "Complete laundry business and staff details are required" });
+    if (isLaundryRegistration && (categories.length !== 1 || !["laundry", "cleaning"].includes(categories[0]) || !body.laundryBusiness)) {
+      return res.status(400).json({ message: "Choose exactly one company service: Laundry or Cleaning" });
     }
     if (isLaundryRegistration && body.laundryBusiness.staffMembers.some((staff) => !normalizePhone(staff.phone))) {
       return res.status(400).json({ message: "Every laundry staff member requires a valid phone number" });
@@ -710,6 +735,7 @@ async function me(req, res, next) {
         }
       }
     }
+    if (partner) partner = await enforceCompanyServiceIsolation(partner);
     return res.json({ partner });
   } catch (error) {
     return next(error);
@@ -966,7 +992,7 @@ async function requestDeletion(req, res, next) {
           name: req.auth.name || "ApnaServo Partner",
           phone: normalizePhone(req.auth.phone_number || ""),
           email: normalizeEmail(req.auth.email || ""),
-          serviceCategory: ["ac"],
+          serviceCategory: [],
           city: "Guwahati"
         }
       },
