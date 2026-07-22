@@ -1516,11 +1516,14 @@ async function performAdminAction(req, res, next) {
       const actor = req.auth?.email || req.auth?.uid || "admin";
       const reason = String(req.body?.payload?.reason || "").trim();
       const historyAction = isBlock ? "blocked" : (isSuspend ? "suspended" : "rejected");
+      const rejectionTarget = await Partner.findById(targetId).select("businessType").lean();
+      if (!rejectionTarget) return res.status(404).json({ message: "Partner not found" });
       const partner = await Partner.findByIdAndUpdate(
         targetId,
         {
           $set: {
             isOnline: false,
+            ...(rejectionTarget.businessType === "laundry" && !isSuspend ? { businessVerificationStatus: "rejected" } : {}),
             isVerified: false,
             kycStatus: isSuspend ? "verified" : "rejected",
             trustStatus: isSuspend ? "suspended" : "review_required",
