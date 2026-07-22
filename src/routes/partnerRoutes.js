@@ -38,6 +38,7 @@ router.get("/me", controller.me);
 router.post("/staff/session", profileWriteLimiter, controller.staffSession);
 router.get("/staff/bookings", controller.listStaffBookings);
 router.patch("/staff/online", profileWriteLimiter, controller.setStaffOnline);
+router.post("/laundry/staff", profileWriteLimiter, controller.addLaundryStaff);
 router.patch("/staff/bookings/:bookingId/status", profileWriteLimiter, controller.updateStaffBookingStatus);
 router.patch("/laundry/bookings/:bookingId/assign-staff", profileWriteLimiter, controller.assignLaundryStaff);
 router.post("/verification", verificationLimiter, controller.submitVerification);

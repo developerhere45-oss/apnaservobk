@@ -43,6 +43,8 @@ const laundryStaffSchema = new mongoose.Schema(
     name: { type: String, trim: true, default: "" },
     phone: { type: String, trim: true, default: "" },
     phoneHash: { type: String, trim: true, default: "" },
+    email: { type: String, trim: true, lowercase: true, default: "" },
+    emailHash: { type: String, trim: true, default: "" },
     firebaseUid: { type: String, trim: true, default: "" },
     role: { type: String, trim: true, default: "Laundry Staff" },
     photoUrl: { type: String, trim: true, default: "" },
@@ -63,7 +65,7 @@ const laundryStaffSchema = new mongoose.Schema(
 );
 
 laundryStaffSchema.plugin(encryptedFieldsPlugin, {
-  fields: ["name", "phone", "role", "photoUrl", "fcmToken", "idNumber", "documentTitle"]
+  fields: ["name", "phone", "email", "role", "photoUrl", "fcmToken", "idNumber", "documentTitle"]
 });
 
 const laundryBusinessSchema = new mongoose.Schema(
@@ -179,6 +181,7 @@ partnerSchema.index({ phoneHash: 1 }, { unique: true, partialFilterExpression: {
 partnerSchema.index({ emailHash: 1 }, { unique: true, partialFilterExpression: { emailHash: { $type: "string", $gt: "" } } });
 partnerSchema.index({ "deviceTokens.tokenHash": 1, "deviceTokens.isActive": 1 });
 partnerSchema.index({ "laundryBusiness.staffMembers.phoneHash": 1 });
+partnerSchema.index({ "laundryBusiness.staffMembers.emailHash": 1 });
 partnerSchema.index({ "laundryBusiness.staffMembers.firebaseUid": 1 });
 partnerSchema.plugin(encryptedFieldsPlugin, {
   fields: ["name", "phone", "email", "dateOfBirth", "gender", "residentialAddress", "state", "pinCode", "emergencyContactNumber", "workingAreas", "languagesKnown", "serviceArea", "fcmToken", "deviceTokens.token", "deviceTokens.deviceId", "photoUrl", "selfieUrl", "faceLivenessSessionId", "aadhaarLast4", "idProofUrl", "skillCertificateUrl", "deletionReason", "rejectionReason"]

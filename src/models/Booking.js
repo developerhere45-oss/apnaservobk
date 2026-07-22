@@ -109,6 +109,7 @@ const bookingSchema = new mongoose.Schema(
       staffSequence: { type: Number, default: 0 },
       staffName: { type: String, trim: true, default: "" },
       staffPhoneHash: { type: String, trim: true, default: "" },
+      staffEmailHash: { type: String, trim: true, default: "" },
       staffFirebaseUid: { type: String, trim: true, default: "" },
       taskStatus: {
         type: String,
@@ -171,6 +172,7 @@ bookingSchema.index({ "warranty.warrantyEndDate": 1, "warranty.revisitRequested"
 bookingSchema.index({ "completionAccounting.creditedAt": 1, status: 1 });
 bookingSchema.index({ "laundryAssignment.ownerPartnerId": 1, "laundryAssignment.staffPhoneHash": 1, updatedAt: -1 });
 bookingSchema.index({ "laundryAssignment.staffFirebaseUid": 1, updatedAt: -1 });
+bookingSchema.index({ "laundryAssignment.staffEmailHash": 1, updatedAt: -1 });
 bookingSchema.plugin(encryptedFieldsPlugin, {
   fields: [
     "serviceName",

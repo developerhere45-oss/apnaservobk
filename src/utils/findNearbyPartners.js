@@ -51,9 +51,11 @@ function excludedPartnerIds(values = []) {
   return new Set((values || []).map((value) => String(value || "")).filter(Boolean));
 }
 
-function approvalFilter(categories, excludedIds) {
+function approvalFilter(categories, excludedIds, category = "") {
   const filter = {
-    serviceCategory: { $in: categories },
+    ...(category === "cleaning"
+      ? { $or: [{ serviceCategory: { $in: categories } }, { businessType: "laundry", businessVerificationStatus: "approved" }] }
+      : { serviceCategory: { $in: categories } }),
     isOnline: true,
     accountStatus: "active",
     isVerified: true,
@@ -108,7 +110,7 @@ async function findNearbyPartnersWithMeta({ serviceCategory, city, lat, lng, rad
   const category = normalizeServiceCategory(serviceCategory);
   const categories = serviceCategoryVariants(category);
   const excludedIds = excludedPartnerIds(excludePartnerIds);
-  const filter = approvalFilter(categories, excludedIds);
+  const filter = approvalFilter(categories, excludedIds, category);
 
   if (validCoordinates(lat, lng)) {
     const latitude = Number(lat);

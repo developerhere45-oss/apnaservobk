@@ -43,6 +43,7 @@ const profileSchema = z.object({
       sequence: z.coerce.number().int().min(1).max(100),
       name: z.string().trim().min(2).max(80),
       phone: z.string().trim().max(20),
+      email: z.string().trim().email().max(180).optional().or(z.literal("")),
       // Staff identity is verified from the uploaded document. The Android
       // registration form intentionally does not collect the document number.
       idNumber: z.string().trim().max(100).optional().or(z.literal("")),
@@ -118,6 +119,13 @@ const documentUploadSchema = z.object({
 
 const deletionRequestSchema = z.object({
   reason: z.string().trim().max(500).optional()
+});
+
+const laundryStaffInviteSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+  phone: z.string().trim().max(20).optional().or(z.literal("")),
+  email: z.string().trim().email().max(180).optional().or(z.literal("")),
+  role: z.string().trim().max(80).optional().or(z.literal(""))
 });
 
 const supportTicketSchema = z.object({
@@ -245,6 +253,7 @@ function staffPublicProfile(partner, staff) {
     sequence: Number(staff.sequence || 0),
     name: staff.name || "Laundry Staff",
     phone: staff.phone || "",
+    email: staff.email || "",
     role: staff.role || "Laundry Staff",
     photoUrl: staff.photoUrl || "",
     verificationStatus: staff.verificationStatus === "blocked"
@@ -253,34 +262,42 @@ function staffPublicProfile(partner, staff) {
     isOnline: Boolean(staff.isOnline),
     shopName: partner.laundryBusiness?.shopName || "ApnaServo Laundry",
     shopLocation: partner.laundryBusiness?.shopLocation || partner.serviceArea || "Guwahati, Assam",
+    shopLicenseNumber: partner.laundryBusiness?.shopLicenseNumber || "",
     ownerPartnerId: String(partner._id),
-    ownerName: partner.laundryBusiness?.ownerName || partner.name || ""
+    ownerName: partner.laundryBusiness?.ownerName || partner.name || "",
+    ownerPhone: partner.laundryBusiness?.ownerPhone || partner.phone || "",
+    businessVerificationStatus: partner.businessVerificationStatus || "pending_review"
   };
 }
 
 async function findStaffContext(req, { requireApproved = true } = {}) {
   const phone = normalizePhone(req.auth?.phone_number || "");
-  if (!phone || req.auth?.development_device) {
-    const error = new Error("Verified phone OTP is required for staff access");
+  const email = normalizeEmail(req.auth?.email || "");
+  const verifiedEmail = req.auth?.email_verified === true ? email : "";
+  if ((!phone && !verifiedEmail) || req.auth?.development_device) {
+    const error = new Error("Verified staff phone OTP or verified email is required");
     error.status = 401;
     throw error;
   }
   const phoneHash = identityHash(phone);
+  const emailHash = identityHash(verifiedEmail);
   let partner = await Partner.findOne({
     businessType: "laundry",
     $or: [
       { "laundryBusiness.staffMembers.firebaseUid": req.auth.uid },
-      { "laundryBusiness.staffMembers.phoneHash": phoneHash }
+      ...(phoneHash ? [{ "laundryBusiness.staffMembers.phoneHash": phoneHash }] : []),
+      ...(emailHash ? [{ "laundryBusiness.staffMembers.emailHash": emailHash }] : [])
     ]
   });
 
   if (!partner) {
     const candidates = await Partner.find({ businessType: "laundry" }).limit(500);
     partner = candidates.find((entry) => (entry.laundryBusiness?.staffMembers || [])
-      .some((member) => normalizePhone(member.phone) === phone));
+      .some((member) => (phone && normalizePhone(member.phone) === phone)
+        || (verifiedEmail && normalizeEmail(member.email) === verifiedEmail)));
   }
   if (!partner) {
-    const error = new Error("No Laundry staff invitation was found for this phone number");
+    const error = new Error("No Laundry staff invitation was found for this phone or email");
     error.status = 404;
     throw error;
   }
@@ -288,7 +305,9 @@ async function findStaffContext(req, { requireApproved = true } = {}) {
   const staff = (partner.laundryBusiness?.staffMembers || []).find((member) =>
     member.firebaseUid === req.auth.uid
       || member.phoneHash === phoneHash
-      || normalizePhone(member.phone) === phone
+      || (phone && normalizePhone(member.phone) === phone)
+      || (emailHash && member.emailHash === emailHash)
+      || (verifiedEmail && normalizeEmail(member.email) === verifiedEmail)
   );
   if (!staff) {
     const error = new Error("Laundry staff profile not found");
@@ -317,7 +336,11 @@ async function findStaffContext(req, { requireApproved = true } = {}) {
   }
   let contextChanged = false;
   if (staff.phoneHash !== phoneHash) {
-    staff.phoneHash = phoneHash;
+    if (phoneHash) staff.phoneHash = phoneHash;
+    contextChanged = true;
+  }
+  if (emailHash && staff.emailHash !== emailHash) {
+    staff.emailHash = emailHash;
     contextChanged = true;
   }
   if (staff.firebaseUid !== req.auth.uid) {
@@ -330,7 +353,7 @@ async function findStaffContext(req, { requireApproved = true } = {}) {
     staff.lastLoginAt = new Date(now);
     contextChanged = true;
   }
-  return { partner, staff, phoneHash, contextChanged };
+  return { partner, staff, phoneHash, emailHash, contextChanged };
 }
 
 function tokenHasVerifiedEmail(req, email) {
@@ -1042,7 +1065,8 @@ async function staffJobsFor(partner, staff) {
     partnerId: partner._id,
     $or: [
       { "laundryAssignment.staffFirebaseUid": staff.firebaseUid },
-      { "laundryAssignment.staffPhoneHash": staff.phoneHash }
+      { "laundryAssignment.staffPhoneHash": staff.phoneHash },
+      { "laundryAssignment.staffEmailHash": staff.emailHash }
     ]
   }).sort({ updatedAt: -1, createdAt: -1 }).limit(200);
 }
@@ -1098,6 +1122,55 @@ async function setStaffOnline(req, res, next) {
   }
 }
 
+async function addLaundryStaff(req, res, next) {
+  try {
+    const body = laundryStaffInviteSchema.parse(req.body || {});
+    const owner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    if (!owner || owner.businessType !== "laundry" || owner.businessVerificationStatus !== "approved") {
+      return res.status(403).json({ message: "Approved Laundry owner access required" });
+    }
+    const phone = normalizePhone(body.phone);
+    const email = normalizeEmail(body.email);
+    if (!phone && !email) return res.status(400).json({ message: "Staff phone number or email is required" });
+    const phoneHash = identityHash(phone);
+    const emailHash = identityHash(email);
+    const duplicate = await Partner.exists({
+      businessType: "laundry",
+      $or: [
+        ...(phoneHash ? [{ "laundryBusiness.staffMembers.phoneHash": phoneHash }] : []),
+        ...(emailHash ? [{ "laundryBusiness.staffMembers.emailHash": emailHash }] : [])
+      ]
+    });
+    if (duplicate) return res.status(409).json({ message: "This staff phone or email is already linked to a Laundry company" });
+    const members = owner.laundryBusiness?.staffMembers || [];
+    const sequence = members.reduce((max, member) => Math.max(max, Number(member.sequence || 0)), 0) + 1;
+    members.push({
+      sequence,
+      name: body.name,
+      phone,
+      phoneHash,
+      email,
+      emailHash,
+      role: body.role || "Laundry Staff",
+      idType: "Company ID",
+      documentType: `laundry_staff_${sequence}_identity`,
+      documentTitle: `Laundry Staff ${sequence} ID Proof`,
+      verificationStatus: "verified",
+      isOnline: false
+    });
+    owner.markModified("laundryBusiness.staffMembers");
+    await owner.save();
+    const staff = owner.laundryBusiness.staffMembers.find((member) => Number(member.sequence) === sequence);
+    return res.status(201).json({
+      ok: true,
+      staff: staffPublicProfile(owner, staff),
+      staffMembers: owner.laundryBusiness.staffMembers.map((member) => staffPublicProfile(owner, member))
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function assignLaundryStaff(req, res, next) {
   try {
     const owner = await Partner.findOne({ firebaseUid: req.auth.uid });
@@ -1127,6 +1200,7 @@ async function assignLaundryStaff(req, res, next) {
       staffSequence: Number(staff.sequence || 0),
       staffName: staff.name || "Laundry Staff",
       staffPhoneHash: staff.phoneHash || identityHash(normalizePhone(staff.phone)),
+      staffEmailHash: staff.emailHash || identityHash(normalizeEmail(staff.email)),
       staffFirebaseUid: staff.firebaseUid || "",
       taskStatus: "assigned",
       assignedAt: new Date(),
@@ -1178,7 +1252,8 @@ async function updateStaffBookingStatus(req, res, next) {
       partnerId: partner._id,
       $or: [
         { "laundryAssignment.staffFirebaseUid": staff.firebaseUid },
-        { "laundryAssignment.staffPhoneHash": staff.phoneHash }
+        { "laundryAssignment.staffPhoneHash": staff.phoneHash },
+        { "laundryAssignment.staffEmailHash": staff.emailHash }
       ]
     });
     if (!booking) return res.status(404).json({ message: "Assigned Laundry order not found" });
@@ -1451,6 +1526,7 @@ module.exports = {
   staffSession,
   listStaffBookings,
   setStaffOnline,
+  addLaundryStaff,
   assignLaundryStaff,
   updateStaffBookingStatus,
   updateLocation,
