@@ -1168,6 +1168,68 @@ async function addLaundryStaff(req, res, next) {
   }
 }
 
+async function ownerStaffContext(req) {
+  const owner = await Partner.findOne({ firebaseUid: req.auth.uid });
+  if (!owner || owner.businessType !== "laundry" || owner.businessVerificationStatus !== "approved") {
+    const error = new Error("Approved Laundry owner access required");
+    error.status = 403;
+    throw error;
+  }
+  const sequence = Number(req.params.staffSequence || 0);
+  const staff = (owner.laundryBusiness?.staffMembers || []).find((member) => Number(member.sequence) === sequence);
+  if (!staff) {
+    const error = new Error("Laundry staff member not found");
+    error.status = 404;
+    throw error;
+  }
+  return { owner, staff, sequence };
+}
+
+async function uploadLaundryStaffPhoto(req, res, next) {
+  try {
+    if (!req.file) return res.status(400).json({ message: "Staff profile photo is required" });
+    const { owner, staff, sequence } = await ownerStaffContext(req);
+    const uploaded = await uploadDocumentToCloudinary(req.file, owner._id, `laundry_staff_${sequence}_photo`, req, "image");
+    staff.photoUrl = uploaded.url;
+    owner.markModified("laundryBusiness.staffMembers");
+    await owner.save();
+    return res.status(201).json({ ok: true, staff: staffPublicProfile(owner, staff) });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function uploadLaundryStaffIdentity(req, res, next) {
+  try {
+    if (!req.file) return res.status(400).json({ message: "Staff government ID is required" });
+    const { owner, staff, sequence } = await ownerStaffContext(req);
+    const documentType = `laundry_staff_${sequence}_identity`;
+    const contentHash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
+    const uploaded = await uploadDocumentToCloudinary(req.file, owner._id, documentType, req, "document");
+    const document = await PartnerDocument.create({
+      partnerId: owner._id,
+      documentType,
+      originalName: req.file.originalname || "staff-government-id",
+      mimeType: req.file.mimetype,
+      sizeBytes: req.file.size,
+      contentHash,
+      ...uploaded,
+      validationStatus: "review",
+      validationScore: 100,
+      validationReasons: ["manual_staff_id_review_required"],
+      ocrStatus: "skipped"
+    });
+    staff.idType = String(req.body?.idType || "Government ID").trim().slice(0, 60) || "Government ID";
+    staff.documentType = documentType;
+    staff.documentTitle = req.file.originalname || `Laundry Staff ${sequence} Government ID`;
+    owner.markModified("laundryBusiness.staffMembers");
+    await owner.save();
+    return res.status(201).json({ ok: true, documentId: document._id, staff: staffPublicProfile(owner, staff) });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function assignLaundryStaff(req, res, next) {
   try {
     const owner = await Partner.findOne({ firebaseUid: req.auth.uid });
@@ -1524,6 +1586,8 @@ module.exports = {
   listStaffBookings,
   setStaffOnline,
   addLaundryStaff,
+  uploadLaundryStaffPhoto,
+  uploadLaundryStaffIdentity,
   assignLaundryStaff,
   updateStaffBookingStatus,
   updateLocation,

@@ -39,6 +39,8 @@ router.post("/staff/session", profileWriteLimiter, controller.staffSession);
 router.get("/staff/bookings", controller.listStaffBookings);
 router.patch("/staff/online", profileWriteLimiter, controller.setStaffOnline);
 router.post("/laundry/staff", profileWriteLimiter, controller.addLaundryStaff);
+router.post("/laundry/staff/:staffSequence/photo", verificationLimiter, imageUpload.single("photo"), validateUploadedImage(["image/jpeg", "image/png"]), controller.uploadLaundryStaffPhoto);
+router.post("/laundry/staff/:staffSequence/identity", verificationLimiter, documentUpload.single("document"), validateUploadedDocument(["image/jpeg", "image/png", "application/pdf"]), controller.uploadLaundryStaffIdentity);
 router.patch("/staff/bookings/:bookingId/status", profileWriteLimiter, controller.updateStaffBookingStatus);
 router.patch("/laundry/bookings/:bookingId/assign-staff", profileWriteLimiter, controller.assignLaundryStaff);
 router.post("/verification", verificationLimiter, controller.submitVerification);
