@@ -148,9 +148,10 @@ async function validateDocumentUpload({ buffer, mimeType, documentType, aadhaarL
     const normalizedText = ocrText.toLowerCase();
     const hasAadhaarWord = normalizedText.includes("aadhaar") || normalizedText.includes("aadhar") || normalizedText.includes("government of india");
     const hasLast4 = aadhaarLast4 && normalizedText.includes(String(aadhaarLast4));
-    if (ocrStatus === "passed" && (!hasAadhaarWord || !hasLast4)) {
+    if (ocrStatus === "passed" && aadhaarLast4 && (!hasAadhaarWord || !hasLast4)) {
       reasons.push("aadhaar_ocr_mismatch");
     }
+    if (!aadhaarLast4) reasons.push("manual_id_review_required");
     if (ocrStatus === "failed") {
       reasons.push("ocr_failed");
     }

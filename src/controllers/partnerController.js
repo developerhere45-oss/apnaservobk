@@ -780,9 +780,6 @@ async function uploadDocument(req, res, next) {
     const isLaundryDocument = body.documentType === "laundry_shop_license"
       || body.documentType === "laundry_staff_identity"
       || /^laundry_staff_\d+_identity$/.test(body.documentType);
-    if (["id_proof", "aadhaar_front", "aadhaar_back"].includes(body.documentType) && !body.aadhaarLast4) {
-      return res.status(400).json({ message: "Aadhaar last 4 digits required for ID proof" });
-    }
     const contentHash = crypto.createHash("sha256").update(file.buffer).digest("hex");
     const duplicate = await PartnerDocument.findOne({
       partnerId: partner._id,
@@ -872,7 +869,7 @@ async function uploadDocument(req, res, next) {
     if (["id_proof", "aadhaar_front", "aadhaar_back"].includes(body.documentType)) {
       update.idProofUrl = uploaded.url;
       update.idProofStatus = validation.validationStatus === "accepted" ? "submitted" : "submitted";
-      update.aadhaarLast4 = body.aadhaarLast4;
+      if (body.aadhaarLast4) update.aadhaarLast4 = body.aadhaarLast4;
       update.aadhaarStatus = validation.ocrStatus === "passed" && validation.validationStatus === "accepted" ? "verified" : "submitted";
       update.aadhaarVerified = update.aadhaarStatus === "verified";
     } else if (body.documentType === "pan_card") {
