@@ -13,7 +13,7 @@ const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/loc
 const { validateDocumentUpload } = require("../utils/documentValidation");
 const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
 const { reliableNotify } = require("../utils/reliableNotify");
-const { emitAdminEvent, emitNewBookingToPartners, serializeBooking } = require("../sockets/bookingSocket");
+const { emitAdminEvent, emitNewBookingToPartners, emitLaundryStaffAssignment, serializeBooking } = require("../sockets/bookingSocket");
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 const { partnerAssetUrl } = require("../utils/partnerUploadAssets");
 
@@ -1087,6 +1087,9 @@ async function staffJobsFor(partner, staff) {
   return Booking.find({
     partnerId: partner._id,
     $or: [
+      // Sequence is unique within the company. This remains stable even when a
+      // staff member signs in later with a newly linked Firebase account.
+      { "laundryAssignment.staffSequence": Number(staff.sequence || 0) },
       { "laundryAssignment.staffFirebaseUid": staff.firebaseUid },
       { "laundryAssignment.staffPhoneHash": staff.phoneHash },
       { "laundryAssignment.staffEmailHash": staff.emailHash }
@@ -1293,6 +1296,7 @@ async function assignLaundryStaff(req, res, next) {
       completedAt: null
     };
     await booking.save();
+    emitLaundryStaffAssignment(booking, owner, staff);
     if (staff.fcmToken) {
       await reliableNotify({
         recipients: [{
@@ -1336,6 +1340,7 @@ async function updateStaffBookingStatus(req, res, next) {
       ...bookingIdentityFilter(req.params.bookingId),
       partnerId: partner._id,
       $or: [
+        { "laundryAssignment.staffSequence": Number(staff.sequence || 0) },
         { "laundryAssignment.staffFirebaseUid": staff.firebaseUid },
         { "laundryAssignment.staffPhoneHash": staff.phoneHash },
         { "laundryAssignment.staffEmailHash": staff.emailHash }

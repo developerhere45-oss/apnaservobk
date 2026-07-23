@@ -373,6 +373,20 @@ async function identifySocket(socket, next) {
       } else {
         socket.emit("realtime:identity_missing", { role: "partner" });
       }
+      // A laundry staff account is authenticated by its own Firebase identity,
+      // not by the company owner's partner profile. Give it a private room so
+      // assigned jobs arrive immediately instead of waiting for an FCM token.
+      const staffOwner = await Partner.findOne({
+        businessType: "laundry",
+        "laundryBusiness.staffMembers.firebaseUid": decoded.uid
+      });
+      if (staffOwner) {
+        const staff = (staffOwner.laundryBusiness?.staffMembers || []).find((member) => member.firebaseUid === decoded.uid);
+        if (staff && Number(staff.sequence || 0) > 0) {
+          socket.staff = { ownerPartnerId: String(staffOwner._id), sequence: Number(staff.sequence) };
+          socket.join(`staff:${staffOwner._id}:${staff.sequence}`);
+        }
+      }
     } else {
       const user = await User.findOneAndUpdate(
         { firebaseUid: decoded.uid },
@@ -508,6 +522,20 @@ function emitNewBookingToPartners(booking, partners) {
   for (const partner of targetPartners) {
     io.to(`partner:${partner._id}`).emit("booking:new_request", payload);
   }
+}
+
+function emitLaundryStaffAssignment(booking, owner, staff) {
+  if (!io || !booking || !owner || !staff) return;
+  const sequence = Number(staff.sequence || 0);
+  if (!sequence) return;
+  io.to(`staff:${owner._id}:${sequence}`).emit("laundry:staff_assignment", {
+    ...partnerBookingPayload(booking),
+    assignment: {
+      staffSequence: sequence,
+      shopName: owner.laundryBusiness?.shopName || owner.name || "ApnaServo Company",
+      assignedAt: booking.laundryAssignment?.assignedAt || new Date()
+    }
+  });
 }
 
 function emitBookingAccepted(booking, acceptedPartner = null) {
@@ -735,6 +763,7 @@ function getIO() {
 module.exports = {
   initBookingSocket,
   emitNewBookingToPartners,
+  emitLaundryStaffAssignment,
   emitBookingAccepted,
   emitBookingRejected,
   emitBookingStatusUpdate,
