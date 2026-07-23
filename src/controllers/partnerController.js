@@ -13,7 +13,7 @@ const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/loc
 const { validateDocumentUpload } = require("../utils/documentValidation");
 const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
 const { reliableNotify } = require("../utils/reliableNotify");
-const { emitAdminEvent, emitNewBookingToPartners, emitLaundryStaffAssignment, serializeBooking } = require("../sockets/bookingSocket");
+const { emitAdminEvent, emitNewBookingToPartners, emitBookingAccepted, emitLaundryStaffAssignment, serializeBooking } = require("../sockets/bookingSocket");
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 const { partnerAssetUrl } = require("../utils/partnerUploadAssets");
 
@@ -1270,18 +1270,36 @@ async function assignLaundryStaff(req, res, next) {
     if (!staff || staff.verificationStatus !== "verified") {
       return res.status(404).json({ message: "Verified Laundry staff member not found" });
     }
-    const booking = await Booking.findOne({
-      ...bookingIdentityFilter(req.params.bookingId),
-      partnerId: owner._id
-    });
+    const booking = await Booking.findOne(bookingIdentityFilter(req.params.bookingId));
     if (!booking) {
-      return res.status(404).json({ message: "Laundry order not found for this shop" });
+      return res.status(404).json({ message: "Laundry order not found" });
+    }
+    const ownerId = String(owner._id);
+    const currentPartnerId = String(booking.partnerId || "");
+    const wasSentToOwner = (booking.requestedPartners || []).some((partnerId) => String(partnerId) === ownerId);
+    if (currentPartnerId && currentPartnerId !== ownerId) {
+      return res.status(403).json({ message: "This order belongs to another company" });
+    }
+    if (!currentPartnerId && !wasSentToOwner) {
+      return res.status(403).json({ message: "This order was not sent to your company" });
     }
     if (["completed", "cancelled"].includes(booking.status)) {
       return res.status(409).json({ message: "Completed or cancelled Laundry orders cannot be assigned" });
     }
     if (["in_progress", "completed"].includes(booking.laundryAssignment?.taskStatus)) {
       return res.status(409).json({ message: "A Laundry task already in progress cannot be reassigned" });
+    }
+    const acceptedDuringAssignment = !currentPartnerId;
+    if (acceptedDuringAssignment) {
+      booking.partnerId = owner._id;
+      booking.status = "accepted";
+      booking.acceptedAt = new Date();
+      booking.statusTimeline.push({
+        status: "accepted",
+        at: booking.acceptedAt,
+        by: "partner_owner",
+        note: "Company accepted the booking while assigning staff"
+      });
     }
     booking.laundryAssignment = {
       ownerPartnerId: owner._id,
@@ -1296,6 +1314,7 @@ async function assignLaundryStaff(req, res, next) {
       completedAt: null
     };
     await booking.save();
+    if (acceptedDuringAssignment) emitBookingAccepted(booking, owner);
     emitLaundryStaffAssignment(booking, owner, staff);
     if (staff.fcmToken) {
       await reliableNotify({
