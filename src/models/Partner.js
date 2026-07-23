@@ -46,7 +46,7 @@ const laundryStaffSchema = new mongoose.Schema(
     email: { type: String, trim: true, lowercase: true, default: "" },
     emailHash: { type: String, trim: true, default: "" },
     firebaseUid: { type: String, trim: true, default: "" },
-    role: { type: String, trim: true, default: "Laundry Staff" },
+    role: { type: String, trim: true, default: "Service Staff" },
     photoUrl: { type: String, trim: true, default: "" },
     verificationStatus: {
       type: String,

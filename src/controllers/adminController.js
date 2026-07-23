@@ -23,7 +23,7 @@ const { emitAdminEvent, emitNewBookingToPartners } = require("../sockets/booking
 const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens, tokenHash } = require("../utils/notificationTokens");
 const findNearbyPartners = require("../utils/findNearbyPartners");
-const { serviceCategoryVariants, serviceLabel } = require("../utils/serviceCategory");
+const { serviceCategoryVariants, serviceLabel, partnerCanServeService } = require("../utils/serviceCategory");
 const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
 const { partnerAssetUrl, verifyPartnerAssetToken } = require("../utils/partnerUploadAssets");
 
@@ -755,8 +755,12 @@ async function availablePartnersForBooking(booking, { partnerIds = [], onlineOnl
   const ids = (Array.isArray(partnerIds) ? partnerIds : [])
     .map((value) => objectId(value))
     .filter(Boolean);
+  const categories = serviceCategoryVariants(booking.serviceCategory);
   if (ids.length) {
-    return Partner.find({ _id: { $in: ids }, ...approvedPartnerFilter() }).limit(limit);
+    // Admin selection is still category-safe: a Laundry company cannot be
+    // manually sent a Cleaning/AC/Plumbing booking and vice versa.
+    const selected = await Partner.find({ _id: { $in: ids }, serviceCategory: { $in: categories }, ...approvedPartnerFilter() }).limit(limit);
+    return selected.filter((partner) => partnerCanServeService(partner, booking.serviceCategory));
   }
 
   let partners = [];
@@ -772,15 +776,15 @@ async function availablePartnersForBooking(booking, { partnerIds = [], onlineOnl
 
   if (partners.length) return partners.slice(0, limit);
 
-  const categories = serviceCategoryVariants(booking.serviceCategory);
   const cityMatcher = regex(booking.city || "Guwahati");
-  return Partner.find({
+  const fallback = await Partner.find({
     ...approvedPartnerFilter(onlineOnly ? { isOnline: true } : {}),
     serviceCategory: { $in: categories },
     ...(cityMatcher ? { $or: [{ city: cityMatcher }, { serviceArea: cityMatcher }, { workingAreas: cityMatcher }] } : {})
   })
     .sort({ isOnline: -1, rating: -1, totalJobs: -1, updatedAt: -1 })
-    .limit(limit);
+    .limit(limit * 3);
+  return fallback.filter((partner) => partnerCanServeService(partner, booking.serviceCategory)).slice(0, limit);
 }
 
 async function smartAssignmentDashboard(req, res, next) {

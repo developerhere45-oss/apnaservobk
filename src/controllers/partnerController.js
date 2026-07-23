@@ -8,7 +8,7 @@ const SupportTicket = require("../models/SupportTicket");
 const { Booking } = require("../models/Booking");
 const LocationLog = require("../models/LocationLog");
 const { cloudinary } = require("../config/cloudinary");
-const { normalizeServiceCategory, serviceCategoryVariants } = require("../utils/serviceCategory");
+const { normalizeServiceCategory, serviceCategoryVariants, serviceLabel } = require("../utils/serviceCategory");
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
 const { validateDocumentUpload } = require("../utils/documentValidation");
 const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
@@ -137,8 +137,14 @@ const supportTicketSchema = z.object({
 });
 
 function categoriesFrom(bodyValue) {
-  const values = Array.isArray(bodyValue) ? bodyValue : [bodyValue || "ac"];
-  return [...new Set(values.map(normalizeServiceCategory).filter(Boolean))];
+  // A company or independent partner must explicitly choose its service.
+  // Never silently turn an incomplete registration into an AC profile.
+  const values = Array.isArray(bodyValue) ? bodyValue : [bodyValue || ""];
+  return [...new Set(values
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .map(normalizeServiceCategory)
+    .filter((value) => value && value !== "service"))];
 }
 
 function listFromBody(value) {
@@ -172,24 +178,61 @@ function partnerCanReceiveOpenBookings(partner) {
 }
 
 function partnerDispatchCategories(partner) {
-  return [...new Set((partner.serviceCategory || []).flatMap(serviceCategoryVariants))].filter(Boolean);
+  const companyCategories = isolatedCompanyCategories(partner);
+  const source = companyCategories || partner.serviceCategory || [];
+  return [...new Set(source.flatMap(serviceCategoryVariants))].filter(Boolean);
 }
 
 function isolatedCompanyCategories(partner) {
   if (!partner || partner.businessType !== "laundry") return null;
   const normalized = [...new Set((partner.serviceCategory || []).map(normalizeServiceCategory).filter(Boolean))];
-  const operational = normalized.filter((category) => ["laundry", "cleaning"].includes(category));
-  if (operational.length === 1 && normalized.length === 1) return operational;
+  if (normalized.length === 1) return normalized;
   const businessName = `${partner.laundryBusiness?.shopName || ""} ${partner.name || ""}`.toLowerCase();
-  if (/laundry|dry\s*clean|wash|iron/.test(businessName)) return ["laundry"];
-  if (/cleaning|cleaner|housekeeping|deep\s*clean/.test(businessName)) return ["cleaning"];
-  return operational.includes("laundry") ? ["laundry"] : (operational.includes("cleaning") ? ["cleaning"] : ["laundry"]);
+  const serviceMatchers = {
+    laundry: /laundry|dry\s*clean|wash|iron/,
+    cleaning: /cleaning|cleaner|housekeeping|deep\s*clean/,
+    ac: /\bac\b|air\s*condition/,
+    electrician: /electric/,
+    plumbing: /plumb|pipe/,
+    carpenter: /carpent|furniture/,
+    painting: /paint/,
+    pest: /pest/,
+    appliances: /appliance/,
+    ro: /\bro\b|water\s*purifier/,
+    interior: /interior/,
+    roadside: /roadside/
+  };
+  const nameMatched = normalized.find((category) => serviceMatchers[category]?.test(businessName));
+  // Legacy profiles that carried multiple services are reduced predictably to
+  // one saved service. No new default service is invented for an empty profile.
+  return nameMatched ? [nameMatched] : [];
 }
 
 async function enforceCompanyServiceIsolation(partner) {
-  const isolated = isolatedCompanyCategories(partner);
+  let isolated = isolatedCompanyCategories(partner);
+  const current = (partner?.serviceCategory || []).map(normalizeServiceCategory).filter(Boolean);
+  // Older company profiles were incorrectly saved with both Laundry and
+  // Cleaning. If the company name is ambiguous, its live booking history is
+  // the safest migration signal; this prevents a cleaning company from being
+  // converted to Laundry just because of a legacy array order.
+  if (partner?.businessType === "laundry" && current.length > 1) {
+    const businessName = `${partner.laundryBusiness?.shopName || ""} ${partner.name || ""}`.toLowerCase();
+    const hasNameSignal = /laundry|dry\s*clean|wash|iron|cleaning|cleaner|housekeeping|deep\s*clean|\bac\b|air\s*condition|electric|plumb|pipe|carpent|furniture|paint|pest|appliance|\bro\b|water\s*purifier|interior|roadside/.test(businessName);
+    if (!hasNameSignal) {
+      const counts = await Booking.aggregate([
+        { $match: {
+          $or: [{ partnerId: partner._id }, { requestedPartners: partner._id }],
+          serviceCategory: { $in: current }
+        } },
+        { $group: { _id: "$serviceCategory", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 1 }
+      ]);
+      const bookingCategory = normalizeServiceCategory(counts[0]?._id || "");
+      if (current.includes(bookingCategory)) isolated = [bookingCategory];
+    }
+  }
   if (!isolated) return partner;
-  const current = (partner.serviceCategory || []).map(normalizeServiceCategory);
   if (current.length === isolated.length && current.every((value, index) => value === isolated[index])) return partner;
   partner.serviceCategory = isolated;
   await partner.save();
@@ -197,6 +240,7 @@ async function enforceCompanyServiceIsolation(partner) {
 }
 
 async function dispatchPendingBookingsToPartner(partner) {
+  partner = await enforceCompanyServiceIsolation(partner);
   if (!partnerCanReceiveOpenBookings(partner)) {
     return 0;
   }
@@ -270,14 +314,20 @@ function staffPublicProfile(partner, staff) {
   const approved = partner.businessVerificationStatus === "approved"
     && partner.accountStatus === "active"
     && partner.trustStatus !== "suspended";
+  const companyService = isolatedCompanyCategories(partner) || [];
+  const serviceName = serviceLabel(companyService[0] || "service");
+  const storedRole = String(staff.role || "").trim();
+  const role = (!storedRole || (companyService[0] !== "laundry" && /^laundry\s+staff$/i.test(storedRole)))
+    ? `${serviceName} Staff`
+    : storedRole;
   return {
     sequence: Number(staff.sequence || 0),
-    name: staff.name || "Laundry Staff",
+    name: staff.name || "Service Staff",
     phone: staff.phone || "",
     email: staff.email || "",
-    role: staff.role || "Laundry Staff",
+    role,
     staffCode: `${partner.partnerCode || `ASP${String(partner._id).slice(-6).toUpperCase()}`}-S${String(Number(staff.sequence || 0)).padStart(2, "0")}`,
-    serviceCategory: isolatedCompanyCategories(partner) || partner.serviceCategory || [],
+    serviceCategory: companyService,
     photoUrl: staff.photoUrl || "",
     idType: staff.idType || "Government ID",
     identityVerified: staff.verificationStatus === "verified",
@@ -285,7 +335,7 @@ function staffPublicProfile(partner, staff) {
       ? "blocked"
       : (approved && staff.verificationStatus === "verified" ? "verified" : (staff.verificationStatus || "pending_review")),
     isOnline: Boolean(staff.isOnline),
-    shopName: partner.laundryBusiness?.shopName || "ApnaServo Laundry",
+    shopName: partner.laundryBusiness?.shopName || "ApnaServo Company",
     shopLocation: partner.laundryBusiness?.shopLocation || partner.serviceArea || "Guwahati, Assam",
     shopLicenseNumber: partner.laundryBusiness?.shopLicenseNumber || "",
     ownerPartnerId: String(partner._id),
@@ -322,7 +372,7 @@ async function findStaffContext(req, { requireApproved = true } = {}) {
         || (verifiedEmail && normalizeEmail(member.email) === verifiedEmail)));
   }
   if (!partner) {
-    const error = new Error("No Laundry staff invitation was found for this phone or email");
+    const error = new Error("No company staff invitation was found for this phone or email");
     error.status = 404;
     throw error;
   }
@@ -335,7 +385,7 @@ async function findStaffContext(req, { requireApproved = true } = {}) {
       || (verifiedEmail && normalizeEmail(member.email) === verifiedEmail)
   );
   if (!staff) {
-    const error = new Error("Laundry staff profile not found");
+    const error = new Error("Company staff profile not found");
     error.status = 404;
     throw error;
   }
@@ -345,7 +395,7 @@ async function findStaffContext(req, { requireApproved = true } = {}) {
     throw error;
   }
   if (["blocked", "rejected"].includes(staff.verificationStatus)) {
-    const error = new Error("Staff access is blocked. Contact the Laundry shop owner or ApnaServo Support");
+    const error = new Error("Staff access is blocked. Contact the company owner or ApnaServo Support");
     error.status = 403;
     throw error;
   }
@@ -355,7 +405,7 @@ async function findStaffContext(req, { requireApproved = true } = {}) {
     || partner.trustStatus === "suspended"
     || staff.verificationStatus !== "verified"
   )) {
-    const error = new Error("Laundry shop or staff verification is still pending");
+    const error = new Error("Company or staff verification is still pending");
     error.status = 403;
     throw error;
   }
@@ -555,12 +605,12 @@ async function upsertProfile(req, res, next) {
     }
     const email = normalizeEmail(body.email || req.auth.email || "");
     const categories = categoriesFrom(body.serviceCategory);
-    if (!categories.length) {
-      return res.status(400).json({ message: "At least one valid service category is required" });
+    if (categories.length !== 1) {
+      return res.status(400).json({ message: "Choose exactly one service category for this profile" });
     }
     const isLaundryRegistration = body.businessType === "laundry";
-    if (isLaundryRegistration && (categories.length !== 1 || !["laundry", "cleaning"].includes(categories[0]) || !body.laundryBusiness)) {
-      return res.status(400).json({ message: "Choose exactly one company service: Laundry or Cleaning" });
+    if (isLaundryRegistration && !body.laundryBusiness) {
+      return res.status(400).json({ message: "Complete company and staff details are required" });
     }
     if (isLaundryRegistration && body.laundryBusiness.staffMembers.some((staff) => !normalizePhone(staff.phone))) {
       return res.status(400).json({ message: "Every laundry staff member requires a valid phone number" });
@@ -574,7 +624,7 @@ async function upsertProfile(req, res, next) {
             phone: staffPhone,
             phoneHash: identityHash(staffPhone),
             idNumber: staff.idNumber || "",
-            role: staff.role || "Laundry Staff",
+            role: staff.role || `${serviceLabel(categories[0])} Staff`,
             photoUrl: staff.photoUrl || ""
           };
         })
@@ -582,7 +632,7 @@ async function upsertProfile(req, res, next) {
     if (isLaundryRegistration) {
       const staffHashes = normalizedLaundryStaff.map((staff) => staff.phoneHash);
       if (new Set(staffHashes).size !== staffHashes.length) {
-        return res.status(400).json({ message: "Each Laundry staff member must use a different phone number" });
+      return res.status(400).json({ message: "Each staff member must use a different phone number" });
       }
       if (normalizedLaundryStaff.some((staff) => staff.phone === ownerPhone)) {
         return res.status(400).json({ message: "Owner and staff phone numbers must be different" });
@@ -593,7 +643,7 @@ async function upsertProfile(req, res, next) {
           "laundryBusiness.staffMembers.phoneHash": { $in: staffHashes }
         });
         if (claimedByAnotherShop) {
-          return res.status(409).json({ message: "A staff phone number is already registered with another Laundry shop" });
+          return res.status(409).json({ message: "A staff phone number is already registered with another company" });
         }
       }
     }
@@ -642,10 +692,10 @@ async function upsertProfile(req, res, next) {
         businessVerificationStatus: adminApproved ? "approved" : "pending_review",
         laundryBusiness: {
           ...body.laundryBusiness,
-          shopName: body.laundryBusiness.shopName || `${body.name || req.auth.name || "Laundry Owner"} Laundry`,
+          shopName: body.laundryBusiness.shopName || `${body.name || req.auth.name || "Service"} Company`,
           shopLicenseNumber: body.laundryBusiness.shopLicenseNumber || "Not provided",
           shopLocation: body.laundryBusiness.shopLocation || body.serviceArea || "Guwahati, Assam",
-          ownerName: body.laundryBusiness.ownerName || body.name || req.auth.name || "Laundry Owner",
+          ownerName: body.laundryBusiness.ownerName || body.name || req.auth.name || "Company Owner",
           ownerPhone,
           staffMembers: normalizedLaundryStaff.map((staff) => {
             const previous = (targetPartner?.laundryBusiness?.staffMembers || []).find((entry) =>
@@ -1071,11 +1121,12 @@ async function createSupportTicket(req, res, next) {
 async function setOnline(req, res, next) {
   try {
     const isOnline = req.path.includes("online");
-    const partner = await Partner.findOneAndUpdate(
+    let partner = await Partner.findOneAndUpdate(
       { firebaseUid: req.auth.uid },
       { $set: { isOnline } },
       { new: true }
     );
+    partner = await enforceCompanyServiceIsolation(partner);
     const dispatchedBookings = isOnline ? await dispatchPendingBookingsToPartner(partner) : 0;
     return res.json({ ok: true, partner, dispatchedBookings });
   } catch (error) {
@@ -1084,8 +1135,11 @@ async function setOnline(req, res, next) {
 }
 
 async function staffJobsFor(partner, staff) {
+  const categories = partnerDispatchCategories(partner);
+  if (!categories.length) return [];
   return Booking.find({
     partnerId: partner._id,
+    serviceCategory: { $in: categories },
     $or: [
       // Sequence is unique within the company. This remains stable even when a
       // staff member signs in later with a newly linked Firebase account.
@@ -1099,7 +1153,9 @@ async function staffJobsFor(partner, staff) {
 
 async function staffSession(req, res, next) {
   try {
-    const { partner, staff } = await findStaffContext(req);
+    let { partner, staff } = await findStaffContext(req);
+    partner = await enforceCompanyServiceIsolation(partner);
+    staff = (partner.laundryBusiness?.staffMembers || []).find((member) => Number(member.sequence) === Number(staff.sequence)) || staff;
     const fcmToken = String(req.body?.fcmToken || "").trim();
     if (fcmToken && fcmToken.length <= 4096) staff.fcmToken = fcmToken;
     staff.isOnline = req.body?.isOnline !== false;
@@ -1119,7 +1175,9 @@ async function staffSession(req, res, next) {
 
 async function listStaffBookings(req, res, next) {
   try {
-    const { partner, staff, contextChanged } = await findStaffContext(req);
+    let { partner, staff, contextChanged } = await findStaffContext(req);
+    partner = await enforceCompanyServiceIsolation(partner);
+    staff = (partner.laundryBusiness?.staffMembers || []).find((member) => Number(member.sequence) === Number(staff.sequence)) || staff;
     if (contextChanged) {
       partner.markModified("laundryBusiness.staffMembers");
       await partner.save();
@@ -1136,7 +1194,9 @@ async function listStaffBookings(req, res, next) {
 
 async function setStaffOnline(req, res, next) {
   try {
-    const { partner, staff } = await findStaffContext(req);
+    let { partner, staff } = await findStaffContext(req);
+    partner = await enforceCompanyServiceIsolation(partner);
+    staff = (partner.laundryBusiness?.staffMembers || []).find((member) => Number(member.sequence) === Number(staff.sequence)) || staff;
     staff.isOnline = req.body?.isOnline !== false;
     const fcmToken = String(req.body?.fcmToken || "").trim();
     if (fcmToken && fcmToken.length <= 4096) staff.fcmToken = fcmToken;
@@ -1151,10 +1211,12 @@ async function setStaffOnline(req, res, next) {
 async function addLaundryStaff(req, res, next) {
   try {
     const body = laundryStaffInviteSchema.parse(req.body || {});
-    const owner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    let owner = await Partner.findOne({ firebaseUid: req.auth.uid });
     if (!owner || owner.businessType !== "laundry" || owner.businessVerificationStatus !== "approved") {
-      return res.status(403).json({ message: "Approved Laundry owner access required" });
+      return res.status(403).json({ message: "Approved company owner access required" });
     }
+    owner = await enforceCompanyServiceIsolation(owner);
+    const serviceName = serviceLabel(isolatedCompanyCategories(owner)?.[0] || "service");
     const phone = normalizePhone(body.phone);
     const email = normalizeEmail(body.email);
     if (!phone && !email) return res.status(400).json({ message: "Staff phone number or email is required" });
@@ -1167,7 +1229,7 @@ async function addLaundryStaff(req, res, next) {
         ...(emailHash ? [{ "laundryBusiness.staffMembers.emailHash": emailHash }] : [])
       ]
     });
-    if (duplicate) return res.status(409).json({ message: "This staff phone or email is already linked to a Laundry company" });
+    if (duplicate) return res.status(409).json({ message: "This staff phone or email is already linked to another company" });
     const members = owner.laundryBusiness?.staffMembers || [];
     const sequence = members.reduce((max, member) => Math.max(max, Number(member.sequence || 0)), 0) + 1;
     members.push({
@@ -1177,10 +1239,10 @@ async function addLaundryStaff(req, res, next) {
       phoneHash,
       email,
       emailHash,
-      role: body.role || "Laundry Staff",
+      role: body.role || `${serviceName} Staff`,
       idType: "Company ID",
       documentType: `laundry_staff_${sequence}_identity`,
-      documentTitle: `Laundry Staff ${sequence} ID Proof`,
+      documentTitle: `${serviceName} Staff ${sequence} ID Proof`,
       verificationStatus: "verified",
       isOnline: false
     });
@@ -1198,16 +1260,17 @@ async function addLaundryStaff(req, res, next) {
 }
 
 async function ownerStaffContext(req) {
-  const owner = await Partner.findOne({ firebaseUid: req.auth.uid });
+  let owner = await Partner.findOne({ firebaseUid: req.auth.uid });
   if (!owner || owner.businessType !== "laundry" || owner.businessVerificationStatus !== "approved") {
-    const error = new Error("Approved Laundry owner access required");
+    const error = new Error("Approved company owner access required");
     error.status = 403;
     throw error;
   }
+  owner = await enforceCompanyServiceIsolation(owner);
   const sequence = Number(req.params.staffSequence || 0);
   const staff = (owner.laundryBusiness?.staffMembers || []).find((member) => Number(member.sequence) === sequence);
   if (!staff) {
-    const error = new Error("Laundry staff member not found");
+    const error = new Error("Company staff member not found");
     error.status = 404;
     throw error;
   }
@@ -1250,7 +1313,7 @@ async function uploadLaundryStaffIdentity(req, res, next) {
     });
     staff.idType = String(req.body?.idType || "Government ID").trim().slice(0, 60) || "Government ID";
     staff.documentType = documentType;
-    staff.documentTitle = req.file.originalname || `Laundry Staff ${sequence} Government ID`;
+    staff.documentTitle = req.file.originalname || `${serviceLabel(isolatedCompanyCategories(owner)?.[0] || "service")} Staff ${sequence} Government ID`;
     owner.markModified("laundryBusiness.staffMembers");
     await owner.save();
     return res.status(201).json({ ok: true, documentId: document._id, staff: staffPublicProfile(owner, staff) });
@@ -1261,18 +1324,23 @@ async function uploadLaundryStaffIdentity(req, res, next) {
 
 async function assignLaundryStaff(req, res, next) {
   try {
-    const owner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    let owner = await Partner.findOne({ firebaseUid: req.auth.uid });
     if (!owner || owner.businessType !== "laundry" || owner.businessVerificationStatus !== "approved") {
-      return res.status(403).json({ message: "Approved Laundry owner access required" });
+      return res.status(403).json({ message: "Approved company owner access required" });
     }
+    owner = await enforceCompanyServiceIsolation(owner);
     const sequence = Number(req.body?.staffSequence || 0);
     const staff = (owner.laundryBusiness?.staffMembers || []).find((member) => Number(member.sequence) === sequence);
     if (!staff || staff.verificationStatus !== "verified") {
-      return res.status(404).json({ message: "Verified Laundry staff member not found" });
+      return res.status(404).json({ message: "Verified company staff member not found" });
     }
     const booking = await Booking.findOne(bookingIdentityFilter(req.params.bookingId));
     if (!booking) {
-      return res.status(404).json({ message: "Laundry order not found" });
+      return res.status(404).json({ message: "Booking not found" });
+    }
+    const allowedCategories = partnerDispatchCategories(owner);
+    if (!allowedCategories.includes(normalizeServiceCategory(booking.serviceCategory))) {
+      return res.status(403).json({ message: "This booking belongs to a different service category" });
     }
     const ownerId = String(owner._id);
     const currentPartnerId = String(booking.partnerId || "");
@@ -1284,10 +1352,10 @@ async function assignLaundryStaff(req, res, next) {
       return res.status(403).json({ message: "This order was not sent to your company" });
     }
     if (["completed", "cancelled"].includes(booking.status)) {
-      return res.status(409).json({ message: "Completed or cancelled Laundry orders cannot be assigned" });
+      return res.status(409).json({ message: "Completed or cancelled bookings cannot be assigned" });
     }
     if (["in_progress", "completed"].includes(booking.laundryAssignment?.taskStatus)) {
-      return res.status(409).json({ message: "A Laundry task already in progress cannot be reassigned" });
+      return res.status(409).json({ message: "A task already in progress cannot be reassigned" });
     }
     const acceptedDuringAssignment = !currentPartnerId;
     if (acceptedDuringAssignment) {
@@ -1304,7 +1372,7 @@ async function assignLaundryStaff(req, res, next) {
     booking.laundryAssignment = {
       ownerPartnerId: owner._id,
       staffSequence: Number(staff.sequence || 0),
-      staffName: staff.name || "Laundry Staff",
+      staffName: staff.name || `${serviceLabel(isolatedCompanyCategories(owner)?.[0] || "service")} Staff`,
       staffPhoneHash: staff.phoneHash || identityHash(normalizePhone(staff.phone)),
       staffEmailHash: staff.emailHash || identityHash(normalizeEmail(staff.email)),
       staffFirebaseUid: staff.firebaseUid || "",
@@ -1325,8 +1393,8 @@ async function assignLaundryStaff(req, res, next) {
           token: staff.fcmToken,
           phone: staff.phone
         }],
-        title: "New Laundry Task Assigned",
-        body: `${owner.laundryBusiness?.shopName || "Your shop"} assigned order ${booking.bookingCode}`,
+        title: "New Service Task Assigned",
+        body: `${owner.laundryBusiness?.shopName || "Your company"} assigned booking ${booking.bookingCode}`,
         category: "laundry_staff_assignment",
         priority: "high",
         data: {

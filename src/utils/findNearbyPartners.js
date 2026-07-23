@@ -1,5 +1,5 @@
 const Partner = require("../models/Partner");
-const { normalizeServiceCategory, serviceCategoryVariants } = require("./serviceCategory");
+const { normalizeServiceCategory, serviceCategoryVariants, partnerCanServeService } = require("./serviceCategory");
 
 const EARTH_RADIUS_M = 6378137;
 const DEFAULT_RADIUS_STEPS_KM = [5, 10];
@@ -51,11 +51,12 @@ function excludedPartnerIds(values = []) {
   return new Set((values || []).map((value) => String(value || "")).filter(Boolean));
 }
 
-function approvalFilter(categories, excludedIds, category = "") {
+function approvalFilter(categories, excludedIds) {
   const filter = {
-    ...(category === "cleaning"
-      ? { $or: [{ serviceCategory: { $in: categories } }, { businessType: "laundry", businessVerificationStatus: "approved" }] }
-      : { serviceCategory: { $in: categories } }),
+    // Every service is isolated. A verified company is never a fallback for
+    // another category (the former Cleaning->all companies fallback caused
+    // laundry staff to receive cleaning work).
+    serviceCategory: { $in: categories },
     isOnline: true,
     accountStatus: "active",
     isVerified: true,
@@ -88,6 +89,10 @@ function partnersWithinRadius(partners, latitude, longitude, radiusKm) {
     .sort((left, right) => left.distanceMeters - right.distanceMeters);
 }
 
+function partnersForRequestedService(partners, serviceCategory) {
+  return (partners || []).filter((partner) => partnerCanServeService(partner, serviceCategory));
+}
+
 async function geoCandidates(filter, latitude, longitude, radiusKm) {
   const maxDistance = radiusKm * 1000;
   try {
@@ -110,14 +115,14 @@ async function findNearbyPartnersWithMeta({ serviceCategory, city, lat, lng, rad
   const category = normalizeServiceCategory(serviceCategory);
   const categories = serviceCategoryVariants(category);
   const excludedIds = excludedPartnerIds(excludePartnerIds);
-  const filter = approvalFilter(categories, excludedIds, category);
+  const filter = approvalFilter(categories, excludedIds);
 
   if (validCoordinates(lat, lng)) {
     const latitude = Number(lat);
     const longitude = Number(lng);
     const steps = radiusStepsKm(radiusKm);
     for (const stepKm of steps) {
-      const candidates = await geoCandidates(filter, latitude, longitude, stepKm);
+      const candidates = partnersForRequestedService(await geoCandidates(filter, latitude, longitude, stepKm), category);
       const matches = partnersWithinRadius(candidates, latitude, longitude, stepKm);
       if (matches.length) {
         return {
@@ -132,7 +137,10 @@ async function findNearbyPartnersWithMeta({ serviceCategory, city, lat, lng, rad
   }
 
   const cityPattern = String(city || "Guwahati").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const partners = await Partner.find({ ...filter, city: new RegExp(cityPattern, "i") }).limit(100);
+  const partners = partnersForRequestedService(
+    await Partner.find({ ...filter, city: new RegExp(cityPattern, "i") }).limit(100),
+    category
+  );
   return { partners, radiusKm: 0, mode: "city_fallback", distancesMeters: {} };
 }
 

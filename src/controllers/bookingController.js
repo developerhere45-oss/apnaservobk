@@ -12,7 +12,7 @@ const TechnicianSos = require("../models/TechnicianSos");
 const JobProofPhoto = require("../models/JobProofPhoto");
 const RevisitRequest = require("../models/RevisitRequest");
 const { cloudinary } = require("../config/cloudinary");
-const { normalizeServiceCategory, serviceCategoryVariants, serviceLabel } = require("../utils/serviceCategory");
+const { normalizeServiceCategory, serviceCategoryVariants, serviceLabel, companySingleServiceCategory } = require("../utils/serviceCategory");
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
 const { recordFraudSignal } = require("../utils/fraudDetection");
 const {
@@ -378,7 +378,17 @@ function protectCustomerPhoneForPartner(payload, booking, partner) {
 }
 
 function partnerCategoryVariants(partner) {
-  return [...new Set((partner.serviceCategory || []).flatMap(serviceCategoryVariants))];
+  const categories = [...new Set((partner.serviceCategory || [])
+    .map(normalizeServiceCategory)
+    .filter((category) => category && category !== "service"))];
+  // A company profile is a single operating service. An ambiguous legacy
+  // record receives no new work until its category is normalized, rather than
+  // falling back to Laundry or whichever value happens to come first.
+  if (partner?.businessType === "laundry") {
+    const selected = companySingleServiceCategory(partner);
+    return selected ? serviceCategoryVariants(selected) : [];
+  }
+  return [...new Set(categories.flatMap(serviceCategoryVariants))];
 }
 
 function partnerOpenBookingVisibility(partner, categories) {
@@ -762,9 +772,12 @@ async function listPartnerBookings(req, res, next) {
 
     const categories = partnerCategoryVariants(partner);
     const canViewOpenJobs = partnerCanViewOpenJobs(partner);
+    const companyServiceFilter = partner.businessType === "laundry"
+      ? { serviceCategory: { $in: categories } }
+      : {};
     const bookings = await Booking.find({
       $or: [
-        { partnerId: partner._id },
+        { partnerId: partner._id, ...companyServiceFilter },
         {
           partnerId: null,
           requestedPartners: partner._id,
