@@ -983,8 +983,11 @@ async function updateStatus(req, res, next) {
       return res.status(400).json({ message: "Invalid booking status" });
     }
 
-    const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
-    const staffActor = partner ? null : await findLaundryStaffActor(req.auth);
+    // Resolve a company-staff identity first. This prevents an old independent
+    // partner profile on the same Firebase account from accidentally granting
+    // owner-level status permissions to an assigned staff member.
+    const staffActor = await findLaundryStaffActor(req.auth);
+    const partner = staffActor ? null : await Partner.findOne({ firebaseUid: req.auth.uid });
     const actingPartner = partner || staffActor?.partner || null;
     const user = await User.findOne({ firebaseUid: req.auth.uid });
     const query = bookingIdFilter(String(req.params.bookingId || ""));
