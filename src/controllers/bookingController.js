@@ -109,6 +109,59 @@ const QUOTE_EXPIRY_MS = 24 * 60 * 60 * 1000;
 const PARTNER_STATUS_UPDATES = ["on_the_way", "arrived", "started", "amount_pending", "completed", "cancelled"];
 const CUSTOMER_STATUS_UPDATES = ["cancelled", "completed", "disputed"];
 
+function normalizeStaffPhone(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  const phone = digits.length > 10 ? digits.slice(-10) : digits;
+  return /^[6-9]\d{9}$/.test(phone) ? phone : "";
+}
+
+function normalizeStaffEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function staffIdentityHash(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  const secret = process.env.IDENTITY_HASH_PEPPER || process.env.ENCRYPTION_KEY || "apnaservo-dev-identity-hash";
+  return crypto.createHmac("sha256", secret).update(normalized).digest("hex");
+}
+
+async function findLaundryStaffActor(auth) {
+  const phone = normalizeStaffPhone(auth?.phone_number || "");
+  const email = auth?.email_verified === true ? normalizeStaffEmail(auth?.email || "") : "";
+  const phoneHash = staffIdentityHash(phone);
+  const emailHash = staffIdentityHash(email);
+  if ((!phone && !email) || auth?.development_device) return null;
+
+  let partner = await Partner.findOne({
+    businessType: "laundry",
+    $or: [
+      { "laundryBusiness.staffMembers.firebaseUid": auth.uid },
+      ...(phoneHash ? [{ "laundryBusiness.staffMembers.phoneHash": phoneHash }] : []),
+      ...(emailHash ? [{ "laundryBusiness.staffMembers.emailHash": emailHash }] : [])
+    ]
+  });
+  // Legacy staff invitations may predate identity hashes. The fallback still
+  // requires an exact Firebase-verified phone/email match; it only lets those
+  // existing staff members transition safely to the current auth scheme.
+  if (!partner) {
+    const candidates = await Partner.find({ businessType: "laundry" }).limit(500);
+    partner = candidates.find((candidate) => (candidate.laundryBusiness?.staffMembers || [])
+      .some((member) => (phone && normalizeStaffPhone(member.phone) === phone)
+        || (email && normalizeStaffEmail(member.email) === email)));
+  }
+  if (!partner) return null;
+  const staff = (partner.laundryBusiness?.staffMembers || []).find((member) =>
+    member.firebaseUid === auth.uid
+      || (phoneHash && member.phoneHash === phoneHash)
+      || (emailHash && member.emailHash === emailHash)
+      || (phone && normalizeStaffPhone(member.phone) === phone)
+      || (email && normalizeStaffEmail(member.email) === email)
+  );
+  if (!staff || ["blocked", "rejected"].includes(staff.verificationStatus)) return null;
+  return { partner, staff };
+}
+
 function hasStatusLocationPayload(body = {}) {
   return Number.isFinite(Number(body.lat)) && Number.isFinite(Number(body.lng));
 }
@@ -931,6 +984,8 @@ async function updateStatus(req, res, next) {
     }
 
     const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    const staffActor = partner ? null : await findLaundryStaffActor(req.auth);
+    const actingPartner = partner || staffActor?.partner || null;
     const user = await User.findOne({ firebaseUid: req.auth.uid });
     const query = bookingIdFilter(String(req.params.bookingId || ""));
     const finalAmount = Number(req.body?.finalAmount || 0);
@@ -942,6 +997,15 @@ async function updateStatus(req, res, next) {
       }
       actorRole = "partner";
       query.partnerId = partner._id;
+    } else if (staffActor) {
+      if (!PARTNER_STATUS_UPDATES.includes(nextStatus)) {
+        return res.status(403).json({ message: "Staff cannot apply this booking status" });
+      }
+      if (nextStatus === "cancelled") {
+        return res.status(403).json({ message: "Assigned staff cannot cancel a company order" });
+      }
+      actorRole = "staff";
+      query.partnerId = staffActor.partner._id;
     } else if (user && CUSTOMER_STATUS_UPDATES.includes(nextStatus)) {
       actorRole = "user";
       query.userId = user._id;
@@ -954,13 +1018,27 @@ async function updateStatus(req, res, next) {
       return res.status(404).json({ message: "Booking not found" });
     }
 
+    if (partner?.businessType === "laundry") {
+      return res.status(403).json({ message: "Laundry owners can accept and assign orders only. The assigned staff member updates live status." });
+    }
+    if (staffActor) {
+      const assignment = currentBooking.laundryAssignment || {};
+      const assignedToStaff = Number(assignment.staffSequence || 0) === Number(staffActor.staff.sequence || 0)
+        || (assignment.staffFirebaseUid && assignment.staffFirebaseUid === req.auth.uid)
+        || (assignment.staffPhoneHash && assignment.staffPhoneHash === staffIdentityHash(normalizeStaffPhone(req.auth?.phone_number || "")))
+        || (assignment.staffEmailHash && assignment.staffEmailHash === staffIdentityHash(req.auth?.email_verified === true ? normalizeStaffEmail(req.auth.email) : ""));
+      if (!assignedToStaff) {
+        return res.status(403).json({ message: "Only the staff member assigned to this order can update its live status" });
+      }
+    }
+
     if (currentBooking.status === "completed" && nextStatus === "completed") {
       return res.json({ booking: serializeBooking(currentBooking), idempotent: true });
     }
 
     if (nextStatus === "amount_pending") {
-      if (!partner) {
-        return res.status(403).json({ message: "Only partner can request final amount" });
+      if (!actingPartner) {
+        return res.status(403).json({ message: "Only assigned staff can request the final amount" });
       }
       if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
         return res.status(400).json({ message: "Final amount required" });
@@ -994,10 +1072,10 @@ async function updateStatus(req, res, next) {
 
     if (nextStatus === "completed") {
       const quoteStatus = approvalQuoteStatus(currentBooking);
-      if (partner && quoteStatus !== "payment_submitted") {
+      if (actingPartner && quoteStatus !== "payment_submitted") {
         return res.status(409).json({ message: "Customer payment confirmation is pending" });
       }
-      if (!partner && quoteStatus !== "pending") {
+      if (!actingPartner && quoteStatus !== "pending") {
         return res.status(409).json({ message: "Quote is not ready for approval" });
       }
       if (currentBooking.quoteExpiresAt && new Date(currentBooking.quoteExpiresAt).getTime() <= now.getTime()) {
@@ -1005,15 +1083,15 @@ async function updateStatus(req, res, next) {
       }
     }
 
-    if (partner && ["on_the_way", "arrived", "started"].includes(nextStatus) && hasStatusLocationPayload(req.body)) {
+    if (actingPartner && ["on_the_way", "arrived", "started"].includes(nextStatus) && hasStatusLocationPayload(req.body)) {
       const validation = validatePartnerLocation({
-        partner,
+        partner: actingPartner,
         booking: currentBooking,
         payload: req.body || {},
         requireNearCustomer: nextStatus === "arrived"
       });
       await LocationLog.create({
-        partnerId: partner._id,
+        partnerId: actingPartner._id,
         bookingId: currentBooking._id,
         bookingCode: currentBooking.bookingCode,
         lat: Number.isFinite(validation.lat) ? validation.lat : 0,
@@ -1028,21 +1106,21 @@ async function updateStatus(req, res, next) {
         recordedAt: validation.recordedAt
       });
       if (!validation.valid) {
-        await Partner.findByIdAndUpdate(partner._id, { $set: { locationTrustStatus: "suspicious" } });
+        await Partner.findByIdAndUpdate(actingPartner._id, { $set: { locationTrustStatus: "suspicious" } });
         console.warn("Ignoring non-blocking status location validation failure", {
           bookingId: String(currentBooking._id),
-          partnerId: String(partner._id),
+          partnerId: String(actingPartner._id),
           status: nextStatus,
           reason: validation.reason
         });
       } else {
-        await Partner.findByIdAndUpdate(partner._id, { $set: partnerLocationUpdate(validation) });
+        await Partner.findByIdAndUpdate(actingPartner._id, { $set: partnerLocationUpdate(validation) });
       }
     }
 
     const update = {
       $set: { status: nextStatus },
-      $push: { statusTimeline: { status: nextStatus, at: now, by: partner ? "partner" : "user" } }
+      $push: { statusTimeline: { status: nextStatus, at: now, by: staffActor ? "laundry_staff" : (partner ? "partner" : "user") } }
     };
     if (nextStatus === "amount_pending") {
       const quoteExpiresAt = quoteExpiresAtFrom(now);
@@ -1061,10 +1139,25 @@ async function updateStatus(req, res, next) {
       update.$push.quoteHistory = {
         kind: "partner_quote",
         amount: roundedFinalAmount,
-        by: "partner",
-        message: "Partner sent price quote",
+        by: staffActor ? "laundry_staff" : "partner",
+        message: staffActor ? "Assigned laundry staff sent price quote" : "Partner sent price quote",
         at: now
       };
+    }
+    if (staffActor) {
+      const staffTaskStatus = {
+        on_the_way: "on_the_way",
+        arrived: "picked_up",
+        started: "out_for_delivery",
+        amount_pending: "delivered",
+        completed: "completed"
+      }[nextStatus];
+      if (staffTaskStatus) {
+        update.$set["laundryAssignment.taskStatus"] = staffTaskStatus;
+      }
+      if (nextStatus === "completed") {
+        update.$set["laundryAssignment.completedAt"] = now;
+      }
     }
     if (nextStatus === "completed") {
       const approvedAmount = Math.round(Number(currentBooking.finalAmount || currentBooking.quoteAmount || currentBooking.price || 0));
@@ -1083,8 +1176,8 @@ async function updateStatus(req, res, next) {
       update.$push.quoteHistory = {
         kind: "quote_approved",
         amount: approvedAmount,
-        by: partner ? "partner" : "user",
-        message: partner ? "Partner verified direct payment" : "Customer approved price quote",
+        by: actingPartner ? (staffActor ? "laundry_staff" : "partner") : "user",
+        message: actingPartner ? (staffActor ? "Assigned laundry staff verified direct payment" : "Partner verified direct payment") : "Customer approved price quote",
         at: now
       };
     }
@@ -1092,11 +1185,11 @@ async function updateStatus(req, res, next) {
     const atomicQuery = {
       _id: currentBooking._id,
       status: currentBooking.status,
-      ...(partner ? { partnerId: partner._id } : { userId: user._id })
+      ...(actingPartner ? { partnerId: actingPartner._id } : { userId: user._id })
     };
     if (nextStatus === "completed") {
       atomicQuery.quoteStatus = "pending";
-      if (partner) {
+      if (actingPartner) {
         atomicQuery.quoteStatus = "payment_submitted";
       }
     }
@@ -1182,7 +1275,7 @@ async function updateStatus(req, res, next) {
       });
     }
 
-    if (!partner && nextStatus === "completed" && booking.partnerId) {
+    if (!actingPartner && nextStatus === "completed" && booking.partnerId) {
       const partnerForNotification = await Partner.findById(booking.partnerId);
       await reliableNotify({
         recipients: [partnerRecipient(partnerForNotification)],

@@ -164,7 +164,10 @@ function transitionDecision({ currentStatus, nextStatus, actorRole, quoteStatus 
     return { ok: false, reason: `Booking is already ${current.replace(/_/g, " ")}` };
   }
 
-  if (actor === "partner") {
+  // A company-assigned laundry staff member follows the same forward-only
+  // booking lifecycle as the partner, but is authorised separately by the
+  // booking controller against the stored laundry assignment.
+  if (actor === "partner" || actor === "staff") {
     if (next === "cancelled") {
       return ["accepted", "on_the_way", "arrived"].includes(current)
         ? { ok: true }

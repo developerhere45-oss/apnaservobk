@@ -1420,8 +1420,8 @@ async function updateStaffBookingStatus(req, res, next) {
       await partner.save();
     }
     const status = String(req.body?.status || "").trim().toLowerCase();
-    if (!["in_progress", "completed"].includes(status)) {
-      return res.status(400).json({ message: "Invalid Laundry task status" });
+    if (status !== "in_progress") {
+      return res.status(400).json({ message: "Use the live status workflow to update pickup, delivery and completion" });
     }
     const booking = await Booking.findOne({
       ...bookingIdentityFilter(req.params.bookingId),
@@ -1438,15 +1438,9 @@ async function updateStaffBookingStatus(req, res, next) {
     if (status === "in_progress" && !["assigned", "in_progress"].includes(current)) {
       return res.status(409).json({ message: "Only assigned tasks can be started" });
     }
-    if (status === "completed" && !["in_progress", "completed"].includes(current)) {
-      return res.status(409).json({ message: "Start the task before completing it" });
-    }
     booking.laundryAssignment.taskStatus = status;
     if (status === "in_progress" && !booking.laundryAssignment.startedAt) {
       booking.laundryAssignment.startedAt = new Date();
-    }
-    if (status === "completed" && !booking.laundryAssignment.completedAt) {
-      booking.laundryAssignment.completedAt = new Date();
     }
     await booking.save();
     return res.json({ ok: true, booking: serializeBooking(booking) });
