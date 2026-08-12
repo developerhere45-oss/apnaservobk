@@ -2309,6 +2309,28 @@ async function partnerProfile(req, res, next) {
         businessType: partner.businessType || "",
         businessVerificationStatus: partner.businessVerificationStatus || "not_required",
         laundryBusiness: laundryBusinessView(partner),
+        laundryStaffMembers: laundryBusinessView(partner)?.staffMembers || [],
+        termsConsent: {
+          accepted: partner.termsConsent?.accepted === true,
+          version: partner.termsConsent?.version || "",
+          acceptedAt: iso(partner.termsConsent?.acceptedAt),
+          clientAcceptedAt: iso(partner.termsConsent?.clientAcceptedAt),
+          registrationFlow: partner.termsConsent?.registrationFlow || "",
+          serviceCategory: partner.termsConsent?.serviceCategory || "",
+          documentKey: partner.termsConsent?.documentKey || "",
+          sourceApp: partner.termsConsent?.sourceApp || "",
+          ipAddress: partner.termsConsent?.ipAddress || ""
+        },
+        termsAcceptanceHistory: (partner.termsAcceptanceHistory || []).map((entry) => ({
+          accepted: entry.accepted === true,
+          version: entry.version || "",
+          acceptedAt: iso(entry.acceptedAt),
+          clientAcceptedAt: iso(entry.clientAcceptedAt),
+          registrationFlow: entry.registrationFlow || "",
+          serviceCategory: entry.serviceCategory || "",
+          documentKey: entry.documentKey || "",
+          sourceApp: entry.sourceApp || ""
+        })),
         registrationDate: iso(partner.createdAt),
         currentVerificationStatus: blocked ? "Blocked" : (approved ? "Approved" : (partner.kycStatus === "rejected" ? "Rejected" : "Under Verification")),
         approvalVersion: Number(partner.approvalVersion || 0),

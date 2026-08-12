@@ -657,7 +657,7 @@ async function upsertProfile(req, res, next) {
     const phoneHash = identityHash(phone);
     const emailHash = identityHash(email);
     const existingPartner = await Partner.findOne({ firebaseUid: req.auth.uid })
-      .select("_id phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken businessType businessVerificationStatus laundryBusiness")
+      .select("_id phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken businessType businessVerificationStatus laundryBusiness termsConsent termsAcceptanceHistory")
       .lean();
     if (!existingPartner && body.termsAccepted !== true) {
       return res.status(400).json({ message: "Partner Terms, Privacy Policy, and Service Agreement acceptance is required" });
@@ -706,7 +706,9 @@ async function upsertProfile(req, res, next) {
           registrationFlow: body.termsRegistrationFlow || (isLaundryRegistration ? "laundry_owner_registration" : "partner_registration"),
           serviceCategory: normalizeServiceCategory(body.termsServiceCategory || categories[0]),
           documentKey: body.termsDocumentKey || "partner_terms",
-          sourceApp: body.termsSourceApp || "partner_ios"
+          sourceApp: body.termsSourceApp || "partner_ios",
+          ipAddress: String(req.ip || "").slice(0, 120),
+          userAgent: String(req.get("user-agent") || "").slice(0, 500)
         }
       } : {}),
       ...(isLaundryRegistration ? {
@@ -765,6 +767,27 @@ async function upsertProfile(req, res, next) {
       { $set: update, $setOnInsert: { partnerCode: `ASP${Date.now().toString().slice(-6)}${crypto.randomBytes(2).toString("hex").toUpperCase()}` } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    if (body.termsAccepted === true) {
+      const consent = partner.termsConsent || {};
+      const alreadyRecorded = (partner.termsAcceptanceHistory || []).some((entry) =>
+        entry.version === consent.version
+        && entry.registrationFlow === consent.registrationFlow
+        && entry.sourceApp === consent.sourceApp
+      );
+      if (!alreadyRecorded) {
+        partner.termsAcceptanceHistory.push({
+          accepted: true,
+          version: consent.version,
+          acceptedAt: consent.acceptedAt,
+          clientAcceptedAt: consent.clientAcceptedAt,
+          registrationFlow: consent.registrationFlow,
+          serviceCategory: consent.serviceCategory,
+          documentKey: consent.documentKey,
+          sourceApp: consent.sourceApp
+        });
+        await partner.save();
+      }
+    }
     emitAdminEvent(targetPartner ? "partner:updated" : "partner:registered", {
       partnerId: String(partner._id),
       partnerCode: partner.partnerCode || "",

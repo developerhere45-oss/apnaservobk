@@ -119,8 +119,20 @@ const partnerSchema = new mongoose.Schema(
       registrationFlow: { type: String, default: "" },
       serviceCategory: { type: String, default: "" },
       documentKey: { type: String, default: "partner_terms" },
-      sourceApp: { type: String, default: "" }
+      sourceApp: { type: String, default: "" },
+      ipAddress: { type: String, default: "" },
+      userAgent: { type: String, default: "" }
     },
+    termsAcceptanceHistory: [{
+      accepted: { type: Boolean, default: true },
+      version: String,
+      acceptedAt: Date,
+      clientAcceptedAt: Date,
+      registrationFlow: String,
+      serviceCategory: String,
+      documentKey: String,
+      sourceApp: String
+    }],
     isOnline: { type: Boolean, default: true, index: true },
     isVerified: { type: Boolean, default: false },
     city: { type: String, trim: true, default: "Guwahati" },
