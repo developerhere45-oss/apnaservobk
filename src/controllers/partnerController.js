@@ -62,7 +62,14 @@ const profileSchema = z.object({
   fcmToken: z.string().trim().max(4096).optional(),
   photoUrl: z.string().trim().max(1000).optional(),
   faceVerified: z.boolean().optional(),
-  selfieVerified: z.boolean().optional()
+  selfieVerified: z.boolean().optional(),
+  termsAccepted: z.literal(true).optional(),
+  termsVersion: z.string().trim().min(1).max(80).optional(),
+  termsAcceptedAt: z.coerce.number().int().positive().optional(),
+  termsRegistrationFlow: z.enum(["partner_registration", "laundry_owner_registration", "cleaning_owner_registration"]).optional(),
+  termsServiceCategory: z.string().trim().max(80).optional(),
+  termsDocumentKey: z.string().trim().max(80).optional(),
+  termsSourceApp: z.string().trim().max(80).optional()
 });
 
 const livenessChecksSchema = z.object({
@@ -652,6 +659,9 @@ async function upsertProfile(req, res, next) {
     const existingPartner = await Partner.findOne({ firebaseUid: req.auth.uid })
       .select("_id phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken businessType businessVerificationStatus laundryBusiness")
       .lean();
+    if (!existingPartner && body.termsAccepted !== true) {
+      return res.status(400).json({ message: "Partner Terms, Privacy Policy, and Service Agreement acceptance is required" });
+    }
     const emailPartner = await findVerifiedEmailPartner(req, email, emailHash);
     const targetPartner = emailPartner || existingPartner;
     await ensureUniquePartnerIdentity({ uid: req.auth.uid, partnerId: targetPartner?._id, phoneHash, emailHash });
@@ -681,12 +691,24 @@ async function upsertProfile(req, res, next) {
       workingAreas: listFromBody(body.workingAreas || body.serviceArea || "Guwahati"),
       languagesKnown: listFromBody(body.languagesKnown || "Hindi, English"),
       yearsOfExperience: Number.isFinite(body.yearsOfExperience) ? body.yearsOfExperience : 0,
-      serviceRadiusKm: body.serviceRadiusKm || 25,
+      serviceRadiusKm: body.serviceRadiusKm || 5,
       isOnline: isLaundryRegistration && !adminApproved ? false : body.isOnline !== false,
       isVerified: adminApproved,
       trustStatus: currentTrustStatus === "suspended"
         ? "suspended"
         : (adminApproved ? "trusted" : "review_required"),
+      ...(body.termsAccepted === true ? {
+        termsConsent: {
+          accepted: true,
+          version: body.termsVersion || "2026-07-25",
+          acceptedAt: targetPartner?.termsConsent?.acceptedAt || new Date(),
+          clientAcceptedAt: body.termsAcceptedAt ? new Date(body.termsAcceptedAt) : new Date(),
+          registrationFlow: body.termsRegistrationFlow || (isLaundryRegistration ? "laundry_owner_registration" : "partner_registration"),
+          serviceCategory: normalizeServiceCategory(body.termsServiceCategory || categories[0]),
+          documentKey: body.termsDocumentKey || "partner_terms",
+          sourceApp: body.termsSourceApp || "partner_ios"
+        }
+      } : {}),
       ...(isLaundryRegistration ? {
         businessType: "laundry",
         businessVerificationStatus: adminApproved ? "approved" : "pending_review",
@@ -787,6 +809,30 @@ async function me(req, res, next) {
     }
     if (partner) partner = await enforceCompanyServiceIsolation(partner);
     return res.json({ partner });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function identityCard(req, res, next) {
+  try {
+    const partner = await Partner.findOne({ firebaseUid: req.auth.uid })
+      .select("partnerCode name photoUrl serviceCategory serviceArea isVerified kycStatus trustStatus accountStatus businessType businessVerificationStatus");
+    if (!partner) return res.status(404).json({ message: "Partner profile not found" });
+    if (!partner.partnerCode) return res.status(409).json({ message: "Partner identity is not assigned yet" });
+    const verified = partner.accountStatus === "active"
+      && partner.trustStatus !== "suspended"
+      && (partner.isVerified === true || partner.businessVerificationStatus === "approved");
+    return res.json({ identityCard: {
+      partnerCode: partner.partnerCode,
+      name: partner.name || "ApnaServo Partner",
+      serviceCategories: partner.serviceCategory || [],
+      serviceArea: partner.serviceArea || "",
+      photoUrl: partnerAssetUrl(partner.photoUrl || ""),
+      verificationStatus: verified ? "verified" : "pending",
+      verificationPayload: `APNASERVO:PARTNER:${partner.partnerCode}`,
+      issuedAt: Date.now()
+    } });
   } catch (error) {
     return next(error);
   }
@@ -1687,6 +1733,7 @@ async function statement(req, res, next) {
 module.exports = {
   upsertProfile,
   me,
+  identityCard,
   submitVerification,
   uploadDocument,
   uploadProfilePhoto,

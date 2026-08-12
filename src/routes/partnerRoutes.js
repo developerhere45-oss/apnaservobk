@@ -35,6 +35,7 @@ const documentUpload = multer({
 router.use(verifyFirebaseToken);
 router.post("/profile", profileWriteLimiter, controller.upsertProfile);
 router.get("/me", controller.me);
+router.get("/identity-card", controller.identityCard);
 router.post("/staff/session", profileWriteLimiter, controller.staffSession);
 router.get("/staff/bookings", controller.listStaffBookings);
 router.patch("/staff/online", profileWriteLimiter, controller.setStaffOnline);

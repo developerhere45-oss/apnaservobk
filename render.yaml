@@ -14,7 +14,9 @@ services:
       - key: CLIENT_ORIGIN
         sync: false
       - key: DEFAULT_PARTNER_RADIUS_KM
-        value: "25"
+        value: "5"
+      - key: NOTIFICATION_CONCURRENCY
+        value: "24"
       - key: PARTNER_SEARCH_RADIUS_STEPS_KM
         value: "5,10"
       - key: REQUIRE_CUSTOMER_PHONE_OTP

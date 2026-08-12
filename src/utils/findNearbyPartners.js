@@ -136,12 +136,7 @@ async function findNearbyPartnersWithMeta({ serviceCategory, city, lat, lng, rad
     return { partners: [], radiusKm: steps[steps.length - 1] || 10, mode: "customer_location", distancesMeters: {} };
   }
 
-  const cityPattern = String(city || "Guwahati").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const partners = partnersForRequestedService(
-    await Partner.find({ ...filter, city: new RegExp(cityPattern, "i") }).limit(100),
-    category
-  );
-  return { partners, radiusKm: 0, mode: "city_fallback", distancesMeters: {} };
+  return { partners: [], radiusKm: 10, mode: "location_required", distancesMeters: {} };
 }
 
 async function findNearbyPartners(options) {

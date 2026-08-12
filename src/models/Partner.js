@@ -111,11 +111,21 @@ const partnerSchema = new mongoose.Schema(
       index: true
     },
     laundryBusiness: { type: laundryBusinessSchema, default: undefined },
+    termsConsent: {
+      accepted: { type: Boolean, default: false },
+      version: { type: String, default: "" },
+      acceptedAt: { type: Date, default: null },
+      clientAcceptedAt: { type: Date, default: null },
+      registrationFlow: { type: String, default: "" },
+      serviceCategory: { type: String, default: "" },
+      documentKey: { type: String, default: "partner_terms" },
+      sourceApp: { type: String, default: "" }
+    },
     isOnline: { type: Boolean, default: true, index: true },
     isVerified: { type: Boolean, default: false },
     city: { type: String, trim: true, default: "Guwahati" },
     serviceArea: { type: String, trim: true, default: "Guwahati, Assam" },
-    serviceRadiusKm: { type: Number, default: 25 },
+    serviceRadiusKm: { type: Number, default: 5 },
     location: { type: pointSchema, default: () => ({ type: "Point", coordinates: [91.7362, 26.1445] }) },
     lastLocationAt: { type: Date, default: null },
     lastLocationAccuracy: { type: Number, default: 9999 },
