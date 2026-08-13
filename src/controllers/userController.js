@@ -188,15 +188,27 @@ async function upsertProfile(req, res, next) {
         createdAt: user.createdAt
       });
     }
+    let welcomeEmailResult = null;
     if (!user.welcomeEmailSentAt) {
-      const emailResult = await sendWelcomeEmail({ to: user.email, name: user.name, audience: "customer" });
+      welcomeEmailResult = await sendWelcomeEmail({ to: user.email, name: user.name, audience: "customer" });
+      const emailResult = welcomeEmailResult;
       if (emailResult.sent) {
         user.welcomeEmailSentAt = new Date();
         await user.save();
       }
     }
 
-    return res.json({ user });
+    const response = { user };
+    if (req.authType === "development_device" && req.get("x-apnaservo-mail-debug") === "true") {
+      response.mailDebug = welcomeEmailResult
+        ? {
+            sent: Boolean(welcomeEmailResult.sent),
+            skipped: Boolean(welcomeEmailResult.skipped),
+            error: welcomeEmailResult.error || ""
+          }
+        : { sent: false, skipped: true, error: "welcome email was already marked as sent" };
+    }
+    return res.json(response);
   } catch (error) {
     return next(error);
   }
