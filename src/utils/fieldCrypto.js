@@ -2,10 +2,11 @@ const crypto = require("crypto");
 const { getEncryptionKey } = require("../config/env");
 
 const PREFIX = "enc:v1:";
+const PREFIX_V2 = "enc:v2:";
 const AAD = Buffer.from("apnaservo-field-v1", "utf8");
 
 function isEncrypted(value) {
-  return typeof value === "string" && value.startsWith(PREFIX);
+  return typeof value === "string" && (value.startsWith(PREFIX) || value.startsWith(PREFIX_V2));
 }
 
 function encryptString(value) {
@@ -27,7 +28,7 @@ function encryptString(value) {
   cipher.setAAD(AAD);
   const encrypted = Buffer.concat([cipher.update(plainText, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return `${PREFIX}${iv.toString("base64")}:${tag.toString("base64")}:${encrypted.toString("base64")}`;
+  return `${PREFIX_V2}${iv.toString("hex")}:${tag.toString("hex")}:${encrypted.toString("hex")}`;
 }
 
 function decryptString(value) {
@@ -41,12 +42,15 @@ function decryptString(value) {
   }
 
   try {
-    const [ivText, tagText, encryptedText] = value.slice(PREFIX.length).split(":");
-    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivText, "base64"));
+    const isV2 = value.startsWith(PREFIX_V2);
+    const prefix = isV2 ? PREFIX_V2 : PREFIX;
+    const encoding = isV2 ? "hex" : "base64";
+    const [ivText, tagText, encryptedText] = value.slice(prefix.length).split(":");
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivText, encoding));
     decipher.setAAD(AAD);
-    decipher.setAuthTag(Buffer.from(tagText, "base64"));
+    decipher.setAuthTag(Buffer.from(tagText, encoding));
     return Buffer.concat([
-      decipher.update(Buffer.from(encryptedText, "base64")),
+      decipher.update(Buffer.from(encryptedText, encoding)),
       decipher.final()
     ]).toString("utf8");
   } catch (error) {
