@@ -59,7 +59,8 @@ const laundryStaffSchema = new mongoose.Schema(
     idNumber: { type: String, trim: true, default: "" },
     idType: { type: String, trim: true, default: "" },
     documentType: { type: String, trim: true, default: "" },
-    documentTitle: { type: String, trim: true, default: "" }
+    documentTitle: { type: String, trim: true, default: "" },
+    welcomeEmailSentAt: { type: Date, default: null }
   },
   { _id: false }
 );
@@ -93,6 +94,8 @@ const partnerSchema = new mongoose.Schema(
     phoneHash: { type: String, default: "" },
     email: { type: String, trim: true, lowercase: true, default: "" },
     emailHash: { type: String, default: "" },
+    welcomeEmailSentAt: { type: Date, default: null },
+    approvalEmailSentVersion: { type: Number, default: 0 },
     dateOfBirth: { type: String, trim: true, default: "" },
     gender: { type: String, trim: true, default: "" },
     residentialAddress: { type: String, trim: true, default: "" },

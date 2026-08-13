@@ -7,6 +7,7 @@ const Partner = require("../models/Partner");
 const User = require("../models/User");
 const { Booking, BOOKING_STATUSES } = require("../models/Booking");
 const { getDisplayName, id, maskEmail, maskPhone, safeText, toSafeObject } = require("../utils/safeDisplay");
+const { sendPartnerApprovalWelcomeEmails } = require("../utils/welcomeEmail");
 
 const bookingStatusSchema = z.object({
   status: z.enum(BOOKING_STATUSES)
@@ -249,6 +250,11 @@ async function updatePartnerVerification(req, res, next) {
       partner.kycStatus = "verified";
       partner.trustStatus = "trusted";
       partner.approvedAt = new Date();
+      partner.approvalVersion = Number(partner.approvalVersion || 0) + 1;
+      partner.businessVerificationStatus = partner.businessType === "laundry" ? "approved" : "not_required";
+      for (const staff of partner.laundryBusiness?.staffMembers || []) {
+        if (staff.verificationStatus !== "blocked") staff.verificationStatus = "verified";
+      }
     } else {
       partner.isVerified = false;
       partner.kycStatus = "rejected";
@@ -256,6 +262,7 @@ async function updatePartnerVerification(req, res, next) {
     }
     partner.verificationHistory.push({ action: status === "approved" ? "approved" : "rejected", by: `employee:${req.employeeProfile.employeeId}`, at: new Date() });
     await partner.save();
+    if (status === "approved") await sendPartnerApprovalWelcomeEmails(partner);
     await logEmployee(req, "verification_update", "partners", partner._id, { status });
     return res.json({ partner: serializePartner(partner) });
   } catch (error) {

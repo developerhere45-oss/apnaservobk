@@ -5,6 +5,7 @@ const SupportTicket = require("../models/SupportTicket");
 const { Booking } = require("../models/Booking");
 const { emitAdminEvent } = require("../sockets/bookingSocket");
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
+const { sendWelcomeEmail } = require("../utils/welcomeEmail");
 
 const profileSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
@@ -186,6 +187,13 @@ async function upsertProfile(req, res, next) {
         email: user.email,
         createdAt: user.createdAt
       });
+    }
+    if (!user.welcomeEmailSentAt) {
+      const emailResult = await sendWelcomeEmail({ to: user.email, name: user.name, audience: "customer" });
+      if (emailResult.sent) {
+        user.welcomeEmailSentAt = new Date();
+        await user.save();
+      }
     }
 
     return res.json({ user });

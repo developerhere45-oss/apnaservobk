@@ -73,6 +73,7 @@ const userSchema = new mongoose.Schema(
     phoneHash: { type: String, trim: true, default: "", index: true },
     email: { type: String, trim: true, lowercase: true, default: "" },
     emailHash: { type: String, trim: true, default: "", index: true },
+    welcomeEmailSentAt: { type: Date, default: null },
     profilePhotoUrl: { type: String, trim: true, default: "" },
     address: { type: String, trim: true, default: "" },
     savedAddresses: { type: [savedAddressSchema], default: [] },

@@ -26,6 +26,7 @@ const findNearbyPartners = require("../utils/findNearbyPartners");
 const { serviceCategoryVariants, serviceLabel, partnerCanServeService } = require("../utils/serviceCategory");
 const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
 const { partnerAssetUrl, verifyPartnerAssetToken } = require("../utils/partnerUploadAssets");
+const { sendPartnerApprovalWelcomeEmails } = require("../utils/welcomeEmail");
 
 function iso(value) {
   return value ? new Date(value).toISOString() : "";
@@ -1522,6 +1523,7 @@ async function performAdminAction(req, res, next) {
         partner.markModified("laundryBusiness.staffMembers");
         await partner.save();
       }
+      await sendPartnerApprovalWelcomeEmails(partner);
       await cache.del("admin:dashboard:v1");
       emitAdminEvent(isReapproval ? "partner:reapproved" : "partner:approved", {
         partnerId: String(partner._id),

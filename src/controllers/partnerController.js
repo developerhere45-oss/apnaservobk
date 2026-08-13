@@ -16,6 +16,7 @@ const { reliableNotify } = require("../utils/reliableNotify");
 const { emitAdminEvent, emitNewBookingToPartners, emitBookingAccepted, emitLaundryStaffAssignment, serializeBooking } = require("../sockets/bookingSocket");
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 const { partnerAssetUrl } = require("../utils/partnerUploadAssets");
+const { sendPartnerApprovalWelcomeEmails } = require("../utils/welcomeEmail");
 
 const profileSchema = z.object({
   name: z.string().trim().min(2).max(80).regex(/^[A-Za-z][A-Za-z .'-]+$/).optional(),
@@ -628,6 +629,8 @@ async function upsertProfile(req, res, next) {
           const staffPhone = normalizePhone(staff.phone);
           return {
             ...staff,
+            email: normalizeEmail(staff.email),
+            emailHash: identityHash(normalizeEmail(staff.email)),
             phone: staffPhone,
             phoneHash: identityHash(staffPhone),
             idNumber: staff.idNumber || "",
@@ -731,7 +734,8 @@ async function upsertProfile(req, res, next) {
               verificationStatus: previous?.verificationStatus || "pending_review",
               isOnline: Boolean(previous?.isOnline),
               fcmToken: previous?.fcmToken || "",
-              lastLoginAt: previous?.lastLoginAt || null
+              lastLoginAt: previous?.lastLoginAt || null,
+              welcomeEmailSentAt: previous?.welcomeEmailSentAt || null
             };
           })
         },
@@ -788,6 +792,7 @@ async function upsertProfile(req, res, next) {
         await partner.save();
       }
     }
+    if (adminApproved) await sendPartnerApprovalWelcomeEmails(partner);
     emitAdminEvent(targetPartner ? "partner:updated" : "partner:registered", {
       partnerId: String(partner._id),
       partnerCode: partner.partnerCode || "",
@@ -1317,6 +1322,7 @@ async function addLaundryStaff(req, res, next) {
     });
     owner.markModified("laundryBusiness.staffMembers");
     await owner.save();
+    await sendPartnerApprovalWelcomeEmails(owner);
     const staff = owner.laundryBusiness.staffMembers.find((member) => Number(member.sequence) === sequence);
     return res.status(201).json({
       ok: true,
