@@ -3,16 +3,21 @@ const nodemailer = require("nodemailer");
 let transporter;
 
 function smtpConfigured() {
-  return Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+  return Boolean(String(process.env.SMTP_HOST || "").trim()
+    && String(process.env.SMTP_USER || "").trim()
+    && String(process.env.SMTP_PASS || "").trim());
 }
 
 function mailer() {
   if (!transporter) {
     transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
+      host: String(process.env.SMTP_HOST || "").trim(),
       port: Number(process.env.SMTP_PORT || 587),
       secure: String(process.env.SMTP_SECURE || "false").toLowerCase() === "true",
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+      auth: {
+        user: String(process.env.SMTP_USER || "").trim(),
+        pass: String(process.env.SMTP_PASS || "").trim()
+      },
       connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10000),
       greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT_MS || 10000),
       socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 15000)
@@ -54,8 +59,8 @@ async function sendWelcomeEmail({ to, name, audience, companyName }) {
 
   try {
     const info = await mailer().sendMail({
-      from: process.env.MAIL_FROM || `ApnaServo <${process.env.SMTP_USER}>`,
-      replyTo: process.env.MAIL_REPLY_TO || undefined,
+      from: String(process.env.MAIL_FROM || "").trim() || `ApnaServo <${String(process.env.SMTP_USER || "").trim()}>`,
+      replyTo: String(process.env.MAIL_REPLY_TO || "").trim() || undefined,
       to: recipient,
       subject: content.subject,
       text: `Hi ${name || "there"},\n\n${content.message}\n\nNeed help? Contact ApnaServo support.`,
