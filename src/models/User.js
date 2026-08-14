@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const encryptedFieldsPlugin = require("../utils/encryptedFieldsPlugin");
+const { nextPublicId, publicIdPlugin } = require("../utils/publicIds");
 
 const pointSchema = new mongoose.Schema(
   {
@@ -57,6 +58,7 @@ const deviceTokenSchema = new mongoose.Schema(
     tokenHash: { type: String, trim: true, default: "", index: true },
     platform: { type: String, enum: ["android", "ios", "web"], default: "android" },
     deviceId: { type: String, trim: true, default: "" },
+    publicId: { type: String, trim: true, default: "" },
     appType: { type: String, enum: ["user"], default: "user" },
     isActive: { type: Boolean, default: true, index: true },
     lastUpdatedAt: { type: Date, default: Date.now },
@@ -90,6 +92,7 @@ const userSchema = new mongoose.Schema(
     loginHistory: { type: [loginHistorySchema], default: [] },
     adminNotes: { type: [adminNoteSchema], default: [] },
     fcmToken: { type: String, default: "" },
+    legacyDevicePublicId: { type: String, trim: true, default: "" },
     deviceTokens: { type: [deviceTokenSchema], default: [] },
     accountStatus: { type: String, enum: ["active", "suspended", "blocked", "deletion_requested", "deleted"], default: "active", index: true },
     deletionRequestedAt: { type: Date, default: null },
@@ -104,6 +107,19 @@ userSchema.index({ bookingRiskStatus: 1, lastBookingAt: -1 });
 userSchema.index({ accountStatus: 1, deletionRequestedAt: -1 });
 userSchema.index({ lastLoginAt: -1 });
 userSchema.index({ "deviceTokens.tokenHash": 1, "deviceTokens.isActive": 1 });
+userSchema.plugin(publicIdPlugin, { kind: "user" });
+userSchema.pre("validate", async function assignDevicePublicIds() {
+  if (this.fcmToken && !this.legacyDevicePublicId) this.legacyDevicePublicId = await nextPublicId("userDevice");
+  for (const device of this.deviceTokens || []) {
+    if (!device.publicId) device.publicId = await nextPublicId("userDevice");
+  }
+});
+userSchema.post("findOneAndUpdate", async function assignLegacyDevicePublicId(user) {
+  if (!user?.fcmToken || user.legacyDevicePublicId) return;
+  const value = await nextPublicId("userDevice");
+  await this.model.updateOne({ _id: user._id, legacyDevicePublicId: { $in: [null, ""] } }, { $set: { legacyDevicePublicId: value } });
+  user.legacyDevicePublicId = value;
+});
 userSchema.plugin(encryptedFieldsPlugin, {
   fields: [
     "name",

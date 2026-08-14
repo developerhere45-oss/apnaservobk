@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const encryptedFieldsPlugin = require("../utils/encryptedFieldsPlugin");
+const { publicIdPlugin } = require("../utils/publicIds");
 
 const paymentSchema = new mongoose.Schema(
   {
@@ -25,5 +26,6 @@ paymentSchema.index({ bookingId: 1, status: 1, createdAt: -1 });
 paymentSchema.index({ userId: 1, status: 1, createdAt: -1 });
 paymentSchema.index({ partnerId: 1, status: 1, createdAt: -1 });
 paymentSchema.index({ status: 1, createdAt: -1 });
+paymentSchema.plugin(publicIdPlugin, { kind: "payment" });
 
 module.exports = mongoose.model("Payment", paymentSchema);

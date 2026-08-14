@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const encryptedFieldsPlugin = require("../utils/encryptedFieldsPlugin");
 const { BOOKING_STATUSES } = require("../utils/bookingLifecycle");
+const { publicIdPlugin } = require("../utils/publicIds");
 
 const pointSchema = new mongoose.Schema(
   {
@@ -173,6 +174,7 @@ bookingSchema.index({ "completionAccounting.creditedAt": 1, status: 1 });
 bookingSchema.index({ "laundryAssignment.ownerPartnerId": 1, "laundryAssignment.staffPhoneHash": 1, updatedAt: -1 });
 bookingSchema.index({ "laundryAssignment.staffFirebaseUid": 1, updatedAt: -1 });
 bookingSchema.index({ "laundryAssignment.staffEmailHash": 1, updatedAt: -1 });
+bookingSchema.plugin(publicIdPlugin, { kind: "booking" });
 bookingSchema.plugin(encryptedFieldsPlugin, {
   fields: [
     "serviceName",

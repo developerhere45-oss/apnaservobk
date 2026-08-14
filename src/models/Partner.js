@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const encryptedFieldsPlugin = require("../utils/encryptedFieldsPlugin");
+const { nextPublicId, publicIdPlugin } = require("../utils/publicIds");
 
 const pointSchema = new mongoose.Schema(
   {
@@ -15,6 +16,7 @@ const deviceTokenSchema = new mongoose.Schema(
     tokenHash: { type: String, trim: true, default: "", index: true },
     platform: { type: String, enum: ["android", "ios", "web"], default: "android" },
     deviceId: { type: String, trim: true, default: "" },
+    publicId: { type: String, trim: true, default: "" },
     appType: { type: String, enum: ["partner"], default: "partner" },
     isActive: { type: Boolean, default: true, index: true },
     lastUpdatedAt: { type: Date, default: Date.now },
@@ -185,6 +187,7 @@ const partnerSchema = new mongoose.Schema(
     totalJobs: { type: Number, default: 0 },
     responseRate: { type: Number, default: 92 },
     fcmToken: { type: String, default: "" },
+    legacyDevicePublicId: { type: String, trim: true, default: "" },
     deviceTokens: { type: [deviceTokenSchema], default: [] },
     photoUrl: { type: String, default: "" },
     profilePhotoAssetId: { type: mongoose.Schema.Types.ObjectId, ref: "PartnerUploadAsset", default: null },
@@ -208,6 +211,19 @@ partnerSchema.index({ "deviceTokens.tokenHash": 1, "deviceTokens.isActive": 1 })
 partnerSchema.index({ "laundryBusiness.staffMembers.phoneHash": 1 });
 partnerSchema.index({ "laundryBusiness.staffMembers.emailHash": 1 });
 partnerSchema.index({ "laundryBusiness.staffMembers.firebaseUid": 1 });
+partnerSchema.plugin(publicIdPlugin, { kind: "partner" });
+partnerSchema.pre("validate", async function assignDevicePublicIds() {
+  if (this.fcmToken && !this.legacyDevicePublicId) this.legacyDevicePublicId = await nextPublicId("partnerDevice");
+  for (const device of this.deviceTokens || []) {
+    if (!device.publicId) device.publicId = await nextPublicId("partnerDevice");
+  }
+});
+partnerSchema.post("findOneAndUpdate", async function assignLegacyDevicePublicId(partner) {
+  if (!partner?.fcmToken || partner.legacyDevicePublicId) return;
+  const value = await nextPublicId("partnerDevice");
+  await this.model.updateOne({ _id: partner._id, legacyDevicePublicId: { $in: [null, ""] } }, { $set: { legacyDevicePublicId: value } });
+  partner.legacyDevicePublicId = value;
+});
 partnerSchema.plugin(encryptedFieldsPlugin, {
   fields: ["name", "phone", "email", "dateOfBirth", "gender", "residentialAddress", "state", "pinCode", "emergencyContactNumber", "workingAreas", "languagesKnown", "serviceArea", "fcmToken", "deviceTokens.token", "deviceTokens.deviceId", "photoUrl", "selfieUrl", "faceLivenessSessionId", "aadhaarLast4", "idProofUrl", "skillCertificateUrl", "deletionReason", "rejectionReason"]
 });

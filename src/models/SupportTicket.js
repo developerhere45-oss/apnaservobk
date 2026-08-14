@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const encryptedFieldsPlugin = require("../utils/encryptedFieldsPlugin");
+const { publicIdPlugin } = require("../utils/publicIds");
 
 const attachmentSchema = new mongoose.Schema(
   {
@@ -91,6 +92,7 @@ supportTicketSchema.index({ status: 1, priority: 1, createdAt: -1 });
 supportTicketSchema.index({ category: 1, status: 1, createdAt: -1 });
 supportTicketSchema.index({ mobileNumber: 1, createdAt: -1 });
 supportTicketSchema.index({ ticketCode: 1, "conversation.clientMessageId": 1 });
+supportTicketSchema.plugin(publicIdPlugin, { kind: (ticket) => ticket.partnerId || ticket.source === "partner_app" ? "partnerComplaint" : "userComplaint" });
 
 supportTicketSchema.plugin(encryptedFieldsPlugin, {
   fields: [

@@ -27,6 +27,7 @@ const { serviceCategoryVariants, serviceLabel, partnerCanServeService } = requir
 const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
 const { partnerAssetUrl, verifyPartnerAssetToken } = require("../utils/partnerUploadAssets");
 const { sendPartnerApprovalWelcomeEmails } = require("../utils/welcomeEmail");
+const { decryptString } = require("../utils/fieldCrypto");
 
 function iso(value) {
   return value ? new Date(value).toISOString() : "";
@@ -52,6 +53,17 @@ function regex(value) {
 
 function digits(value) {
   return String(value || "").replace(/\D/g, "");
+}
+
+function decryptAdminRecord(value) {
+  if (typeof value === "string") return decryptString(value);
+  if (Array.isArray(value)) return value.map(decryptAdminRecord);
+  if (value && typeof value === "object") {
+    if (value instanceof Date || value instanceof mongoose.Types.ObjectId) return value;
+    if (typeof value.toObject === "function") return decryptAdminRecord(value.toObject({ getters: true }));
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, decryptAdminRecord(entry)]));
+  }
+  return value;
 }
 
 function includesText(value, query) {
@@ -81,6 +93,7 @@ function coordinates(location) {
 }
 
 function primaryAddress(user) {
+  user = decryptAdminRecord(user);
   const saved = Array.isArray(user.savedAddresses) ? user.savedAddresses : [];
   const defaultAddress = saved.find((entry) => entry.isDefault) || saved[0];
   if (defaultAddress?.address) return defaultAddress.address;
@@ -88,6 +101,7 @@ function primaryAddress(user) {
 }
 
 function savedAddresses(user) {
+  user = decryptAdminRecord(user);
   const saved = Array.isArray(user.savedAddresses) ? user.savedAddresses : [];
   if (saved.length) {
     return saved.map((entry) => ({
@@ -111,6 +125,7 @@ function savedAddresses(user) {
 }
 
 function summarizeDeviceInfo(deviceInfo) {
+  deviceInfo = decryptAdminRecord(deviceInfo);
   if (!deviceInfo || typeof deviceInfo !== "object" || Array.isArray(deviceInfo)) return "";
   const values = [
     deviceInfo.platform,
@@ -120,7 +135,7 @@ function summarizeDeviceInfo(deviceInfo) {
     deviceInfo.model,
     deviceInfo.manufacturer
   ].filter(Boolean);
-  return values.length ? values.join(" / ") : JSON.stringify(deviceInfo);
+  return values.length ? values.join(" / ") : "Device details unavailable";
 }
 
 function bookingTime(booking, statuses) {
@@ -178,10 +193,11 @@ function bookingTimeline(booking, payments = [], messages = []) {
 }
 
 function serializeBookingHistory(booking, payments = [], messages = []) {
+  booking = decryptAdminRecord(booking);
   const completedAt = booking.completedAt || bookingTime(booking, ["completed"]);
   return {
     id: id(booking._id),
-    bookingId: booking.bookingCode || id(booking._id),
+    bookingId: booking.publicId || booking.bookingCode || "",
     serviceCategory: booking.serviceCategory || "",
     serviceName: booking.serviceName || "",
     dateTimeBooked: iso(booking.createdAt),
@@ -200,12 +216,11 @@ function serializeBookingHistory(booking, payments = [], messages = []) {
 }
 
 function serializeSupportTicket(ticket) {
+  ticket = decryptAdminRecord(ticket);
   return {
     id: id(ticket._id),
-    ticketId: ticket.ticketCode || id(ticket._id),
-    userId: id(ticket.userId),
-    partnerId: id(ticket.partnerId),
-    bookingId: id(ticket.bookingId),
+    ticketId: ticket.publicId || ticket.ticketCode || "",
+    complaintId: ticket.publicId || ticket.ticketCode || "",
     bookingCode: ticket.bookingCode || "",
     userName: ticket.userName || "",
     partnerName: ticket.partnerName || "",
@@ -255,14 +270,13 @@ function serializeSupportTicket(ticket) {
 }
 
 function serializePayment(payment) {
+  payment = decryptAdminRecord(payment);
   return {
-    id: id(payment._id),
-    bookingId: id(payment.bookingId),
+    paymentId: payment.publicId || "",
     amount: money(payment.amount),
     currency: payment.currency || "INR",
     status: payment.status || "",
-    razorpayOrderId: payment.razorpayOrderId || "",
-    razorpayPaymentId: payment.razorpayPaymentId || "",
+    providerReference: payment.razorpayPaymentId || payment.razorpayOrderId || "",
     createdAt: iso(payment.createdAt),
     updatedAt: iso(payment.updatedAt)
   };
@@ -410,9 +424,11 @@ async function bookingSummaryTotals() {
 }
 
 function bookingRow(booking) {
+  booking = decryptAdminRecord(booking);
   return {
-    id: id(booking._id),
-    bookingCode: booking.bookingCode || id(booking._id),
+    id: booking.publicId || booking.bookingCode || "",
+    bookingCode: booking.publicId || booking.bookingCode || "",
+    internalBookingCode: booking.bookingCode || "",
     userName: booking.userSnapshot?.name || "",
     userMobile: booking.userSnapshot?.phone || "",
     serviceCategory: booking.serviceCategory || "",
@@ -459,11 +475,14 @@ function laundryBusinessView(partner) {
 }
 
 function partnerRow(partner, bookingCount = 0, profilePhoto = "") {
+  partner = decryptAdminRecord(partner);
   const approved = partner.isVerified === true && partner.kycStatus === "verified" && partner.trustStatus === "trusted";
   const blocked = partner.accountStatus === "blocked" || partner.accountStatus === "suspended" || partner.trustStatus === "suspended";
+  const partnerLocation = coordinates(partner.location);
   return {
     id: id(partner._id),
-    code: partner.partnerCode || id(partner._id),
+    code: partner.publicId || partner.partnerCode || "",
+    partnerCode: partner.publicId || partner.partnerCode || "",
     name: partner.name || "",
     phone: partner.phone || "",
     email: partner.email || "",
@@ -477,6 +496,8 @@ function partnerRow(partner, bookingCount = 0, profilePhoto = "") {
     workingAreas: (partner.workingAreas || []).join(", ") || partner.serviceArea || "",
     languagesKnown: (partner.languagesKnown || []).join(", "),
     city: partner.city || "",
+    location: partnerLocation.lat || partnerLocation.lng ? `${partnerLocation.lat.toFixed(5)}, ${partnerLocation.lng.toFixed(5)}` : "Location not available",
+    mapUrl: partnerLocation.lat || partnerLocation.lng ? `https://www.google.com/maps?q=${partnerLocation.lat},${partnerLocation.lng}` : "",
     state: partner.state || "",
     pinCode: partner.pinCode || "",
     emergencyContactNumber: partner.emergencyContactNumber || "",
@@ -502,6 +523,7 @@ function partnerRow(partner, bookingCount = 0, profilePhoto = "") {
 }
 
 function deviceRowsForOwner(owner, ownerType) {
+  owner = decryptAdminRecord(owner);
   const ownerId = id(owner?._id);
   const ownerName = owner?.name || (ownerType === "partner" ? "ApnaServo Partner" : "ApnaServo Customer");
   const ownerPhone = owner?.phone || "";
@@ -521,7 +543,7 @@ function deviceRowsForOwner(owner, ownerType) {
       email: ownerEmail,
       platform: device.platform || "android",
       appType: device.appType || ownerType,
-      deviceId: device.deviceId || "",
+      deviceId: device.publicId || "",
       tokenHash: device.tokenHash || (device.token ? tokenHash(device.token) : ""),
       status: "active",
       active: Boolean(device.isActive),
@@ -539,7 +561,7 @@ function deviceRowsForOwner(owner, ownerType) {
       email: ownerEmail,
       platform: "android",
       appType: ownerType,
-      deviceId: "legacy",
+      deviceId: owner.legacyDevicePublicId || "",
       tokenHash: tokenHash(owner.fcmToken),
       status: "active",
       active: true,
@@ -1019,8 +1041,10 @@ async function smartBulkAssignPending(req, res, next) {
 }
 
 function paymentRow(payment) {
+  payment = decryptAdminRecord(payment);
   return {
     id: id(payment._id),
+    paymentId: payment.publicId || "",
     bookingId: id(payment.bookingId?._id || payment.bookingId),
     bookingCode: payment.bookingId?.bookingCode || "",
     userName: payment.userId?.name || "",
@@ -1230,7 +1254,8 @@ async function listResourceRows(req, res, next) {
         const userId = id(user._id);
         const addressList = savedAddresses(user);
         return {
-          id: userId,
+          id: user.publicId || userId,
+          userId: user.publicId || "",
           fullName: user.name,
           mobileNumber: user.phone,
           email: user.email,
@@ -1749,7 +1774,8 @@ async function userRestrictSetFromBookings({ bookingId, serviceType, bookingStat
   if (bookingId) {
     filter.$or = [
       ...(bookingObjectId ? [{ _id: bookingObjectId }] : []),
-      { bookingCode: regex(bookingId) }
+      { bookingCode: regex(bookingId) },
+      { publicId: regex(bookingId) }
     ];
   }
   if (serviceType) {
@@ -1773,9 +1799,10 @@ async function userRestrictSetFromComplaints({ ticketId, complaintStatus }) {
   const ticketObjectId = objectId(ticketId);
   const ticketFilter = {};
   if (ticketId) {
-    ticketFilter.$or = [
+      ticketFilter.$or = [
       ...(ticketObjectId ? [{ _id: ticketObjectId }] : []),
-      { ticketCode: regex(ticketId) }
+      { ticketCode: regex(ticketId) },
+      { publicId: regex(ticketId) }
     ];
   }
   if (complaintStatus) ticketFilter.status = complaintStatus;
@@ -1844,6 +1871,7 @@ async function usersControlCenter(req, res, next) {
           $or: [
             ...(searchObjectId ? [{ _id: searchObjectId }] : []),
             { bookingCode: searchRegex },
+            { publicId: searchRegex },
             { serviceName: searchRegex },
             { serviceCategory: searchRegex }
           ]
@@ -1852,6 +1880,7 @@ async function usersControlCenter(req, res, next) {
           $or: [
             ...(searchObjectId ? [{ _id: searchObjectId }] : []),
             { ticketCode: searchRegex },
+            { publicId: searchRegex },
             { bookingCode: searchRegex }
           ]
         })
@@ -1871,23 +1900,20 @@ async function usersControlCenter(req, res, next) {
       : null;
 
     const userClauses = [];
-    if (query.name) userClauses.push({ name: regex(query.name) });
-    if (query.mobile) userClauses.push({ phone: regex(query.mobile) });
+    if (/^ASU\d{5}$/i.test(query.search)) userClauses.push({ publicId: query.search.toUpperCase() });
     if (registrationDate && registrationEnd) userClauses.push({ createdAt: { $gte: registrationDate, $lt: registrationEnd } });
     for (const restrictSet of [bookingRestrictSet, complaintRestrictSet]) {
       if (restrictSet) {
         userClauses.push({ _id: { $in: [...restrictSet].map(objectId).filter(Boolean) } });
       }
     }
-    if (query.search) {
+    if (query.search && (/^ASU\d+/i.test(query.search) || bookingSearchSet.size || ticketSearchSet.size)) {
       const searchRegex = regex(query.search);
       const relatedIds = [...new Set([...bookingSearchSet, ...ticketSearchSet])].map(objectId).filter(Boolean);
       userClauses.push({
         $or: [
-          { name: searchRegex },
-          { phone: searchRegex },
-          { email: searchRegex },
           { city: searchRegex },
+          { publicId: searchRegex },
           ...(relatedIds.length ? [{ _id: { $in: relatedIds } }] : [])
         ]
       });
@@ -1900,7 +1926,8 @@ async function usersControlCenter(req, res, next) {
       ticketClauses.push({
         $or: [
           ...(ticketObjectId ? [{ _id: ticketObjectId }] : []),
-          { ticketCode: regex(query.ticketId) }
+          { ticketCode: regex(query.ticketId) },
+          { publicId: regex(query.ticketId) }
         ]
       });
     }
@@ -1914,29 +1941,42 @@ async function usersControlCenter(req, res, next) {
       });
     }
     if (query.complaintStatus) ticketClauses.push({ status: query.complaintStatus });
-    if (query.mobile) ticketClauses.push({ mobileNumber: regex(query.mobile) });
-    if (query.name) ticketClauses.push({ userName: regex(query.name) });
-    if (query.search) {
+    if (query.search && /^(ASCU|ASCP|ASB)\d+/i.test(query.search)) {
       const searchRegex = regex(query.search);
       ticketClauses.push({
         $or: [
           { ticketCode: searchRegex },
-          { userName: searchRegex },
-          { mobileNumber: searchRegex },
+          { publicId: searchRegex },
           { bookingCode: searchRegex },
-          { category: searchRegex },
-          { complaint: searchRegex }
+          { category: searchRegex }
         ]
       });
     }
     const ticketFilter = ticketClauses.length ? { $and: ticketClauses } : {};
 
-    const [filteredUserCount, users, filteredTicketCount, tickets] = await Promise.all([
-      User.countDocuments(userFilter),
-      User.find(userFilter).sort({ createdAt: -1 }).skip((page - 1) * pageSize).limit(pageSize).lean(),
-      SupportTicket.countDocuments(ticketFilter),
-      SupportTicket.find(ticketFilter).sort({ lastUpdatedAt: -1, createdAt: -1 }).skip((ticketPage - 1) * pageSize).limit(pageSize).lean()
+    const [rawUserCandidates, rawTicketCandidates] = await Promise.all([
+      User.find(userFilter).sort({ createdAt: -1 }).limit(10000).lean(),
+      SupportTicket.find(ticketFilter).sort({ lastUpdatedAt: -1, createdAt: -1 }).limit(10000).lean()
     ]);
+    const decryptedUsers = rawUserCandidates.map(decryptAdminRecord);
+    const decryptedTickets = rawTicketCandidates.map(decryptAdminRecord);
+    const usersMatchingPii = decryptedUsers.filter((user) => {
+      if (query.name && !includesText(user.name, query.name)) return false;
+      if (query.mobile && !includesText(digits(user.phone), digits(query.mobile))) return false;
+      if (!query.search) return true;
+      const related = bookingSearchSet.has(id(user._id)) || ticketSearchSet.has(id(user._id));
+      return related || [user.publicId, user.name, user.phone, user.email, user.city].some((value) => includesText(value, query.search));
+    });
+    const ticketsMatchingPii = decryptedTickets.filter((ticket) => {
+      if (query.name && !includesText(ticket.userName || ticket.partnerName, query.name)) return false;
+      if (query.mobile && !includesText(digits(ticket.mobileNumber), digits(query.mobile))) return false;
+      if (!query.search) return true;
+      return [ticket.publicId, ticket.ticketCode, ticket.userName, ticket.partnerName, ticket.mobileNumber, ticket.email, ticket.bookingCode, ticket.category, ticket.complaint].some((value) => includesText(value, query.search));
+    });
+    const filteredUserCount = usersMatchingPii.length;
+    const filteredTicketCount = ticketsMatchingPii.length;
+    const users = usersMatchingPii.slice((page - 1) * pageSize, page * pageSize);
+    const tickets = ticketsMatchingPii.slice((ticketPage - 1) * pageSize, ticketPage * pageSize);
 
     const userIds = users.map((user) => user._id);
     const [bookingCounts, disputeCounts, ticketCounts] = userIds.length ? await Promise.all([
@@ -1963,7 +2003,8 @@ async function usersControlCenter(req, res, next) {
         const userId = id(user._id);
         const addressList = savedAddresses(user);
         return {
-          id: userId,
+          id: user.publicId || userId,
+          userId: user.publicId || "",
           fullName: user.name || "",
           mobileNumber: user.phone || "",
           email: user.email || "",
@@ -1978,7 +2019,14 @@ async function usersControlCenter(req, res, next) {
           savedAddresses: addressList,
           savedAddressText: addressList.map((entry) => entry.address).filter(Boolean).join(" | "),
           deviceInformation: summarizeDeviceInfo(user.deviceInfo),
-          rawDeviceInformation: user.deviceInfo || {}
+          devices: (user.deviceTokens || []).filter((device) => device.isActive).map((device) => ({
+            deviceId: device.publicId || "",
+            platform: device.platform || "",
+            osVersion: user.deviceInfo?.osVersion || user.deviceInfo?.os || "",
+            model: user.deviceInfo?.model || user.deviceInfo?.manufacturer || "",
+            appVersion: user.deviceInfo?.appVersion || "",
+            lastActiveAt: iso(device.lastUpdatedAt)
+          }))
         };
       }),
       supportTickets: tickets.map(serializeSupportTicket),
@@ -1995,8 +2043,7 @@ async function usersControlCenter(req, res, next) {
 async function userProfile(req, res, next) {
   try {
     const userObjectId = objectId(req.params.userId);
-    if (!userObjectId) return res.status(400).json({ message: "Invalid user id" });
-    const user = await User.findById(userObjectId);
+    const user = await User.findOne(userObjectId ? { _id: userObjectId } : { publicId: String(req.params.userId || "").toUpperCase() });
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const bookings = await Booking.find({ userId: user._id }).sort({ createdAt: -1 });
@@ -2019,18 +2066,16 @@ async function userProfile(req, res, next) {
       paymentsByBooking.set(key, [...(paymentsByBooking.get(key) || []), payment]);
     }
     const messagesByBooking = new Map();
+    const bookingPublicIdByInternalId = new Map(bookings.map((booking) => [id(booking._id), booking.publicId || booking.bookingCode || ""]));
     for (const message of messages) {
       const key = id(message.bookingId);
       messagesByBooking.set(key, [...(messagesByBooking.get(key) || []), message]);
     }
 
-    const rawProfile = user.toObject({ getters: true });
-    delete rawProfile.fcmToken;
-
     return res.json({
       user: {
         id: id(user._id),
-        firebaseUid: user.firebaseUid || "",
+        userId: user.publicId || "",
         fullName: user.name || "",
         mobileNumber: user.phone || "",
         email: user.email || "",
@@ -2048,7 +2093,14 @@ async function userProfile(req, res, next) {
         accountStatus: normalizeAccountStatus(user.accountStatus),
         rawAccountStatus: user.accountStatus || "active",
         deviceInformation: summarizeDeviceInfo(user.deviceInfo),
-        rawDeviceInformation: user.deviceInfo || {},
+        devices: (user.deviceTokens || []).filter((device) => device.isActive).map((device) => ({
+          deviceId: device.publicId || "",
+          platform: device.platform || "",
+          osVersion: user.deviceInfo?.osVersion || user.deviceInfo?.os || "",
+          model: user.deviceInfo?.model || user.deviceInfo?.manufacturer || "",
+          appVersion: user.deviceInfo?.appVersion || "",
+          lastActiveAt: iso(device.lastUpdatedAt)
+        })),
         registrationHistory: (user.registrationHistory || []).map((entry) => ({
           source: entry.source || "",
           provider: entry.provider || "",
@@ -2058,8 +2110,6 @@ async function userProfile(req, res, next) {
         })),
         loginHistory: (user.loginHistory || []).map((entry) => ({
           loggedInAt: iso(entry.loggedInAt),
-          ip: entry.ip || "",
-          userAgent: entry.userAgent || "",
           deviceInfo: entry.deviceInfo || {}
         })),
         adminNotes: (user.adminNotes || []).map((entry) => ({
@@ -2067,8 +2117,7 @@ async function userProfile(req, res, next) {
           note: entry.note || "",
           addedBy: entry.addedBy || "",
           addedAt: iso(entry.addedAt)
-        })),
-        rawProfile
+        }))
       },
       bookingHistory: bookings.map((booking) => serializeBookingHistory(
         booking,
@@ -2110,7 +2159,10 @@ async function userProfile(req, res, next) {
         }))
       ].sort((a, b) => new Date(b.createdAt || b.requestedAt || b.reportedAt || 0).getTime() - new Date(a.createdAt || a.requestedAt || a.reportedAt || 0).getTime()),
       supportTicketHistory: tickets.map(serializeSupportTicket),
-      paymentHistory: payments.map(serializePayment)
+      paymentHistory: payments.map((payment) => ({
+        ...serializePayment(payment),
+        bookingId: bookingPublicIdByInternalId.get(id(payment.bookingId)) || ""
+      }))
     });
   } catch (error) {
     return next(error);
@@ -2120,7 +2172,7 @@ async function userProfile(req, res, next) {
 async function updateUserAdminState(req, res, next) {
   try {
     const userObjectId = objectId(req.params.userId);
-    if (!userObjectId) return res.status(400).json({ message: "Invalid user id" });
+    const userFilter = userObjectId ? { _id: userObjectId } : { publicId: String(req.params.userId || "").toUpperCase() };
     const allowedStatuses = new Set(["active", "suspended", "blocked"]);
     const update = {};
     const status = String(req.body?.accountStatus || "").trim().toLowerCase();
@@ -2142,10 +2194,10 @@ async function updateUserAdminState(req, res, next) {
       };
     }
     if (!Object.keys(operations).length) return res.status(400).json({ message: "No user changes supplied" });
-    const user = await User.findByIdAndUpdate(userObjectId, operations, { new: true });
+    const user = await User.findOneAndUpdate(userFilter, operations, { new: true });
     if (!user) return res.status(404).json({ message: "User not found" });
     emitAdminEvent("user:updated", { userId: id(user._id), accountStatus: user.accountStatus });
-    return res.json({ ok: true, userId: id(user._id), accountStatus: user.accountStatus });
+    return res.json({ ok: true, userId: user.publicId || "", accountStatus: user.accountStatus });
   } catch (error) {
     return next(error);
   }
@@ -2287,6 +2339,7 @@ async function partnerProfile(req, res, next) {
     return res.json({
       partner: {
         id: id(partner._id),
+        partnerId: partner.publicId || partner.partnerCode || "",
         firebaseUid: partner.firebaseUid || "",
         partnerCode: partner.partnerCode || "",
         profilePhoto,
@@ -2307,6 +2360,7 @@ async function partnerProfile(req, res, next) {
         workingAreas: partner.workingAreas || [],
         serviceArea: partner.serviceArea || "",
         serviceRadiusKm: Number(partner.serviceRadiusKm || 0),
+        currentLocation: coordinates(partner.location),
         languagesKnown: partner.languagesKnown || [],
         businessType: partner.businessType || "",
         businessVerificationStatus: partner.businessVerificationStatus || "not_required",
@@ -2410,7 +2464,8 @@ async function bookingTimelineDetails(req, res, next) {
     const booking = await Booking.findOne({
       $or: [
         ...(bookingObjectId ? [{ _id: bookingObjectId }] : []),
-        { bookingCode: raw }
+        { bookingCode: raw },
+        { publicId: raw.toUpperCase() }
       ]
     });
     if (!booking) return res.status(404).json({ message: "Booking not found" });
@@ -2478,7 +2533,8 @@ async function findTicket(raw) {
   return SupportTicket.findOne({
     $or: [
       ...(ticketObjectId ? [{ _id: ticketObjectId }] : []),
-      { ticketCode: String(raw || "").trim() }
+      { ticketCode: String(raw || "").trim() },
+      { publicId: String(raw || "").trim().toUpperCase() }
     ]
   });
 }
