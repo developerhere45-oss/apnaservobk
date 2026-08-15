@@ -1963,7 +1963,18 @@ async function createRevisitRequest(req, res, next) {
   }
 }
 
+function getBookingLaunchStatus(req, res) {
+  const bookingOpen = String(process.env.BOOKING_OPEN || "false").trim().toLowerCase() === "true";
+  const launchDateLabel = String(process.env.BOOKING_LAUNCH_DATE_LABEL || "20th August").trim();
+  return res.json({
+    success: true,
+    bookingOpen,
+    launchDateLabel
+  });
+}
+
 module.exports = {
+  getBookingLaunchStatus,
   createBooking,
   listUserBookings,
   listPartnerBookings,

@@ -19,6 +19,9 @@ const proofUpload = multer({
   }
 });
 
+// The app needs this before authentication to decide whether to open booking
+// or show the pre-launch screen.
+router.get("/launch-status", controller.getBookingLaunchStatus);
 router.use(verifyFirebaseToken);
 router.post("/", bookingCreateLimiter, controller.createBooking);
 router.get("/user", bookingReadLimiter, controller.listUserBookings);
