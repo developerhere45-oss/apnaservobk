@@ -164,7 +164,7 @@ async function sendProviderOtp(phone) {
   const reason = providerRejectReason(errors);
   const error = new Error(reason);
   const credentialName = usingWidgetToken ? "MSG91_TOKEN_AUTH" : "MSG91_AUTHKEY";
-  error.publicMessage = `MSG91 rejected ${credentialName} for this OTP Widget: ${reason}. Copy the token generated for this widget, enable Mobile Integration, disable Captcha for the native app flow, save the widget, and redeploy.`;
+  error.publicMessage = `MSG91 rejected ${credentialName} for this OTP Widget: ${reason}. ApnaServo sends OTP through its Render backend, so disable Mobile Integration and Captcha for this widget, save the widget, and retry. Keep MSG91_AUTHKEY and MSG91_WIDGET_ID configured on Render.`;
   error.statusCode = 400;
   error.details = { provider: "msg91", errors };
   throw error;
