@@ -66,6 +66,15 @@ function isAllowedPasswordEndpoint(req) {
   return false;
 }
 
+function isAllowedOtpVerification(req, fields) {
+  const method = String(req.method || "").toUpperCase();
+  const path = String(req.originalUrl || req.path || "").split("?")[0].replace(/\/+$/, "");
+  return method === "POST"
+    && path === "/api/otp/verify"
+    && fields.length === 1
+    && normalizeKey(fields[0]) === "otp";
+}
+
 function findSensitivePaths(value, prefix = "", found = []) {
   if (!value || typeof value !== "object") {
     return found;
@@ -93,6 +102,13 @@ function rejectPlainSensitiveFields(req, res, next) {
   }
 
   if (passwordOnly && isAllowedPasswordEndpoint(req)) {
+    return next();
+  }
+
+  // An OTP must reach the verification provider as entered by the user. Keep
+  // the exception limited to the dedicated TLS-protected verification route;
+  // every other plaintext sensitive field remains blocked.
+  if (isAllowedOtpVerification(req, fields)) {
     return next();
   }
 
