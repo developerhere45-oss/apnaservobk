@@ -1384,19 +1384,35 @@ async function listResourceRows(req, res, next) {
       }));
     } else if (resource === "complaints") {
       const disputes = await ReviewDispute.find().sort({ createdAt: -1 }).limit(limit);
-      rows = disputes.map((dispute) => ({
+      const supportTickets = await SupportTicket.find().sort({ createdAt: -1 }).limit(limit);
+      const disputeRows = disputes.map((dispute) => ({
         id: id(dispute._id),
         bookingCode: dispute.bookingCode || "",
         reason: dispute.reason,
+        complaint: dispute.reason,
+        description: dispute.reason,
+        source: "review_dispute",
         status: dispute.status,
         priority: "review",
         createdAt: iso(dispute.createdAt)
       }));
+      const supportRows = supportTickets.map((ticket) => ({
+        ...smartComplaintRow(ticket),
+        reason: ticket.category || "complaint",
+        description: ticket.complaint || "",
+        actualIssue: ticket.complaint || "",
+        source: ticket.source || "ai_support"
+      }));
+      rows = [...supportRows, ...disputeRows]
+        .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))
+        .slice(0, limit);
       metrics = {
-        totalComplaints: await ReviewDispute.countDocuments(),
-        open: await ReviewDispute.countDocuments({ status: "open" }),
-        inProgress: await ReviewDispute.countDocuments({ status: "reviewing" }),
+        totalComplaints: await ReviewDispute.countDocuments() + await SupportTicket.countDocuments(),
+        open: await ReviewDispute.countDocuments({ status: "open" }) + await SupportTicket.countDocuments({ status: "open" }),
+        inProgress: await ReviewDispute.countDocuments({ status: "reviewing" })
+          + await SupportTicket.countDocuments({ status: { $in: ["assigned", "in_progress", "escalated"] } }),
         resolved: await ReviewDispute.countDocuments({ status: { $in: ["accepted", "rejected"] } })
+          + await SupportTicket.countDocuments({ status: { $in: ["resolved", "closed"] } })
       };
     } else if (resource === "notifications") {
       const notifications = await AdminNotification.find().sort({ createdAt: -1 }).limit(limit);

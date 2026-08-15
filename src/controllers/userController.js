@@ -281,6 +281,9 @@ async function syncSupportTicket(req, res, next) {
     const isNew = !ticket;
 
     if (!ticket) {
+      if (body.senderRole !== "user") {
+        return res.status(400).json({ message: "A customer complaint is required to create a support ticket" });
+      }
       ticket = new SupportTicket({
         ticketCode: body.ticketId,
         userId: user._id,
@@ -325,7 +328,7 @@ async function syncSupportTicket(req, res, next) {
       ticket.bookingId = booking._id;
       ticket.bookingCode = booking.bookingCode;
     }
-    if (body.aiSummary) ticket.aiSummary = body.aiSummary;
+    if (body.senderRole === "user" && body.aiSummary) ticket.aiSummary = body.aiSummary;
     ticket.lastUpdatedAt = now;
     await ticket.save();
 
