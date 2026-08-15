@@ -260,15 +260,24 @@ async function verifyOtp(input = {}) {
     throw error;
   }
 
-  const challenge = await OtpChallenge.findOne({
-    _id: input.requestId,
-    phone,
-    role,
-    purpose: "login",
-    consumedAt: null
-  }).sort({ createdAt: -1 });
+  const requestId = String(input.requestId || "").trim();
+  if (!/^[a-f\d]{24}$/i.test(requestId)) {
+    const error = new Error("OTP expired or invalid");
+    error.statusCode = 400;
+    throw error;
+  }
 
-  if (!challenge || challenge.expiresAt <= new Date() || challenge.attempts >= challenge.maxAttempts) {
+  // `phone` is encrypted with a random IV, so it cannot be queried by its
+  // plaintext value. Load the one-time challenge by its unguessable id and
+  // compare the decrypted values before asking the provider to verify it.
+  const challenge = await OtpChallenge.findById(requestId);
+  const challengeMatches = challenge
+    && challenge.phone === phone
+    && challenge.role === role
+    && challenge.purpose === "login"
+    && !challenge.consumedAt;
+
+  if (!challengeMatches || challenge.expiresAt <= new Date() || challenge.attempts >= challenge.maxAttempts) {
     const error = new Error("OTP expired or invalid");
     error.statusCode = 400;
     throw error;
