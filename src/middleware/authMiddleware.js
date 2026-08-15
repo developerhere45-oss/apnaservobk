@@ -17,7 +17,7 @@ function csvSet(value, options = {}) {
 }
 
 function developmentDeviceAuth(req) {
-  if (process.env.DISABLE_DEVICE_AUTH_FALLBACK === "true") {
+  if (process.env.NODE_ENV === "production" || process.env.DISABLE_DEVICE_AUTH_FALLBACK !== "false") {
     return null;
   }
 

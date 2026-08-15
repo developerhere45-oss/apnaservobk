@@ -59,6 +59,16 @@ function pushImageUrl(value) {
 }
 
 async function resolveRecipients(notification) {
+  if (notification.targetType === "LAUNCH_SUBSCRIBERS") {
+    const users = await User.find({
+      accountStatus: { $nin: ["blocked", "deleted"] },
+      launchNotificationRequestedAt: { $ne: null },
+      launchNotificationFor: notification.scheduleAt
+    })
+      .select("_id firebaseUid name phone email fcmToken deviceTokens accountStatus")
+      .sort({ createdAt: -1 });
+    return users.map((user) => ({ role: "user", owner: user }));
+  }
   if (notification.targetType === "ALL_USERS") {
     const users = await User.find({ accountStatus: { $nin: ["blocked", "deleted"] } })
       .select("_id firebaseUid name phone email fcmToken deviceTokens accountStatus")

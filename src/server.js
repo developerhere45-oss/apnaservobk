@@ -21,6 +21,7 @@ const employeeRoutes = require("./routes/employeeRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const reviewRoutes = require("./routes/reviewRoutes");
 const otpRoutes = require("./routes/otpRoutes");
+const publicInfoRoutes = require("./routes/publicInfoRoutes");
 const { initBookingSocket } = require("./sockets/bookingSocket");
 const { startNotificationScheduler } = require("./utils/notificationScheduler");
 const cache = require("./config/cache");
@@ -91,7 +92,7 @@ app.get("/health", (req, res) => {
       broadPartnerDispatch: true,
       laundryBusinessOnboarding: true,
       laundryStaffWorkspace: true,
-      deviceAuthFallback: process.env.DISABLE_DEVICE_AUTH_FALLBACK !== "true"
+      deviceAuthFallback: process.env.NODE_ENV !== "production" && process.env.DISABLE_DEVICE_AUTH_FALLBACK === "false"
     }
   });
 });
@@ -106,6 +107,7 @@ app.get("/ready", (req, res) => {
 });
 
 app.get("/api/app-control/config", publicConfig);
+app.use(publicInfoRoutes);
 
 app.use("/api/users", userRoutes);
 app.use("/api/partner", partnerRoutes);

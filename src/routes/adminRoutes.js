@@ -81,6 +81,7 @@ router.patch("/users/:userId", controller.updateUserAdminState);
 router.get("/partners/:partnerId", controller.partnerProfile);
 router.patch("/partners/:partnerId/documents/:documentId", controller.updatePartnerDocument);
 router.get("/bookings/:bookingId/timeline", controller.bookingTimelineDetails);
+router.patch("/bookings/:bookingId/location", controller.updateBookingLocation);
 router.get("/support-tickets", controller.listSupportTickets);
 router.post("/support-tickets", controller.createSupportTicket);
 router.get("/support-tickets/:ticketId", controller.supportTicketDetails);

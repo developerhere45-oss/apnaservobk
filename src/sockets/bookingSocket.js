@@ -195,9 +195,15 @@ function serializeBooking(booking) {
     serviceName: doc.serviceName,
     issue: doc.issue,
     address: doc.address,
+    addressDetails: doc.addressDetails || {},
     city: doc.city,
     lat: location.coordinates ? location.coordinates[1] : 0,
     lng: location.coordinates ? location.coordinates[0] : 0,
+    locationVersion: Number(doc.locationVersion || 1),
+    locationUpdatedAt: doc.locationUpdatedAt || doc.updatedAt || null,
+    locationUpdatedAtMillis: millis(doc.locationUpdatedAt || doc.updatedAt),
+    locationUpdatedBy: doc.locationUpdatedBy || "user",
+    locationChange: doc.locationChange || { state: "none" },
     status: doc.status,
     legacyStatus: doc.status,
     lifecycleStatus,
@@ -243,6 +249,8 @@ function serializeBooking(booking) {
     expectedArrivalAtMillis: millis(doc.expectedArrivalAt),
     userName: doc.userSnapshot?.name || "",
     userPhone: doc.userSnapshot?.phone || "",
+    primaryPhone: doc.contact?.primaryPhone || doc.userSnapshot?.phone || "",
+    alternatePhone: doc.contact?.alternatePhone || "",
     partnerName: doc.partnerSnapshot?.name || "",
     partnerPhone: doc.partnerSnapshot?.phone || "",
     partnerPhoto: doc.partnerSnapshot?.photoUrl || "",
@@ -268,13 +276,16 @@ function partnerBookingPayload(booking) {
   const doc = typeof booking.toObject === "function" ? booking.toObject() : booking;
   const assignedPartnerId = doc.partnerId || payload.partnerId || payload.assignedPartnerId || "";
   const realCustomerPhone = assignedPartnerId
-    ? String(doc.userSnapshot?.phone || payload.userPhone || payload.customerPhone || "")
+    ? String(doc.contact?.primaryPhone || doc.userSnapshot?.phone || payload.userPhone || payload.customerPhone || "")
     : "";
+  const realAlternatePhone = assignedPartnerId ? String(doc.contact?.alternatePhone || "") : "";
   const protectedPhone = maskPhone(doc.userSnapshot?.phone || payload.userPhone || payload.customerPhone);
   return {
     ...payload,
     userPhone: realCustomerPhone || protectedPhone,
     customerPhone: realCustomerPhone,
+    primaryPhone: realCustomerPhone,
+    alternatePhone: realAlternatePhone,
     customerPhoneMasked: realCustomerPhone || protectedPhone,
     phoneProtected: !realCustomerPhone,
     virtualCalling: virtualCallingEnabled()

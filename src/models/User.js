@@ -86,6 +86,8 @@ const userSchema = new mongoose.Schema(
     bookingRiskStatus: { type: String, enum: ["unknown", "trusted", "otp_required", "review"], default: "unknown", index: true },
     fakeBookingWarningCount: { type: Number, default: 0 },
     lastBookingAt: { type: Date, default: null },
+    launchNotificationRequestedAt: { type: Date, default: null },
+    launchNotificationFor: { type: Date, default: null },
     lastLoginAt: { type: Date, default: null, index: true },
     deviceInfo: { type: mongoose.Schema.Types.Mixed, default: {} },
     registrationHistory: { type: [registrationHistorySchema], default: [] },

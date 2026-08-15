@@ -19,7 +19,7 @@ const SupportTicket = require("../models/SupportTicket");
 const AdminActivity = require("../models/AdminActivity");
 const cache = require("../config/cache");
 const { recomputePartnerRating } = require("../utils/ratingAggregation");
-const { emitAdminEvent, emitNewBookingToPartners } = require("../sockets/bookingSocket");
+const { emitAdminEvent, emitNewBookingToPartners, emitBookingStatusUpdate } = require("../sockets/bookingSocket");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens, tokenHash } = require("../utils/notificationTokens");
 const findNearbyPartners = require("../utils/findNearbyPartners");
@@ -208,6 +208,14 @@ function serializeBookingHistory(booking, payments = [], messages = []) {
     assignedPartnerName: booking.partnerSnapshot?.name || "",
     assignedPartnerMobileNumber: booking.partnerSnapshot?.phone || "",
     customerAddress: booking.address || "",
+    customerPrimaryPhone: booking.contact?.primaryPhone || booking.userSnapshot?.phone || "",
+    customerAlternatePhone: booking.contact?.alternatePhone || "",
+    addressDetails: booking.addressDetails || {},
+    location: coordinates(booking.location),
+    locationVersion: Number(booking.locationVersion || 1),
+    locationUpdatedAt: iso(booking.locationUpdatedAt || booking.updatedAt),
+    locationUpdatedBy: booking.locationUpdatedBy || "",
+    locationChange: booking.locationChange || {},
     customerNotes: [booking.issue || "", booking.emergency?.notes || ""].filter(Boolean).join(" | "),
     finalServiceCost: money(booking.finalAmount || booking.quoteAmount || booking.price),
     paymentStatus: booking.paymentStatus || "",
@@ -431,6 +439,8 @@ function bookingRow(booking) {
     internalBookingCode: booking.bookingCode || "",
     userName: booking.userSnapshot?.name || "",
     userMobile: booking.userSnapshot?.phone || "",
+    primaryPhone: booking.contact?.primaryPhone || booking.userSnapshot?.phone || "",
+    alternatePhone: booking.contact?.alternatePhone || "",
     serviceCategory: booking.serviceCategory || "",
     serviceName: booking.serviceName || booking.serviceCategory || "",
     partnerName: booking.partnerSnapshot?.name || "",
@@ -441,6 +451,8 @@ function bookingRow(booking) {
     jobCompletionTime: iso(booking.completedAt || bookingTime(booking, ["completed"])),
     status: booking.status || "",
     customerAddress: booking.address || "",
+    locationVersion: Number(booking.locationVersion || 1),
+    locationUpdatedAt: iso(booking.locationUpdatedAt || booking.updatedAt),
     customerNotes: [booking.issue || "", booking.emergency?.notes || ""].filter(Boolean).join(" | "),
     finalServiceCost: bookingAmount(booking),
     paymentStatus: booking.paymentStatus || "",
@@ -2495,6 +2507,89 @@ async function bookingTimelineDetails(req, res, next) {
   }
 }
 
+async function updateBookingLocation(req, res, next) {
+  try {
+    const raw = String(req.params.bookingId || "").trim();
+    const bookingObjectId = objectId(raw);
+    const current = await Booking.findOne({
+      $or: [
+        ...(bookingObjectId ? [{ _id: bookingObjectId }] : []),
+        { bookingCode: raw }
+      ]
+    });
+    if (!current) return res.status(404).json({ message: "Booking not found" });
+    const address = String(req.body?.address || "").trim();
+    const lat = Number(req.body?.lat);
+    const lng = Number(req.body?.lng);
+    if (address.length < 10 || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      return res.status(400).json({ message: "Complete address and valid coordinates are required" });
+    }
+    const expectedVersion = Number(req.body?.expectedVersion || current.locationVersion || 1);
+    const now = new Date();
+    const booking = await Booking.findOneAndUpdate(
+      { _id: current._id, locationVersion: expectedVersion },
+      {
+        $set: {
+          address,
+          city: String(req.body?.city || current.city || "Guwahati").trim(),
+          location: { type: "Point", coordinates: [lng, lat] },
+          addressDetails: {
+            houseFlat: String(req.body?.houseFlat || "").trim(),
+            building: String(req.body?.building || "").trim(),
+            floor: String(req.body?.floor || "").trim(),
+            room: String(req.body?.room || "").trim(),
+            landmark: String(req.body?.landmark || "").trim()
+          },
+          locationUpdatedAt: now,
+          locationUpdatedBy: "admin",
+          locationChange: {
+            state: current.partnerId ? "pending_partner_ack" : "none",
+            reason: "",
+            changedAt: now,
+            respondedAt: null,
+            changedBy: "admin"
+          }
+        },
+        $inc: { locationVersion: 1 },
+        $push: { statusTimeline: { status: "location_updated", at: now, by: "admin", note: `Version ${expectedVersion + 1}` } }
+      },
+      { new: true }
+    );
+    if (!booking) {
+      const latest = await Booking.findById(current._id);
+      return res.status(409).json({ message: "Location was updated elsewhere", booking: serializeBookingHistory(latest) });
+    }
+    emitBookingStatusUpdate(booking);
+    emitAdminEvent("booking:location_updated", {
+      bookingId: String(booking._id),
+      bookingCode: booking.bookingCode,
+      userId: String(booking.userId),
+      partnerId: booking.partnerId ? String(booking.partnerId) : "",
+      address: booking.address,
+      lat,
+      lng,
+      locationVersion: booking.locationVersion,
+      locationUpdatedAt: booking.locationUpdatedAt,
+      actorRole: "admin"
+    });
+    const [user, partner] = await Promise.all([
+      User.findById(booking.userId),
+      booking.partnerId ? Partner.findById(booking.partnerId) : null
+    ]);
+    await reliableNotify({
+      recipients: [userNotificationRecipient(user), partnerNotificationRecipient(partner)].filter(Boolean),
+      title: "Service Location Updated",
+      body: `The service address for booking ${booking.bookingCode} was updated by support.`,
+      category: "booking_location_updated",
+      priority: "high",
+      data: { type: "booking:location_updated", bookingId: booking._id, bookingCode: booking.bookingCode }
+    });
+    return res.json({ booking: serializeBookingHistory(booking) });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function listSupportTickets(req, res, next) {
   try {
     const status = String(req.query.status || "").trim();
@@ -2738,6 +2833,7 @@ module.exports = {
   partnerProfile,
   updatePartnerDocument,
   bookingTimelineDetails,
+  updateBookingLocation,
   listSupportTickets,
   createSupportTicket,
   supportTicketDetails,

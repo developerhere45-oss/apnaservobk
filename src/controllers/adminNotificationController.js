@@ -10,7 +10,7 @@ const { cloudinary } = require("../config/cloudinary");
 const { deliverAdminNotification, resolveRecipients } = require("../utils/adminNotificationDelivery");
 const { emitAdminEvent } = require("../sockets/bookingSocket");
 
-const targetTypes = ["ALL_USERS", "ALL_PARTNERS", "SPECIFIC_USER", "SPECIFIC_PARTNER"];
+const targetTypes = ["ALL_USERS", "ALL_PARTNERS", "SPECIFIC_USER", "SPECIFIC_PARTNER", "LAUNCH_SUBSCRIBERS"];
 const actionTypes = ["NONE", "OPEN_HOME", "OPEN_NOTIFICATIONS", "OPEN_SERVICE", "OPEN_BOOKING", "OPEN_OFFERS", "OPEN_PARTNER_HOME", "OPEN_PARTNER_BOOKING"];
 
 const notificationPayloadSchema = z.object({

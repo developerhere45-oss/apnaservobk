@@ -23,11 +23,15 @@ const proofUpload = multer({
 // or show the pre-launch screen.
 router.get("/launch-status", controller.getBookingLaunchStatus);
 router.use(verifyFirebaseToken);
+router.post("/launch-notify", bookingWriteLimiter, controller.requestLaunchNotification);
 router.post("/", bookingCreateLimiter, controller.createBooking);
 router.get("/user", bookingReadLimiter, controller.listUserBookings);
 router.get("/partner", bookingReadLimiter, controller.listPartnerBookings);
 router.get("/:bookingId", bookingReadLimiter, controller.getBooking);
 router.get("/:bookingId/tracking", bookingReadLimiter, controller.getTracking);
+router.patch("/:bookingId/contact", bookingWriteLimiter, controller.updateBookingContacts);
+router.patch("/:bookingId/location", bookingWriteLimiter, controller.updateBookingLocation);
+router.post("/:bookingId/location-response", bookingWriteLimiter, controller.respondToLocationChange);
 router.post("/:bookingId/calls", bookingWriteLimiter, controller.createCallLog);
 router.post("/:bookingId/sos", bookingWriteLimiter, controller.createTechnicianSos);
 router.post("/:bookingId/proof-photos", bookingWriteLimiter, proofUpload.single("photo"), validateUploadedImage(["image/jpeg", "image/png", "image/webp"]), controller.uploadJobProofPhoto);
@@ -41,6 +45,7 @@ router.post("/:bookingId/chat/monitor", bookingWriteLimiter, controller.monitorB
 router.post("/:bookingId/no-response-report", bookingWriteLimiter, controller.reportCustomerNoResponse);
 router.post("/:bookingId/accept", bookingWriteLimiter, controller.acceptBooking);
 router.post("/:bookingId/reject", bookingWriteLimiter, controller.rejectBooking);
+router.post("/:bookingId/cancel", bookingWriteLimiter, controller.cancelCustomerBooking);
 router.patch("/:bookingId/status", bookingWriteLimiter, controller.updateStatus);
 
 module.exports = router;

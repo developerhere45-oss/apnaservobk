@@ -69,7 +69,7 @@ function otpStatus() {
 }
 
 function localFallbackAllowed() {
-  return process.env.NODE_ENV !== "production" || process.env.OTP_ALLOW_LOCAL_FALLBACK === "true";
+  return process.env.NODE_ENV !== "production" && process.env.OTP_ALLOW_LOCAL_FALLBACK === "true";
 }
 
 function maskedPhone(phone) {
@@ -213,13 +213,24 @@ async function firebaseCustomTokenForPhone(phone, role) {
 async function sendOtp(input = {}) {
   const phone = normalizeIndianPhone(input.phone);
   const role = input.role || "user";
-  const otp = generateOtp();
+  const reviewPhoneDigits = String(process.env.APP_REVIEW_PHONE || "").replace(/\D/g, "");
+  const configuredReviewPhone = reviewPhoneDigits.length > 10 && reviewPhoneDigits.startsWith("91")
+    ? reviewPhoneDigits.slice(2)
+    : reviewPhoneDigits;
+  const configuredReviewOtp = String(process.env.APP_REVIEW_OTP || "").trim();
+  const isReviewAccount = role === "user"
+    && configuredReviewPhone.length === 10
+    && phone === configuredReviewPhone
+    && /^\d{6}$/.test(configuredReviewOtp);
+  const otp = isReviewAccount ? configuredReviewOtp : generateOtp();
   const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
   let provider = "local";
   let providerPayload = null;
   let requestId = "";
 
-  if (msg91Configured()) {
+  if (isReviewAccount) {
+    provider = "app_review";
+  } else if (msg91Configured()) {
     provider = "msg91";
     providerPayload = await sendProviderOtp(phone);
     requestId = providerRequestId(providerPayload);
@@ -238,10 +249,6 @@ async function sendOtp(input = {}) {
     providerRequestId: requestId,
     providerPayload
   });
-
-  if (provider === "local") {
-    console.warn(`Local OTP fallback for ${role} +91${phone}: ${otp}`);
-  }
 
   return {
     requestId: challenge.id,

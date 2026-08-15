@@ -16,7 +16,7 @@ const adminNotificationSchema = new mongoose.Schema(
     imageUrl: { type: String, trim: true, default: "" },
     targetType: {
       type: String,
-      enum: ["ALL_USERS", "ALL_PARTNERS", "SPECIFIC_USER", "SPECIFIC_PARTNER"],
+      enum: ["ALL_USERS", "ALL_PARTNERS", "SPECIFIC_USER", "SPECIFIC_PARTNER", "LAUNCH_SUBSCRIBERS"],
       required: true,
       index: true
     },

@@ -38,9 +38,28 @@ const checks = [
     pass: (text) => text.includes('process.env.NODE_ENV !== "production"') && text.includes("payload.detail")
   },
   {
+    name: "development device authentication is disabled in production",
+    file: "src/middleware/authMiddleware.js",
+    pass: (text) => text.includes('process.env.NODE_ENV === "production"')
+      && text.includes('process.env.DISABLE_DEVICE_AUTH_FALLBACK !== "false"')
+  },
+  {
+    name: "OTP send and verification routes have dedicated rate limits",
+    file: "src/routes/otpRoutes.js",
+    pass: (text) => text.includes("loginLimiter") && text.includes("verificationLimiter")
+  },
+  {
     name: "admin email allow-list requires verified email",
     file: "src/middleware/authMiddleware.js",
     pass: (text) => text.includes("req.auth.email_verified === true")
+  },
+  {
+    name: "customer account deletion is authenticated and deletes Firebase identity",
+    file: "src/controllers/userController.js",
+    pass: (text) => text.includes("async function deleteAccount")
+      && text.includes("req.auth.uid")
+      && text.includes("admin.auth().deleteUser")
+      && text.includes("User.deleteOne")
   },
   {
     name: "socket partner location updates are rate limited",

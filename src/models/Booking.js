@@ -20,8 +20,31 @@ const bookingSchema = new mongoose.Schema(
     serviceName: { type: String, default: "Service" },
     issue: { type: String, default: "Service request" },
     address: { type: String, required: true },
+    addressDetails: {
+      houseFlat: { type: String, trim: true, default: "" },
+      building: { type: String, trim: true, default: "" },
+      floor: { type: String, trim: true, default: "" },
+      room: { type: String, trim: true, default: "" },
+      landmark: { type: String, trim: true, default: "" }
+    },
     city: { type: String, default: "Guwahati", index: true },
     location: { type: pointSchema, default: () => ({ type: "Point", coordinates: [91.7362, 26.1445] }) },
+    locationVersion: { type: Number, default: 1, min: 1 },
+    locationUpdatedAt: { type: Date, default: Date.now },
+    locationUpdatedBy: { type: String, enum: ["user", "admin", "system"], default: "user" },
+    locationChange: {
+      state: { type: String, enum: ["none", "pending_partner_ack", "accepted", "rejected"], default: "none" },
+      reason: { type: String, trim: true, default: "" },
+      changedAt: { type: Date, default: null },
+      respondedAt: { type: Date, default: null },
+      changedBy: { type: String, trim: true, default: "" }
+    },
+    contact: {
+      primaryPhone: { type: String, trim: true, default: "" },
+      alternatePhone: { type: String, trim: true, default: "" },
+      updatedAt: { type: Date, default: Date.now },
+      updatedBy: { type: String, trim: true, default: "user" }
+    },
     status: { type: String, enum: BOOKING_STATUSES, default: "pending", index: true },
     emergency: {
       isEmergency: { type: Boolean, default: false, index: true },
@@ -180,6 +203,14 @@ bookingSchema.plugin(encryptedFieldsPlugin, {
     "serviceName",
     "issue",
     "address",
+    "addressDetails.houseFlat",
+    "addressDetails.building",
+    "addressDetails.floor",
+    "addressDetails.room",
+    "addressDetails.landmark",
+    "locationChange.reason",
+    "contact.primaryPhone",
+    "contact.alternatePhone",
     "slot",
     "partnerArrivalEstimateLabel",
     "emergency.notes",

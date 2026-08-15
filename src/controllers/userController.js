@@ -6,6 +6,7 @@ const { Booking } = require("../models/Booking");
 const { emitAdminEvent } = require("../sockets/bookingSocket");
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 const { sendWelcomeEmail } = require("../utils/welcomeEmail");
+const { admin, initFirebase } = require("../config/firebase");
 
 const profileSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
@@ -385,10 +386,66 @@ async function requestDeletion(req, res, next) {
   }
 }
 
+async function deleteAccount(req, res, next) {
+  try {
+    const user = await User.findOne({ firebaseUid: req.auth.uid });
+    if (!user) {
+      try {
+        initFirebase();
+        await admin.auth().deleteUser(req.auth.uid);
+      } catch (error) {
+        if (error?.code !== "auth/user-not-found") throw error;
+      }
+      return res.json({ ok: true, deleted: true, idempotent: true });
+    }
+
+    const userId = user._id;
+    const deletedLabel = `Deleted customer ${String(userId).slice(-6)}`;
+    await Booking.updateMany(
+      { userId },
+      {
+        $set: {
+          address: "Deleted account",
+          location: { type: "Point", coordinates: [0, 0] },
+          "contact.primaryPhone": "",
+          "contact.alternatePhone": "",
+          "userSnapshot.name": deletedLabel,
+          "userSnapshot.phone": "",
+          "userSnapshot.email": "",
+          "userSnapshot.fcmToken": ""
+        }
+      }
+    );
+
+    const collectionsToDelete = [
+      "bookingmessages", "inappnotifications", "supporttickets", "calllogs",
+      "customernoresponsereports", "jobproofphotos", "reviews", "reviewdisputes",
+      "revisitrequests", "smsdeliverylogs", "techniciansos", "fraudalerts"
+    ];
+    await Promise.all(collectionsToDelete.map(async (collectionName) => {
+      const collection = User.db.collection(collectionName);
+      await collection.deleteMany({ userId });
+    }));
+
+    initFirebase();
+    try {
+      await admin.auth().deleteUser(req.auth.uid);
+    } catch (error) {
+      if (error?.code !== "auth/user-not-found") throw error;
+    }
+    await User.deleteOne({ _id: userId });
+    emitAdminEvent("user:deleted", { userId: String(userId), deletedAt: new Date() });
+    return res.json({ ok: true, deleted: true });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   upsertProfile,
   me,
   saveFcmToken,
   syncSupportTicket,
-  requestDeletion
+  requestDeletion,
+  deleteAccount
 };
