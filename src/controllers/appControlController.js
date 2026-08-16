@@ -2,6 +2,7 @@ const AppControlConfig = require("../models/AppControlConfig");
 const AppControlItem = require("../models/AppControlItem");
 const AdminActivity = require("../models/AdminActivity");
 const Service = require("../models/Service");
+const FeatureRegistry = require("../models/FeatureRegistry");
 const { normalizeConfig, getPublicAppControlConfig, invalidatePublishedConfig, isScheduleActive } = require("../utils/appControl");
 
 function actor(req) { return String(req.auth?.email || req.headers["x-admin-actor"] || "admin").slice(0, 160); }
@@ -10,9 +11,16 @@ function itemPayload(body) { const allowed = ["title", "message", "imageUrl", "c
 function merge(base, patch) { const out = { ...(isObject(base) ? base : {}) }; for (const [key, value] of Object.entries(isObject(patch) ? patch : {})) out[key] = isObject(value) ? merge(out[key], value) : value; return out; }
 async function audit(req, eventName, title, detail, payload = {}) { await AdminActivity.create({ eventName, category: "app_control", title, detail, actorRole: "admin", actorName: actor(req), status: "success", payload }); }
 
+const discoveredCustomerFeatures = [
+  { featureId: "home_banners", name: "Home banners & announcements", description: "Shows published banners and announcements on the customer home screen." },
+  { featureId: "booking_history", name: "Booking history", description: "Lets customers access their existing booking history." },
+  { featureId: "commercial_services", name: "Commercial services", description: "Shows the commercial services entry point on the customer home screen." }
+];
+async function featureRegistry() { await Promise.all(discoveredCustomerFeatures.map((feature) => FeatureRegistry.updateOne({ featureId: feature.featureId }, { $setOnInsert: feature, $set: { implementationState: "active", lastDiscoveredAt: new Date() } }, { upsert: true }))); return FeatureRegistry.find({}).sort({ name: 1 }).lean(); }
+
 async function publicConfig(req, res, next) { try { const audience = ["users", "partners"].includes(String(req.query.audience || "")) ? req.query.audience : "users"; res.set("Cache-Control", "private, max-age=10"); return res.json(await getPublicAppControlConfig(audience)); } catch (error) { return next(error); } }
 
-async function overview(_req, res, next) { try { const doc = await AppControlConfig.findOne({ key: "customer-app" }).lean(); const [announcements, banners, auditLogs, services] = await Promise.all([AppControlItem.countDocuments({ kind: "announcement", status: { $in: ["published", "scheduled"] } }), AppControlItem.countDocuments({ kind: "banner", status: { $in: ["published", "scheduled"] } }), AdminActivity.countDocuments({ category: "app_control" }), Service.find({}, { serviceCategory: 1, name: 1, description: 1, isActive: 1, availability: 1, availabilityMessage: 1, availabilityStartsAt: 1, availabilityEndsAt: 1 }).sort({ name: 1 }).limit(250).lean()]); return res.json({ draft: normalizeConfig(doc?.draft), published: normalizeConfig(doc?.published), version: Number(doc?.version || 0), updatedAt: doc?.updatedAt || null, counts: { announcements, banners, auditLogs }, services }); } catch (error) { return next(error); } }
+async function overview(_req, res, next) { try { const doc = await AppControlConfig.findOne({ key: "customer-app" }).lean(); const [announcements, banners, auditLogs, services, features] = await Promise.all([AppControlItem.countDocuments({ kind: "announcement", status: { $in: ["published", "scheduled"] } }), AppControlItem.countDocuments({ kind: "banner", status: { $in: ["published", "scheduled"] } }), AdminActivity.countDocuments({ category: "app_control" }), Service.find({}, { serviceCategory: 1, name: 1, description: 1, isActive: 1, availability: 1, availabilityMessage: 1, availabilityStartsAt: 1, availabilityEndsAt: 1 }).sort({ name: 1 }).limit(250).lean(), featureRegistry()]); return res.json({ draft: normalizeConfig(doc?.draft), published: normalizeConfig(doc?.published), version: Number(doc?.version || 0), updatedAt: doc?.updatedAt || null, counts: { announcements, banners, auditLogs }, services, features }); } catch (error) { return next(error); } }
 
 async function saveDraft(req, res, next) { try { const section = String(req.body?.section || "").trim(); const patch = req.body?.value; if (!section || !isObject(patch)) return res.status(400).json({ message: "section and object value are required" }); const current = await AppControlConfig.findOne({ key: "customer-app" }).lean(); const draft = normalizeConfig(merge(current?.draft, { [section]: patch })); const updated = await AppControlConfig.findOneAndUpdate({ key: "customer-app" }, { $set: { draft, updatedBy: actor(req) } }, { upsert: true, new: true, setDefaultsOnInsert: true }); await audit(req, "app_control:draft_saved", "Draft saved", section, { section }); return res.json({ draft: normalizeConfig(updated.draft), updatedAt: updated.updatedAt }); } catch (error) { return next(error); } }
 

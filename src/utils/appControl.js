@@ -51,7 +51,7 @@ async function getPublicAppControlConfig(audience = "users") {
   const now = Date.now();
   const [announcements, banners] = await Promise.all(["announcement", "banner"].map(async (kind) => AppControlItem.find({ kind, status: { $in: ["published", "scheduled"] }, audience: { $in: ["all", audience] } }).sort({ priority: 1, createdAt: -1 }).limit(50).lean()));
   const active = (items) => items.filter((item) => isScheduleActive(item, now)).map((item) => ({ id: String(item._id), title: item.title, message: item.message, imageUrl: item.imageUrl, ctaText: item.ctaText, ctaAction: item.ctaAction, serviceCategory: item.serviceCategory, placement: item.placement, priority: item.priority }));
-  return { ...state, config: state.config, announcements: active(announcements), banners: active(banners) };
+  return { ...state, configVersion: state.version, config: state.config, announcements: active(announcements), banners: active(banners) };
 }
 
 function compareVersions(left, right) {
