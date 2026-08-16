@@ -23,7 +23,6 @@ const proofUpload = multer({
 // or show the pre-launch screen.
 router.get("/launch-status", controller.getBookingLaunchStatus);
 router.use(verifyFirebaseToken);
-router.post("/launch-notify", bookingWriteLimiter, controller.requestLaunchNotification);
 router.post("/", bookingCreateLimiter, controller.createBooking);
 router.get("/user", bookingReadLimiter, controller.listUserBookings);
 router.get("/partner", bookingReadLimiter, controller.listPartnerBookings);
