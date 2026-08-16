@@ -34,6 +34,7 @@ router.use(verifyAdminSecret);
 router.get("/control-center", appControl.overview);
 router.patch("/control-center/draft", appControl.saveDraft);
 router.post("/control-center/publish", appControl.publish);
+router.post("/control-center/open-bookings", appControl.openBookings);
 router.post("/control-center/rollback/:activityId", appControl.rollback);
 router.post("/control-center/reset-draft", appControl.resetDraft);
 router.patch("/control-center/services/:category", appControl.saveServiceAvailability);

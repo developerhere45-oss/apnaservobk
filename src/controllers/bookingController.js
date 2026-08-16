@@ -2275,14 +2275,24 @@ async function createRevisitRequest(req, res, next) {
   }
 }
 
-function getBookingLaunchStatus(req, res) {
-  const bookingOpen = String(process.env.BOOKING_OPEN || "false").trim().toLowerCase() === "true";
-  const launchDateLabel = String(process.env.BOOKING_LAUNCH_DATE_LABEL || "20th August").trim();
-  return res.json({
-    success: true,
-    bookingOpen,
-    launchDateLabel
-  });
+async function getBookingLaunchStatus(req, res, next) {
+  try {
+    const { config, version } = await getPublishedConfig();
+    // Preserve the legacy environment switch until the first Control Center
+    // configuration is published, then the dashboard becomes the only source.
+    const hasPublishedControl = Number(version || 0) > 0;
+    const bookingOpen = hasPublishedControl
+      ? config.appStatus.bookingEnabled !== false
+        && ["LIVE", "PARTIALLY_AVAILABLE"].includes(config.appStatus.mode)
+        && config.launch.enabled !== true
+      : String(process.env.BOOKING_OPEN || "false").trim().toLowerCase() === "true";
+    const launchDateLabel = hasPublishedControl
+      ? (config.launch.dateText || config.launch.title || "ApnaServo launch")
+      : String(process.env.BOOKING_LAUNCH_DATE_LABEL || "20th August").trim();
+    return res.json({ success: true, bookingOpen, launchDateLabel, controlVersion: Number(version || 0) });
+  } catch (error) {
+    return next(error);
+  }
 }
 
 module.exports = {
