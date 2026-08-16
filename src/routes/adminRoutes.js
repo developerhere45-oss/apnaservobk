@@ -9,6 +9,7 @@ const notifications = require("../controllers/adminNotificationController");
 const roleAuth = require("../controllers/roleAuthController");
 const employees = require("../controllers/adminEmployeeController");
 const chats = require("../controllers/adminChatController");
+const appControl = require("../controllers/appControlController");
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -30,6 +31,17 @@ router.post("/logout", roleAuth.logout);
 router.get("/me", authAdminJwt, roleAuth.adminMe);
 router.patch("/change-password", authAdminJwt, roleAuth.changeAdminPassword);
 router.use(verifyAdminSecret);
+router.get("/control-center", appControl.overview);
+router.patch("/control-center/draft", appControl.saveDraft);
+router.post("/control-center/publish", appControl.publish);
+router.post("/control-center/rollback/:activityId", appControl.rollback);
+router.post("/control-center/reset-draft", appControl.resetDraft);
+router.patch("/control-center/services/:category", appControl.saveServiceAvailability);
+router.get("/control-center/audit-logs", appControl.auditLogs);
+router.get("/control-center/:kind", appControl.listItems);
+router.post("/control-center/:kind", appControl.createItem);
+router.patch("/control-center/:kind/:id", appControl.updateItem);
+router.delete("/control-center/:kind/:id", appControl.deleteItem);
 router.get("/employees", employees.listEmployees);
 router.post("/employees", employees.createEmployee);
 router.get("/employees/:id", employees.getEmployee);

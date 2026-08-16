@@ -27,6 +27,7 @@ const cache = require("./config/cache");
 const { cdnFriendlyHeaders } = require("./middleware/cdnHeaders");
 const { requireHttpsInProduction } = require("./middleware/httpsOnly");
 const { rejectPlainSensitiveFields } = require("./middleware/securityGuard");
+const { publicConfig } = require("./controllers/appControlController");
 const { notFound, errorHandler } = require("./middleware/errorHandler");
 
 const app = express();
@@ -103,6 +104,8 @@ app.get("/ready", (req, res) => {
     cache: cache.status()
   });
 });
+
+app.get("/api/app-control/config", publicConfig);
 
 app.use("/api/users", userRoutes);
 app.use("/api/partner", partnerRoutes);

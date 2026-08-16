@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const crypto = require("crypto");
 const { z } = require("zod");
 const User = require("../models/User");
+const Service = require("../models/Service");
 const Partner = require("../models/Partner");
 const { Booking, BOOKING_STATUSES } = require("../models/Booking");
 const CallLog = require("../models/CallLog");
@@ -23,6 +24,7 @@ const {
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens } = require("../utils/notificationTokens");
+const { getPublishedConfig, isScheduleActive } = require("../utils/appControl");
 const {
   emitNewBookingToPartners,
   emitBookingAccepted,
@@ -709,6 +711,19 @@ async function createBooking(req, res, next) {
       return res.status(403).json({ message: "Phone OTP verification required before booking" });
     }
     const category = normalizeServiceCategory(body.serviceCategory || serviceCategoryForEmergency(body.emergencyType));
+    const [{ config }, service] = await Promise.all([
+      getPublishedConfig(),
+      Service.findOne({ serviceCategory: { $in: serviceCategoryVariants(category) } }).lean()
+    ]);
+    if (["COMING_SOON", "MAINTENANCE", "TEMPORARILY_UNAVAILABLE"].includes(config.appStatus.mode) || config.appStatus.bookingEnabled === false) {
+      return res.status(503).json({ message: config.appStatus.message || "Booking is temporarily unavailable", code: "APP_BOOKING_UNAVAILABLE" });
+    }
+    const configuredService = config.services?.[category];
+    const configuredStatus = configuredService && isScheduleActive(configuredService) ? configuredService.status : "AVAILABLE";
+    const serviceStatus = configuredStatus !== "AVAILABLE" ? configuredStatus : (service?.availability || (service?.isActive === false ? "DISABLED" : "AVAILABLE"));
+    if (["PREPARING", "TEMPORARILY_UNAVAILABLE", "COMING_SOON", "DISABLED"].includes(serviceStatus)) {
+      return res.status(409).json({ message: configuredService?.message || service?.availabilityMessage || "This service is not accepting bookings right now", code: "SERVICE_NOT_BOOKABLE", serviceStatus });
+    }
     const hasCustomerLocation = findNearbyPartners.validCoordinates(body.lat, body.lng);
     const lat = hasCustomerLocation ? Number(body.lat) : 26.1445;
     const lng = hasCustomerLocation ? Number(body.lng) : 91.7362;
