@@ -1,6 +1,9 @@
 const mongoose = require("mongoose");
 
 const appControlItemSchema = new mongoose.Schema({
+  // Content belongs to exactly one client application. Existing records without
+  // this field are treated as customer records by the query helpers.
+  app: { type: String, enum: ["customer", "partner"], default: "customer", index: true },
   kind: { type: String, enum: ["announcement", "banner"], required: true, index: true },
   title: { type: String, required: true, trim: true, maxlength: 120 },
   message: { type: String, trim: true, default: "", maxlength: 1000 },
@@ -18,6 +21,6 @@ const appControlItemSchema = new mongoose.Schema({
   updatedBy: { type: String, trim: true, default: "" }
 }, { timestamps: true });
 
-appControlItemSchema.index({ kind: 1, status: 1, startsAt: 1, endsAt: 1, priority: 1 });
+appControlItemSchema.index({ app: 1, kind: 1, status: 1, startsAt: 1, endsAt: 1, priority: 1 });
 
 module.exports = mongoose.model("AppControlItem", appControlItemSchema);

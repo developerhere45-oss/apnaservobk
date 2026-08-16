@@ -9,8 +9,7 @@ const DEFAULT_CONFIG = Object.freeze({
   services: {}
 });
 
-let cached = null;
-let cachedAt = 0;
+const cache = new Map();
 
 function cloneDefaults() { return JSON.parse(JSON.stringify(DEFAULT_CONFIG)); }
 function cleanText(value, max = 500) { return String(value || "").trim().slice(0, max); }
@@ -36,22 +35,29 @@ function isScheduleActive(item, now = Date.now()) {
   return start <= now && now <= end;
 }
 
-async function getPublishedConfig({ force = false } = {}) {
-  if (!force && cached && Date.now() - cachedAt < 10_000) return cached;
-  const document = await AppControlConfig.findOne({ key: "customer-app" }).lean();
-  cached = { config: normalizeConfig(document?.published), version: Number(document?.version || 0), updatedAt: document?.updatedAt || null };
-  cachedAt = Date.now();
-  return cached;
+function normalizedApp(app) { return String(app || "customer").toLowerCase() === "partner" ? "partner" : "customer"; }
+
+async function getPublishedConfig({ force = false, app = "customer" } = {}) {
+  const target = normalizedApp(app);
+  const cached = cache.get(target);
+  if (!force && cached && Date.now() - cached.at < 10_000) return cached.value;
+  const document = await AppControlConfig.findOne({ key: `${target}-app` }).lean();
+  const value = { config: normalizeConfig(document?.published), version: Number(document?.version || 0), updatedAt: document?.updatedAt || null };
+  cache.set(target, { at: Date.now(), value });
+  return value;
 }
 
-function invalidatePublishedConfig() { cached = null; cachedAt = 0; }
+function invalidatePublishedConfig(app) { if (app) cache.delete(normalizedApp(app)); else cache.clear(); }
 
-async function getPublicAppControlConfig(audience = "users") {
-  const state = await getPublishedConfig();
+async function getPublicAppControlConfig(audience = "users", app = "customer") {
+  const target = normalizedApp(app);
+  const state = await getPublishedConfig({ app: target });
   const now = Date.now();
-  const [announcements, banners] = await Promise.all(["announcement", "banner"].map(async (kind) => AppControlItem.find({ kind, status: { $in: ["published", "scheduled"] }, audience: { $in: ["all", audience] } }).sort({ priority: 1, createdAt: -1 }).limit(50).lean()));
+  const appFilter = target === "customer" ? { $or: [{ app: "customer" }, { app: { $exists: false } }] } : { app: "partner" };
+  const announcements = await AppControlItem.find({ ...appFilter, kind: "announcement", status: "published", audience: { $in: ["all", audience] } }).sort({ priority: 1, createdAt: -1 }).limit(50).lean();
+  const banners = target === "partner" ? [] : await AppControlItem.find({ ...appFilter, kind: "banner", status: "published", audience: { $in: ["all", audience] } }).sort({ priority: 1, createdAt: -1 }).limit(50).lean();
   const active = (items) => items.filter((item) => isScheduleActive(item, now)).map((item) => ({ id: String(item._id), title: item.title, message: item.message, imageUrl: item.imageUrl, ctaText: item.ctaText, ctaAction: item.ctaAction, serviceCategory: item.serviceCategory, placement: item.placement, priority: item.priority }));
-  return { ...state, configVersion: state.version, config: state.config, announcements: active(announcements), banners: active(banners) };
+  return { ...state, app: target, configVersion: state.version, config: state.config, announcements: active(announcements), banners: active(banners) };
 }
 
 function compareVersions(left, right) {
@@ -61,4 +67,4 @@ function compareVersions(left, right) {
   return 0;
 }
 
-module.exports = { DEFAULT_CONFIG, normalizeConfig, getPublishedConfig, getPublicAppControlConfig, invalidatePublishedConfig, isScheduleActive, compareVersions };
+module.exports = { DEFAULT_CONFIG, normalizeConfig, getPublishedConfig, getPublicAppControlConfig, invalidatePublishedConfig, isScheduleActive, compareVersions, normalizedApp };
