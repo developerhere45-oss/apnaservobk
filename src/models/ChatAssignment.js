@@ -25,7 +25,7 @@ const internalNoteSchema = new mongoose.Schema(
 
 const chatAssignmentSchema = new mongoose.Schema(
   {
-    chatId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: "Booking", index: true },
+    chatId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: "Booking" },
     assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: "Employee", required: true, index: true },
     assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", default: null },
     bookingId: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", default: null, index: true },

@@ -738,14 +738,6 @@ async function getOrCreateUser(req, body) {
 
 async function createBooking(req, res, next) {
   try {
-    const launch = await getBookingLaunchConfig();
-    if (!launch.bookingOpen) {
-      return res.status(423).json({
-        code: "BOOKING_PRELAUNCH",
-        message: `Service booking opens on ${launch.launchDateLabel}.`,
-        ...launch
-      });
-    }
     const body = createBookingSchema.parse(req.body || {});
     const submittedPrimaryPhone = normalizeCustomerPhone(body.primaryPhone || body.userPhone);
     const submittedAlternatePhone = normalizeCustomerPhone(body.alternatePhone);
