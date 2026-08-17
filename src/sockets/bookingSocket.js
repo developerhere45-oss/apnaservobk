@@ -358,6 +358,9 @@ async function identifySocket(socket, next) {
     }
     socket.auth = decoded;
     socket.role = role;
+    // App-control publishes use these role rooms to refresh only the affected
+    // client app; booking rooms remain unchanged.
+    socket.join(`app:${role}`);
 
     if (role === "partner") {
       let partner = await Partner.findOne({ firebaseUid: decoded.uid });
@@ -764,6 +767,9 @@ function emitAdminEvent(eventName, payload = {}) {
   });
   if (io) {
     io.to("admin").emit(eventName, eventPayload);
+    if (eventName === "app_control:published") {
+      io.to(eventPayload.app === "partner" ? "app:partner" : "app:user").emit(eventName, eventPayload);
+    }
   }
 }
 
