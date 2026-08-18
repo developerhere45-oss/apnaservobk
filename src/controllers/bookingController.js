@@ -760,8 +760,11 @@ async function createBooking(req, res, next) {
     const configuredService = config.services?.[category];
     const configuredStatus = configuredService && isScheduleActive(configuredService) ? configuredService.status : "AVAILABLE";
     const serviceStatus = configuredStatus !== "AVAILABLE" ? configuredStatus : (service?.availability || (service?.isActive === false ? "DISABLED" : "AVAILABLE"));
+    if (serviceStatus === "HIGH_DEMAND") {
+      return res.status(409).json({ message: configuredService?.message || service?.availabilityMessage || "This service is currently receiving a high number of requests. Please try another service or try again shortly.", code: "SERVICE_HIGH_DEMAND", serviceStatus });
+    }
     if (["PREPARING", "TEMPORARILY_UNAVAILABLE", "DISABLED"].includes(serviceStatus)) {
-      return res.status(409).json({ message: configuredService?.message || service?.availabilityMessage || "This service is not accepting bookings right now", code: "SERVICE_NOT_BOOKABLE", serviceStatus });
+      return res.status(409).json({ message: configuredService?.message || service?.availabilityMessage || "This service is being prepared and is not accepting bookings right now", code: "SERVICE_NOT_AVAILABLE", serviceStatus });
     }
     const user = await getOrCreateUser(req, body);
     const primaryPhone = submittedPrimaryPhone || normalizeCustomerPhone(user.phone);
