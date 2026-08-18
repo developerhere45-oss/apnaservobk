@@ -20,8 +20,50 @@ function assertSuperAdmin(req) { if (req.authType === "admin_jwt" && req.adminPr
 function merge(base, patch) { const output = { ...(isObject(base) ? base : {}) }; for (const [name, value] of Object.entries(isObject(patch) ? patch : {})) output[name] = isObject(value) ? merge(output[name], value) : value; return output; }
 function publicBaseUrl(req) { const configured = String(process.env.PUBLIC_BACKEND_URL || process.env.API_PUBLIC_BASE_URL || "").replace(/\/$/, ""); if (configured) return configured; const host = req.get("x-forwarded-host") || req.get("host") || ""; const proto = String(req.get("x-forwarded-proto") || req.protocol || "https").split(",")[0].trim(); return host ? `${host.includes("onrender.com") ? "https" : proto}://${host}` : ""; }
 function uploadMediaToCloudinary(file) { return new Promise((resolve, reject) => { const stream = cloudinary.uploader.upload_stream({ folder: "apnaservo/app-control", resource_type: "image", overwrite: false }, (error, result) => error ? reject(error) : resolve(result)); Readable.from(file.buffer).pipe(stream); }); }
-function customerReleaseVersion() { const value = String(process.env.CUSTOMER_APP_RELEASE_VERSION || "1.0.12").trim(); if (!/^\d+(?:\.\d+){1,3}$/.test(value)) { const error = new Error("CUSTOMER_APP_RELEASE_VERSION must be a numeric app version"); error.status = 500; throw error; } return value; }
-function managedCustomerUpdate(value) { const type = String(value?.type || "soft").toLowerCase() === "force" ? "force" : "soft"; const target = customerReleaseVersion(); return { enabled: true, type, latestVersion: target, minimumVersion: type === "force" ? target : "", title: "", message: "", buttonText: "Update Now", storeUrl: "https://play.google.com/store/apps/details?id=com.apnaservo.user" }; }
+function normalizedReleaseVersion(value) {
+  const version = String(value || "").trim().replace(/^v/i, "");
+  if (!version) return "";
+  if (!/^\d+(?:\.\d+){1,3}$/.test(version)) {
+    const error = new Error("Target app version must look like 1.0.16");
+    error.status = 400;
+    throw error;
+  }
+  return version;
+}
+function compareReleaseVersions(left, right) {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] || 0) - (b[index] || 0);
+    if (difference) return difference;
+  }
+  return 0;
+}
+function managedCustomerUpdate(value) {
+  const type = String(value?.type || "soft").toLowerCase() === "force" ? "force" : "soft";
+  // The operator supplies the exact versionName uploaded to Play. This avoids
+  // a deployment environment variable becoming stale after a later release.
+  const target = normalizedReleaseVersion(value?.latestVersion);
+  const enabled = Boolean(value?.enabled) && Boolean(target);
+  const minimum = type === "force" && enabled
+    ? normalizedReleaseVersion(value?.minimumVersion || target)
+    : "";
+  if (minimum && compareReleaseVersions(minimum, target) > 0) {
+    const error = new Error("Minimum version cannot be newer than the target version");
+    error.status = 400;
+    throw error;
+  }
+  return {
+    enabled,
+    type,
+    latestVersion: target,
+    minimumVersion: minimum,
+    title: "",
+    message: "",
+    buttonText: "Update Now",
+    storeUrl: "https://play.google.com/store/apps/details?id=com.apnaservo.user"
+  };
+}
 function itemPayload(body) { const fields = ["title", "message", "imageUrl", "ctaText", "ctaAction", "serviceCategory", "placement", "priority", "audience", "startsAt", "endsAt"]; const output = Object.fromEntries(fields.filter((field) => Object.hasOwn(body || {}, field)).map((field) => [field, body[field]])); const start = output.startsAt ? new Date(output.startsAt).getTime() : -Infinity; const end = output.endsAt ? new Date(output.endsAt).getTime() : Infinity; if (Number.isNaN(start) || Number.isNaN(end) || start > end) { const error = new Error("End time must be after start time"); error.status = 400; throw error; } return output; }
 async function audit(req, eventName, title, detail, payload = {}) { await AdminActivity.create({ eventName, category: "app_control", title, detail, actorRole: "admin", actorName: actor(req), status: "success", payload: { ...payload, app: targetApp(req) } }); }
 function broadcast(req, eventName, payload = {}) { emitAdminEvent(eventName, { app: targetApp(req), ...payload }); }
