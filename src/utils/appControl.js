@@ -12,7 +12,7 @@ const DEFAULT_CONFIG = Object.freeze({
   services: {},
   // Empty URLs mean use the signed application's bundled artwork. This makes
   // an offline launch safe and lets a failed remote image load fall back cleanly.
-  media: { hero: { imageUrl: "" }, services: {} }
+  media: { hero: { imageUrl: "", slides: {} }, services: {} }
 });
 
 const cache = new Map();
@@ -50,8 +50,9 @@ function normalizeConfig(value) {
   output.features = Object.fromEntries(Object.entries(source.features && typeof source.features === "object" ? source.features : {}).slice(0, 100).map(([key, item]) => [cleanText(key, 80), { enabled: Boolean(item?.enabled), audience: ["all", "users", "partners", "logged_in"].includes(item?.audience) ? item.audience : "all", startsAt: validDate(item?.startsAt), endsAt: validDate(item?.endsAt), description: cleanText(item?.description, 300) }]));
   output.services = Object.fromEntries(Object.entries(source.services && typeof source.services === "object" ? source.services : {}).slice(0, 300).map(([key, item]) => [cleanText(key, 80), { status: ["AVAILABLE", "PREPARING", "HIGH_DEMAND", "TEMPORARILY_UNAVAILABLE", "DISABLED"].includes(String(item?.status || "").toUpperCase()) ? String(item.status).toUpperCase() : "AVAILABLE", message: cleanText(item?.message, 300), startsAt: validDate(item?.startsAt), endsAt: validDate(item?.endsAt) }]));
   const mediaServices = source.media?.services && typeof source.media.services === "object" ? source.media.services : {};
+  const heroSlides = source.media?.hero?.slides && typeof source.media.hero.slides === "object" ? source.media.hero.slides : {};
   output.media = {
-    hero: { imageUrl: validMediaUrl(source.media?.hero?.imageUrl) },
+    hero: { imageUrl: validMediaUrl(source.media?.hero?.imageUrl), slides: Object.fromEntries(Object.entries(heroSlides).slice(0, 100).map(([key, item]) => [cleanText(key, 80), { imageUrl: validMediaUrl(item?.imageUrl) }]).filter(([key]) => key)) },
     services: Object.fromEntries(Object.entries(mediaServices).slice(0, 100).map(([key, item]) => [cleanText(key, 80), { imageUrl: validMediaUrl(item?.imageUrl) }]).filter(([key]) => key)),
   };
   return output;
