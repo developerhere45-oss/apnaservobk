@@ -13,6 +13,10 @@ const DEFAULT_CONFIG = Object.freeze({
 });
 
 const cache = new Map();
+// Realtime sockets deliver publishes immediately. This tiny process-local TTL
+// is the safe fallback for missed events without turning every app open into a
+// database read under load.
+const CONFIG_CACHE_TTL_MS = 2_000;
 
 function cloneDefaults() { return JSON.parse(JSON.stringify(DEFAULT_CONFIG)); }
 function cleanText(value, max = 500) { return String(value || "").trim().slice(0, max); }
@@ -48,7 +52,7 @@ function normalizedApp(app) { return String(app || "customer").toLowerCase() ===
 async function getPublishedConfig({ force = false, app = "customer" } = {}) {
   const target = normalizedApp(app);
   const cached = cache.get(target);
-  if (!force && cached && Date.now() - cached.at < 10_000) return cached.value;
+  if (!force && cached && Date.now() - cached.at < CONFIG_CACHE_TTL_MS) return cached.value;
   const document = await AppControlConfig.findOne({ key: `${target}-app` }).lean();
   const value = { config: normalizeConfig(document?.published), version: Number(document?.version || 0), updatedAt: document?.updatedAt || null };
   cache.set(target, { at: Date.now(), value });
