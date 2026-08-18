@@ -9,7 +9,10 @@ const DEFAULT_CONFIG = Object.freeze({
   update: { enabled: false, type: "soft", latestVersion: "", minimumVersion: "", title: "", message: "", buttonText: "Update now", storeUrl: "" },
   ui: { homeTitle: "", homeSubtitle: "", primaryColor: "#f32368", hiddenSections: [] },
   features: {},
-  services: {}
+  services: {},
+  // Empty URLs mean use the signed application's bundled artwork. This makes
+  // an offline launch safe and lets a failed remote image load fall back cleanly.
+  media: { hero: { imageUrl: "" }, services: {} }
 });
 
 const cache = new Map();
@@ -21,6 +24,14 @@ const CONFIG_CACHE_TTL_MS = 2_000;
 function cloneDefaults() { return JSON.parse(JSON.stringify(DEFAULT_CONFIG)); }
 function cleanText(value, max = 500) { return String(value || "").trim().slice(0, max); }
 function validDate(value) { const date = value ? new Date(value) : null; return date && !Number.isNaN(date.getTime()) ? date.toISOString() : ""; }
+function validMediaUrl(value) {
+  const raw = cleanText(value, 1200);
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" ? url.toString() : "";
+  } catch { return ""; }
+}
 
 function normalizeConfig(value) {
   const source = value && typeof value === "object" ? value : {};
@@ -38,6 +49,11 @@ function normalizeConfig(value) {
   output.ui = { homeTitle: cleanText(source.ui?.homeTitle, 80), homeSubtitle: cleanText(source.ui?.homeSubtitle, 160), primaryColor: /^#[0-9a-fA-F]{6}$/.test(primaryColor) ? primaryColor : "#f32368", hiddenSections: [...new Set(Array.isArray(source.ui?.hiddenSections) ? source.ui.hiddenSections.map((item) => cleanText(item, 40)).filter((item) => allowedSections.has(item)) : [])].slice(0, 12) };
   output.features = Object.fromEntries(Object.entries(source.features && typeof source.features === "object" ? source.features : {}).slice(0, 100).map(([key, item]) => [cleanText(key, 80), { enabled: Boolean(item?.enabled), audience: ["all", "users", "partners", "logged_in"].includes(item?.audience) ? item.audience : "all", startsAt: validDate(item?.startsAt), endsAt: validDate(item?.endsAt), description: cleanText(item?.description, 300) }]));
   output.services = Object.fromEntries(Object.entries(source.services && typeof source.services === "object" ? source.services : {}).slice(0, 300).map(([key, item]) => [cleanText(key, 80), { status: ["AVAILABLE", "PREPARING", "HIGH_DEMAND", "TEMPORARILY_UNAVAILABLE", "DISABLED"].includes(String(item?.status || "").toUpperCase()) ? String(item.status).toUpperCase() : "AVAILABLE", message: cleanText(item?.message, 300), startsAt: validDate(item?.startsAt), endsAt: validDate(item?.endsAt) }]));
+  const mediaServices = source.media?.services && typeof source.media.services === "object" ? source.media.services : {};
+  output.media = {
+    hero: { imageUrl: validMediaUrl(source.media?.hero?.imageUrl) },
+    services: Object.fromEntries(Object.entries(mediaServices).slice(0, 100).map(([key, item]) => [cleanText(key, 80), { imageUrl: validMediaUrl(item?.imageUrl) }]).filter(([key]) => key)),
+  };
   return output;
 }
 

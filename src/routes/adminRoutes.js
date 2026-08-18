@@ -23,8 +23,19 @@ const upload = multer({
     return callback(error);
   }
 });
+const mediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter(req, file, callback) {
+    if (["image/jpeg", "image/jpg", "image/png", "image/webp"].includes(file.mimetype)) return callback(null, true);
+    const error = new Error("Only JPG, PNG, or WebP media images are allowed");
+    error.status = 415;
+    return callback(error);
+  }
+});
 
 router.get("/notifications/assets/:assetId", notifications.asset);
+router.get("/control-center/media/assets/:assetId", appControl.mediaAsset);
 router.get("/partners/assets/:assetId", controller.partnerUploadAsset);
 router.post("/login", loginLimiter, roleAuth.loginAdmin);
 router.post("/logout", roleAuth.logout);
@@ -32,6 +43,7 @@ router.get("/me", authAdminJwt, roleAuth.adminMe);
 router.patch("/change-password", authAdminJwt, roleAuth.changeAdminPassword);
 router.use(verifyAdminSecret);
 router.get("/control-center", appControl.overview);
+router.post("/control-center/media/upload", mediaUpload.single("image"), validateUploadedImage(["image/jpeg", "image/png", "image/webp"]), appControl.uploadMedia);
 router.patch("/control-center/draft", appControl.saveDraft);
 router.post("/control-center/publish", appControl.publish);
 router.post("/control-center/open-bookings", appControl.openBookings);
