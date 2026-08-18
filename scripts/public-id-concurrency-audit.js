@@ -7,6 +7,7 @@ const Partner = require("../src/models/Partner");
 const { Booking } = require("../src/models/Booking");
 const SupportTicket = require("../src/models/SupportTicket");
 const Payment = require("../src/models/Payment");
+const { serializeBooking } = require("../src/sockets/bookingSocket");
 
 async function main() {
   const server = await MongoMemoryServer.create({ instance: { dbName: "public_id_audit" } });
@@ -26,7 +27,11 @@ async function main() {
   const partnerTicket = await SupportTicket.create({ ticketCode: "AUDIT-PARTNER-TICKET", partnerId: partner._id, source: "partner_app" });
   const values = [user.publicId, upsertedUser.publicId, partner.publicId, booking.publicId, payment.publicId, userTicket.publicId, partnerTicket.publicId, user.deviceTokens[0].publicId, partner.deviceTokens[0].publicId];
   if (values.some((value) => !value)) throw new Error(`Schema hook did not assign every public ID: ${values.join(", ")}`);
-  console.log("Public ID concurrency audit passed: 800 atomic IDs plus model create/upsert/device hooks, no duplicates.");
+  const payload = serializeBooking(booking);
+  if (payload.publicId !== booking.publicId || payload.bookingCode !== booking.publicId || payload.internalBookingCode !== booking.bookingCode) {
+    throw new Error("Booking API payload did not expose one canonical public ID");
+  }
+  console.log("Public ID concurrency audit passed: 800 atomic IDs, schema hooks, and canonical booking payload; no duplicates.");
   await mongoose.disconnect();
   await server.stop();
 }

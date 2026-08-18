@@ -2,7 +2,10 @@ const crypto = require("crypto");
 const admin = require("firebase-admin");
 const OtpChallenge = require("../models/OtpChallenge");
 
-const OTP_TTL_SECONDS = Number(process.env.OTP_TTL_SECONDS || 300);
+const configuredOtpTtl = Number(process.env.OTP_TTL_SECONDS || 300);
+const OTP_TTL_SECONDS = Number.isFinite(configuredOtpTtl)
+  ? Math.min(600, Math.max(120, Math.round(configuredOtpTtl)))
+  : 300;
 function msg91Endpoint(name, fallback) {
   const configured = String(process.env[name] || fallback).trim();
   return configured.replace("https://control.msg91.com/", "https://api.msg91.com/");
@@ -223,7 +226,6 @@ async function sendOtp(input = {}) {
     && phone === configuredReviewPhone
     && /^\d{6}$/.test(configuredReviewOtp);
   const otp = isReviewAccount ? configuredReviewOtp : generateOtp();
-  const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
   let provider = "local";
   let providerPayload = null;
   let requestId = "";
@@ -240,6 +242,11 @@ async function sendOtp(input = {}) {
     throw error;
   }
 
+  // Start our validity window only after the provider has actually accepted
+  // the send. Provider/network latency must never consume the user's OTP time.
+  const issuedAt = new Date();
+  const expiresAt = new Date(issuedAt.getTime() + OTP_TTL_SECONDS * 1000);
+
   const challenge = await OtpChallenge.createForOtp({
     phone,
     role,
@@ -253,6 +260,8 @@ async function sendOtp(input = {}) {
   return {
     requestId: challenge.id,
     expiresInSeconds: OTP_TTL_SECONDS,
+    issuedAtMillis: issuedAt.getTime(),
+    expiresAtMillis: expiresAt.getTime(),
     provider
   };
 }

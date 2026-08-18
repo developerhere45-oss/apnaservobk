@@ -326,9 +326,10 @@ function identityHash(value) {
 
 function bookingIdentityFilter(value) {
   const bookingId = String(value || "").trim();
+  const publicId = bookingId.toUpperCase();
   return /^[a-f0-9]{24}$/i.test(bookingId)
-    ? { $or: [{ _id: bookingId }, { bookingCode: bookingId }] }
-    : { bookingCode: bookingId };
+    ? { $or: [{ _id: bookingId }, { bookingCode: bookingId }, { publicId }] }
+    : { $or: [{ bookingCode: bookingId }, { publicId }] };
 }
 
 function staffPublicProfile(partner, staff) {
@@ -1546,13 +1547,7 @@ async function updateLocation(req, res, next) {
     }
 
     const bookingId = String(req.body?.bookingId || "");
-    const booking = bookingId
-      ? await Booking.findOne(
-          /^[a-f0-9]{24}$/i.test(bookingId)
-            ? { $or: [{ _id: bookingId }, { bookingCode: bookingId }] }
-            : { bookingCode: bookingId }
-        )
-      : null;
+    const booking = bookingId ? await Booking.findOne(bookingIdentityFilter(bookingId)) : null;
     if (booking && String(booking.partnerId || "") !== String(partner._id)) {
       return res.status(403).json({ message: "Not allowed to update location for this booking" });
     }
@@ -1692,7 +1687,7 @@ function renderStatementPdf({ res, partner, bookings, fromDate, toDate, gross, c
     }
     const amount = booking.finalAmount || booking.price || 0;
     const values = [
-      fitText(booking.bookingCode || booking._id, 15),
+      fitText(booking.publicId || booking.bookingCode || booking._id, 15),
       formatDate(booking.completedAt || booking.updatedAt || booking.createdAt),
       fitText(booking.serviceName || booking.serviceCategory, 18),
       fitText(booking.userSnapshot?.name || booking.userId?.name || "Customer", 18),

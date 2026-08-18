@@ -183,6 +183,7 @@ function verifyAdminRealtimeToken(token) {
 
 function serializeBooking(booking) {
   const doc = typeof booking.toObject === "function" ? booking.toObject() : booking;
+  const publicBookingId = String(doc.publicId || doc.bookingCode || doc._id || "");
   const location = doc.location || { coordinates: [0, 0] };
   const rawQuoteStatus = doc.quoteStatus || "";
   const quoteStatus = rawQuoteStatus && rawQuoteStatus !== "none"
@@ -193,7 +194,9 @@ function serializeBooking(booking) {
   return {
     _id: String(doc._id),
     bookingId: String(doc._id),
-    bookingCode: doc.bookingCode,
+    publicId: publicBookingId,
+    bookingCode: publicBookingId,
+    internalBookingCode: doc.bookingCode || "",
     userId: doc.userId ? String(doc.userId) : "",
     partnerId: doc.partnerId ? String(doc.partnerId) : "",
     serviceCategory: doc.serviceCategory,
@@ -320,7 +323,7 @@ function livePartnerLocationPayload(booking, partner, validation) {
 function bookingIdentityClauses(value) {
   const id = String(value || "").trim();
   if (!id) return [];
-  const clauses = [{ bookingCode: id }];
+  const clauses = [{ bookingCode: id }, { publicId: id.toUpperCase() }];
   if (/^[0-9a-fA-F]{24}$/.test(id)) {
     clauses.push({ _id: id });
   }

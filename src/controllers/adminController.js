@@ -697,7 +697,7 @@ function smartStatus(booking) {
 function smartBookingRow(booking) {
   return {
     id: id(booking._id),
-    bookingCode: booking.bookingCode || id(booking._id),
+    bookingCode: booking.publicId || booking.bookingCode || id(booking._id),
     customerName: booking.userSnapshot?.name || "Customer",
     customerMobile: booking.userSnapshot?.phone || "",
     serviceCategory: booking.serviceCategory || "",

@@ -345,9 +345,10 @@ function virtualCallNumber() {
 }
 
 function bookingIdFilter(bookingId) {
+  const publicId = String(bookingId || "").trim().toUpperCase();
   return mongoose.Types.ObjectId.isValid(bookingId)
-    ? { $or: [{ _id: new mongoose.Types.ObjectId(bookingId) }, { bookingCode: bookingId }] }
-    : { bookingCode: bookingId };
+    ? { $or: [{ _id: new mongoose.Types.ObjectId(bookingId) }, { bookingCode: bookingId }, { publicId }] }
+    : { $or: [{ bookingCode: bookingId }, { publicId }] };
 }
 
 function quoteExpiresAtFrom(now = new Date()) {
