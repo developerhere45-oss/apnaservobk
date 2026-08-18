@@ -24,7 +24,7 @@ const {
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens } = require("../utils/notificationTokens");
-const { getPublishedConfig, isScheduleActive } = require("../utils/appControl");
+const { getPublishedConfig, isScheduleActive, bookingAvailability } = require("../utils/appControl");
 const {
   emitNewBookingToPartners,
   emitBookingAccepted,
@@ -748,6 +748,21 @@ async function createBooking(req, res, next) {
       return res.status(400).json({ message: "Primary and alternate numbers must be different" });
     }
     if (submittedPrimaryPhone) body.userPhone = submittedPrimaryPhone;
+    const category = normalizeServiceCategory(body.serviceCategory || serviceCategoryForEmergency(body.emergencyType));
+    const [{ config }, service] = await Promise.all([
+      getPublishedConfig(),
+      Service.findOne({ serviceCategory: { $in: serviceCategoryVariants(category) } }).lean()
+    ]);
+    // This is intentionally before user/profile creation.  A blocked booking
+    // attempt must not have any booking-side effects, even when called directly.
+    const availability = bookingAvailability(config, body);
+    if (!availability.allowed) return res.status(availability.httpStatus).json({ message: availability.message, code: availability.code });
+    const configuredService = config.services?.[category];
+    const configuredStatus = configuredService && isScheduleActive(configuredService) ? configuredService.status : "AVAILABLE";
+    const serviceStatus = configuredStatus !== "AVAILABLE" ? configuredStatus : (service?.availability || (service?.isActive === false ? "DISABLED" : "AVAILABLE"));
+    if (["PREPARING", "TEMPORARILY_UNAVAILABLE", "DISABLED"].includes(serviceStatus)) {
+      return res.status(409).json({ message: configuredService?.message || service?.availabilityMessage || "This service is not accepting bookings right now", code: "SERVICE_NOT_BOOKABLE", serviceStatus });
+    }
     const user = await getOrCreateUser(req, body);
     const primaryPhone = submittedPrimaryPhone || normalizeCustomerPhone(user.phone);
     if (!primaryPhone) {
@@ -770,20 +785,6 @@ async function createBooking(req, res, next) {
         $set: { bookingRiskStatus: "otp_required" }
       });
       return res.status(403).json({ message: "Phone OTP verification required before booking" });
-    }
-    const category = normalizeServiceCategory(body.serviceCategory || serviceCategoryForEmergency(body.emergencyType));
-    const [{ config }, service] = await Promise.all([
-      getPublishedConfig(),
-      Service.findOne({ serviceCategory: { $in: serviceCategoryVariants(category) } }).lean()
-    ]);
-    if (["COMING_SOON", "MAINTENANCE", "TEMPORARILY_UNAVAILABLE"].includes(config.appStatus.mode) || config.appStatus.bookingEnabled === false) {
-      return res.status(503).json({ message: config.appStatus.message || "Booking is temporarily unavailable", code: "APP_BOOKING_UNAVAILABLE" });
-    }
-    const configuredService = config.services?.[category];
-    const configuredStatus = configuredService && isScheduleActive(configuredService) ? configuredService.status : "AVAILABLE";
-    const serviceStatus = configuredStatus !== "AVAILABLE" ? configuredStatus : (service?.availability || (service?.isActive === false ? "DISABLED" : "AVAILABLE"));
-    if (["PREPARING", "TEMPORARILY_UNAVAILABLE", "COMING_SOON", "DISABLED"].includes(serviceStatus)) {
-      return res.status(409).json({ message: configuredService?.message || service?.availabilityMessage || "This service is not accepting bookings right now", code: "SERVICE_NOT_BOOKABLE", serviceStatus });
     }
     const hasCustomerLocation = findNearbyPartners.validCoordinates(body.lat, body.lng);
     const lat = hasCustomerLocation ? Number(body.lat) : 26.1445;
@@ -2282,8 +2283,7 @@ async function getBookingLaunchStatus(req, res, next) {
     // configuration is published, then the dashboard becomes the only source.
     const hasPublishedControl = Number(version || 0) > 0;
     const bookingOpen = hasPublishedControl
-      ? config.appStatus.bookingEnabled !== false
-        && ["LIVE", "PARTIALLY_AVAILABLE"].includes(config.appStatus.mode)
+      ? ["LIVE", "PARTIALLY_UNAVAILABLE"].includes(config.appStatus.mode)
         && config.launch.enabled !== true
       : String(process.env.BOOKING_OPEN || "false").trim().toLowerCase() === "true";
     const launchDateLabel = hasPublishedControl

@@ -7,7 +7,7 @@ const serviceSchema = new mongoose.Schema(
     description: { type: String, default: "" },
     basePrice: { type: Number, default: 0 },
     isActive: { type: Boolean, default: true },
-    availability: { type: String, enum: ["AVAILABLE", "PREPARING", "HIGH_DEMAND", "TEMPORARILY_UNAVAILABLE", "COMING_SOON", "DISABLED"], default: "AVAILABLE", index: true },
+    availability: { type: String, enum: ["AVAILABLE", "PREPARING", "HIGH_DEMAND", "TEMPORARILY_UNAVAILABLE", "DISABLED"], default: "AVAILABLE", index: true },
     availabilityMessage: { type: String, trim: true, default: "" },
     availabilityStartsAt: { type: Date, default: null },
     availabilityEndsAt: { type: Date, default: null }
