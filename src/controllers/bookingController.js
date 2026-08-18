@@ -2283,7 +2283,7 @@ async function getBookingLaunchStatus(req, res, next) {
     // configuration is published, then the dashboard becomes the only source.
     const hasPublishedControl = Number(version || 0) > 0;
     const bookingOpen = hasPublishedControl
-      ? ["LIVE", "PARTIALLY_UNAVAILABLE"].includes(config.appStatus.mode)
+      ? ["LIVE", "PARTIALLY_AVAILABLE"].includes(config.appStatus.mode)
         && config.launch.enabled !== true
       : String(process.env.BOOKING_OPEN || "false").trim().toLowerCase() === "true";
     const launchDateLabel = hasPublishedControl

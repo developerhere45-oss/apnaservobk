@@ -5,7 +5,6 @@ const DEFAULT_CONFIG = Object.freeze({
   // App status is the only global booking switch; a parallel manual switch
   // would let the dashboard and API disagree.
   appStatus: { mode: "LIVE" },
-  serviceAreas: { enabledAreas: [] },
   launch: { enabled: false, launchAt: "", timezone: "Asia/Kolkata", title: "", dateText: "", description: "", ctaText: "Notify me", imageUrl: "" },
   update: { enabled: false, type: "soft", latestVersion: "", minimumVersion: "", title: "", message: "", buttonText: "Update now", storeUrl: "" },
   ui: { homeTitle: "", homeSubtitle: "", primaryColor: "#f32368", hiddenSections: [] },
@@ -22,16 +21,11 @@ function validDate(value) { const date = value ? new Date(value) : null; return 
 function normalizeConfig(value) {
   const source = value && typeof value === "object" ? value : {};
   const output = cloneDefaults();
-  const modes = new Set(["LIVE", "PARTIALLY_UNAVAILABLE", "MAINTENANCE", "TEMPORARILY_UNAVAILABLE"]);
+  const modes = new Set(["LIVE", "PARTIALLY_AVAILABLE", "HIGH_DEMAND", "MAINTENANCE"]);
   const requestedMode = String(source.appStatus?.mode || "").toUpperCase();
   // Missing config is normal for a new install and starts Live. Any persisted
   // unknown value is fail-closed until an admin selects and publishes a valid one.
-  output.appStatus = { mode: !requestedMode ? "LIVE" : modes.has(requestedMode) ? requestedMode : "TEMPORARILY_UNAVAILABLE" };
-  output.serviceAreas = {
-    enabledAreas: [...new Set(Array.isArray(source.serviceAreas?.enabledAreas)
-      ? source.serviceAreas.enabledAreas.map((area) => cleanText(area, 120).toLowerCase()).filter(Boolean)
-      : [])].slice(0, 200)
-  };
+  output.appStatus = { mode: !requestedMode ? "LIVE" : modes.has(requestedMode) ? requestedMode : "MAINTENANCE" };
   output.launch = { enabled: Boolean(source.launch?.enabled), launchAt: validDate(source.launch?.launchAt), timezone: cleanText(source.launch?.timezone, 60) || "Asia/Kolkata", title: cleanText(source.launch?.title, 100), dateText: cleanText(source.launch?.dateText, 80), description: cleanText(source.launch?.description, 500), ctaText: cleanText(source.launch?.ctaText, 40) || "Notify me", imageUrl: cleanText(source.launch?.imageUrl, 500) };
   const updateType = String(source.update?.type || "soft").toLowerCase();
   output.update = { enabled: Boolean(source.update?.enabled), type: updateType === "force" ? "force" : "soft", latestVersion: cleanText(source.update?.latestVersion, 30), minimumVersion: cleanText(source.update?.minimumVersion, 30), title: cleanText(source.update?.title, 100), message: cleanText(source.update?.message, 500), buttonText: cleanText(source.update?.buttonText, 40) || "Update now", storeUrl: cleanText(source.update?.storeUrl, 500) };
@@ -61,34 +55,13 @@ async function getPublishedConfig({ force = false, app = "customer" } = {}) {
   return value;
 }
 
-function normalizeArea(value) {
-  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
-// An enabled area may be a city ("guwahati") or a more specific existing
-// partner service-area string.  Matching the submitted city and address makes
-// this a server-side decision; the Android check is only a better UX.
-function isServiceAreaAvailable(config, { city = "", address = "" } = {}) {
-  const enabledAreas = config?.serviceAreas?.enabledAreas || [];
-  if (!enabledAreas.length) return false;
-  const location = normalizeArea(`${city} ${address}`);
-  const cityValue = normalizeArea(city);
-  return enabledAreas.some((area) => {
-    const normalized = normalizeArea(area);
-    return normalized && (location.includes(normalized) || (cityValue && normalized.includes(cityValue)));
-  });
-}
-
-function bookingAvailability(config, location) {
+function bookingAvailability(config) {
   const mode = config?.appStatus?.mode || "LIVE";
   if (mode === "MAINTENANCE") {
     return { allowed: false, httpStatus: 503, code: "APP_MAINTENANCE", message: "ApnaServo is under maintenance. Please try again after some time." };
   }
-  if (mode === "TEMPORARILY_UNAVAILABLE") {
-    return { allowed: false, httpStatus: 503, code: "APP_TEMPORARILY_UNAVAILABLE", message: "We are currently receiving a high number of service requests. Please try again after some time." };
-  }
-  if (mode === "PARTIALLY_UNAVAILABLE" && !isServiceAreaAvailable(config, location)) {
-    return { allowed: false, httpStatus: 409, code: "APP_AREA_UNAVAILABLE", message: "ApnaServo services are not currently available in your area." };
+  if (mode === "HIGH_DEMAND") {
+    return { allowed: false, httpStatus: 503, code: "APP_HIGH_DEMAND", message: "We are currently receiving a high number of service requests. Please try again after some time." };
   }
   return { allowed: true };
 }
@@ -113,4 +86,4 @@ function compareVersions(left, right) {
   return 0;
 }
 
-module.exports = { DEFAULT_CONFIG, normalizeConfig, getPublishedConfig, getPublicAppControlConfig, invalidatePublishedConfig, isScheduleActive, isServiceAreaAvailable, bookingAvailability, compareVersions, normalizedApp };
+module.exports = { DEFAULT_CONFIG, normalizeConfig, getPublishedConfig, getPublicAppControlConfig, invalidatePublishedConfig, isScheduleActive, bookingAvailability, compareVersions, normalizedApp };
