@@ -2,7 +2,8 @@ const Partner = require("../models/Partner");
 const { normalizeServiceCategory, serviceCategoryVariants, partnerCanServeService } = require("./serviceCategory");
 
 const EARTH_RADIUS_M = 6378137;
-const DEFAULT_RADIUS_STEPS_KM = [5, 10];
+const DEFAULT_RADIUS_STEPS_KM = [5, 8];
+const LIVE_LOCATION_MAX_AGE_MS = 5 * 60 * 1000;
 
 function safeNumber(value, fallback = 0) {
   const parsed = Number(value);
@@ -36,15 +37,7 @@ function distanceMeters(latA, lngA, latB, lngB) {
 }
 
 function radiusStepsKm(radiusKm) {
-  if (Number.isFinite(Number(radiusKm)) && Number(radiusKm) > 0) {
-    return [Number(radiusKm)];
-  }
-  const configured = String(process.env.PARTNER_SEARCH_RADIUS_STEPS_KM || "")
-    .split(",")
-    .map((value) => Number(value.trim()))
-    .filter((value) => Number.isFinite(value) && value > 0 && value <= 250);
-  const steps = configured.length ? configured : DEFAULT_RADIUS_STEPS_KM;
-  return [...new Set(steps)].sort((left, right) => left - right);
+  return DEFAULT_RADIUS_STEPS_KM;
 }
 
 function excludedPartnerIds(values = []) {
@@ -61,7 +54,9 @@ function approvalFilter(categories, excludedIds) {
     accountStatus: "active",
     isVerified: true,
     kycStatus: "verified",
-    trustStatus: "trusted"
+    trustStatus: "trusted",
+    locationTrustStatus: "trusted",
+    lastLocationAt: { $gt: new Date(Date.now() - LIVE_LOCATION_MAX_AGE_MS) }
   };
   if (excludedIds.size) {
     filter._id = { $nin: [...excludedIds] };
@@ -82,7 +77,7 @@ function partnersWithinRadius(partners, latitude, longitude, radiusKm) {
   return (partners || [])
     .map((partner) => ({ partner, distanceMeters: partnerDistance(partner, latitude, longitude) }))
     .filter((entry) => {
-      const configuredServiceRadiusKm = safeNumber(entry.partner?.serviceRadiusKm, radiusKm);
+      const configuredServiceRadiusKm = Math.min(8, safeNumber(entry.partner?.serviceRadiusKm, 8));
       const serviceRadiusM = Math.max(1, configuredServiceRadiusKm) * 1000;
       return entry.distanceMeters <= stageRadiusM && entry.distanceMeters <= serviceRadiusM;
     })
@@ -104,10 +99,10 @@ async function geoCandidates(filter, latitude, longitude, radiusKm) {
           $maxDistance: maxDistance
         }
       }
-    }).limit(100);
+    });
   } catch (error) {
     // A manual distance pass keeps matching correct while a missing geo index is repaired.
-    return Partner.find(filter).limit(500);
+    return Partner.find(filter);
   }
 }
 

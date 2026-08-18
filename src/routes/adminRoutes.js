@@ -74,6 +74,8 @@ router.post("/chats/:chatId/note", chats.addNote);
 router.get("/chats/:chatId/assignment-history", chats.assignmentHistory);
 router.get("/dashboard", controller.dashboard);
 router.get("/activity", controller.listAdminActivity);
+router.get("/settings/booking-launch", controller.bookingLaunchSettings);
+router.patch("/settings/booking-launch", controller.updateBookingLaunchSettings);
 router.post("/actions", controller.performAdminAction);
 router.delete("/reset-platform-data", controller.resetPlatformData);
 router.post("/notifications/send", adminNotificationLimiter, notifications.send);

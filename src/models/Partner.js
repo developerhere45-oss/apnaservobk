@@ -142,7 +142,7 @@ const partnerSchema = new mongoose.Schema(
     isVerified: { type: Boolean, default: false },
     city: { type: String, trim: true, default: "Guwahati" },
     serviceArea: { type: String, trim: true, default: "Guwahati, Assam" },
-    serviceRadiusKm: { type: Number, default: 5 },
+    serviceRadiusKm: { type: Number, default: 8, min: 8, max: 8 },
     location: { type: pointSchema, default: () => ({ type: "Point", coordinates: [91.7362, 26.1445] }) },
     lastLocationAt: { type: Date, default: null },
     lastLocationAccuracy: { type: Number, default: 9999 },

@@ -10,6 +10,7 @@ const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/loc
 const { serviceCategoryVariants } = require("../utils/serviceCategory");
 const { lifecycleLabel, lifecycleStatusForBooking } = require("../utils/bookingLifecycle");
 const findNearbyPartners = require("../utils/findNearbyPartners");
+const PARTNER_REQUEST_TTL_MS = 10 * 60 * 1000;
 
 let io;
 
@@ -98,11 +99,13 @@ async function dispatchPendingBookingsToSocketPartner(partner) {
     return 0;
   }
 
+  const cutoff = new Date(Date.now() - PARTNER_REQUEST_TTL_MS);
   const candidates = await Booking.find({
     partnerId: null,
     requestedPartners: { $size: 0 },
     status: "pending",
     serviceCategory: { $in: categories },
+    createdAt: { $gt: cutoff }
   }).sort({ createdAt: -1 }).limit(20);
 
   let dispatched = 0;
@@ -121,6 +124,7 @@ async function dispatchPendingBookingsToSocketPartner(partner) {
       continue;
     }
     const now = new Date();
+    const requestExpiresAt = new Date(now.getTime() + PARTNER_REQUEST_TTL_MS);
     const updated = await Booking.findOneAndUpdate(
       {
         _id: booking._id,
@@ -134,7 +138,8 @@ async function dispatchPendingBookingsToSocketPartner(partner) {
           status: "sent_to_partner",
           dispatchRadiusKm: match.radiusKm,
           dispatchMode: match.mode,
-          dispatchedAt: now
+          dispatchedAt: now,
+          requestExpiresAt
         },
         $inc: { dispatchAttempt: 1 },
         $push: {
@@ -262,6 +267,8 @@ function serializeBooking(booking) {
     dispatchMode: doc.dispatchMode || "",
     dispatchedAt: doc.dispatchedAt || null,
     dispatchedAtMillis: millis(doc.dispatchedAt),
+    requestExpiresAt: doc.requestExpiresAt || null,
+    requestExpiresAtMillis: millis(doc.requestExpiresAt),
     createdAt: doc.createdAt,
     createdAtMillis: millis(doc.createdAt),
     acceptedAt: doc.acceptedAt,

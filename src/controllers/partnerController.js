@@ -17,6 +17,7 @@ const { emitAdminEvent, emitNewBookingToPartners, emitBookingAccepted, emitLaund
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 const { partnerAssetUrl } = require("../utils/partnerUploadAssets");
 const { sendPartnerApprovalWelcomeEmails } = require("../utils/welcomeEmail");
+const PARTNER_REQUEST_TTL_MS = 10 * 60 * 1000;
 
 const profileSchema = z.object({
   name: z.string().trim().min(2).max(80).regex(/^[A-Za-z][A-Za-z .'-]+$/).optional(),
@@ -258,16 +259,24 @@ async function dispatchPendingBookingsToPartner(partner) {
   }
 
   const cityRegex = new RegExp(escapeRegExp(partner.city || "Guwahati"), "i");
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - PARTNER_REQUEST_TTL_MS);
   const candidates = await Booking.find({
     partnerId: null,
     rejectedPartners: { $ne: partner._id },
     requestedPartners: { $ne: partner._id },
     status: { $in: pendingAssignmentStatuses() },
     serviceCategory: { $in: categories },
-    $or: [
-      { city: cityRegex },
-      { city: { $in: ["", null] } },
-      { requestedPartners: { $size: 0 } }
+    $and: [
+      { $or: [
+        { requestExpiresAt: { $gt: now } },
+        { requestExpiresAt: null, createdAt: { $gt: cutoff } }
+      ] },
+      { $or: [
+        { city: cityRegex },
+        { city: { $in: ["", null] } },
+        { requestedPartners: { $size: 0 } }
+      ] }
     ]
   }).sort({ createdAt: -1 }).limit(20);
 
@@ -283,7 +292,11 @@ async function dispatchPendingBookingsToPartner(partner) {
       },
       {
         $addToSet: { requestedPartners: partner._id },
-        $set: { status: "sent_to_partner" },
+        $set: {
+          status: "sent_to_partner",
+          dispatchedAt: booking.dispatchedAt || now,
+          requestExpiresAt: booking.requestExpiresAt || new Date(now.getTime() + PARTNER_REQUEST_TTL_MS)
+        },
         $push: {
           statusTimeline: {
             status: "sent_to_partner",
@@ -694,7 +707,8 @@ async function upsertProfile(req, res, next) {
       workingAreas: listFromBody(body.workingAreas || body.serviceArea || "Guwahati"),
       languagesKnown: listFromBody(body.languagesKnown || "Hindi, English"),
       yearsOfExperience: Number.isFinite(body.yearsOfExperience) ? body.yearsOfExperience : 0,
-      serviceRadiusKm: body.serviceRadiusKm || 5,
+      // Service matching is platform-managed and locked to the 5-8 km band.
+      serviceRadiusKm: 8,
       isOnline: isLaundryRegistration && !adminApproved ? false : body.isOnline !== false,
       isVerified: adminApproved,
       trustStatus: currentTrustStatus === "suspended"

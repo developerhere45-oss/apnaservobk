@@ -10,6 +10,7 @@ async function claimBooking(bookingId, partnerId) {
       _id: bookingId,
       partnerId: null,
       requestedPartners: partnerId,
+      requestExpiresAt: { $gt: new Date() },
       status: { $in: pendingAssignmentStatuses() }
     },
     {
@@ -36,7 +37,8 @@ async function main() {
       serviceName: "AC Repair",
       address: "Production audit address",
       status: "sent_to_partner",
-      requestedPartners: [firstPartnerId, secondPartnerId]
+      requestedPartners: [firstPartnerId, secondPartnerId],
+      requestExpiresAt: new Date(Date.now() + 10 * 60 * 1000)
     });
 
     const results = await Promise.all([
@@ -53,7 +55,20 @@ async function main() {
 
     const loserId = String(stored.partnerId) === String(firstPartnerId) ? secondPartnerId : firstPartnerId;
     assert.equal(await claimBooking(booking._id, loserId), null, "A losing partner must not be able to accept after assignment");
+
+    const expiredBooking = await Booking.create({
+      bookingCode: `EXPIRED-${Date.now()}`,
+      userId: new mongoose.Types.ObjectId(),
+      serviceCategory: "ac",
+      serviceName: "AC Repair",
+      address: "Expired audit address",
+      status: "sent_to_partner",
+      requestedPartners: [firstPartnerId],
+      requestExpiresAt: new Date(Date.now() - 1)
+    });
+    assert.equal(await claimBooking(expiredBooking._id, firstPartnerId), null, "A request must not be accepted after its 10-minute window");
     console.log("PASS concurrent booking acceptance has exactly one winner and one unavailable loser");
+    console.log("PASS expired booking request cannot be accepted");
   } finally {
     await mongoose.disconnect();
     await server.stop();

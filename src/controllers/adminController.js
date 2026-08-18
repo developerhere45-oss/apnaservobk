@@ -20,6 +20,7 @@ const AdminActivity = require("../models/AdminActivity");
 const cache = require("../config/cache");
 const { recomputePartnerRating } = require("../utils/ratingAggregation");
 const { emitAdminEvent, emitNewBookingToPartners, emitBookingStatusUpdate } = require("../sockets/bookingSocket");
+const { getBookingLaunchConfig, setBookingLaunchAt } = require("../utils/bookingLaunchConfig");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens, tokenHash } = require("../utils/notificationTokens");
 const findNearbyPartners = require("../utils/findNearbyPartners");
@@ -912,6 +913,9 @@ async function forwardBookingToPartners({ booking, partners, reason = "Admin man
   booking.requestedPartners = requestedIds;
   booking.rejectedPartners = (booking.rejectedPartners || []).filter((partnerId) => !partnerIds.includes(id(partnerId)));
   booking.status = "sent_to_partner";
+  const dispatchedAt = new Date();
+  booking.dispatchedAt = dispatchedAt;
+  booking.requestExpiresAt = new Date(dispatchedAt.getTime() + 10 * 60 * 1000);
   booking.statusTimeline.push({ status: mode === "bulk" ? "admin_bulk_forwarded" : "admin_forwarded", at: now, by: "admin" });
   booking.statusTimeline.push({ status: "sent_to_partner", at: now, by: "admin" });
   await booking.save();
@@ -2817,7 +2821,27 @@ async function resolveReviewDispute(req, res, next) {
   }
 }
 
+async function bookingLaunchSettings(req, res, next) {
+  try {
+    return res.json(await getBookingLaunchConfig());
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function updateBookingLaunchSettings(req, res, next) {
+  try {
+    const config = await setBookingLaunchAt(req.body?.bookingLaunchAt, req.auth.email || req.auth.uid || "admin");
+    emitAdminEvent("settings:booking_launch_updated", config);
+    return res.json(config);
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
+  bookingLaunchSettings,
+  updateBookingLaunchSettings,
   dashboard,
   listAdminActivity,
   listResourceRows,

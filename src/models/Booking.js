@@ -114,6 +114,7 @@ const bookingSchema = new mongoose.Schema(
     dispatchMode: { type: String, enum: ["", "customer_location", "city_fallback"], default: "" },
     dispatchAttempt: { type: Number, default: 0 },
     dispatchedAt: { type: Date, default: null },
+    requestExpiresAt: { type: Date, default: null, index: true },
     userSnapshot: {
       name: String,
       phone: String,

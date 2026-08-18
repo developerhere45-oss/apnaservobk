@@ -25,6 +25,7 @@ const findNearbyPartners = require("../utils/findNearbyPartners");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens } = require("../utils/notificationTokens");
 const { getPublishedConfig, isScheduleActive, bookingAvailability } = require("../utils/appControl");
+const { getBookingLaunchConfig, ensureLaunchNotificationSchedule } = require("../utils/bookingLaunchConfig");
 const {
   emitNewBookingToPartners,
   emitBookingAccepted,
@@ -489,9 +490,12 @@ function partnerOpenBookingVisibility(partner, categories) {
     rejectedPartners: { $ne: partner._id },
     status: { $in: pendingAssignmentStatuses() },
     serviceCategory: { $in: categories },
-    requestedPartners: partner._id
+    requestedPartners: partner._id,
+    requestExpiresAt: { $gt: new Date() }
   };
 }
+
+const PARTNER_REQUEST_TTL_MS = 10 * 60 * 1000;
 
 function partnerAcceptBlockReason(partner) {
   if (!partner) return "Partner profile not found";
@@ -582,6 +586,8 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
   }
 
   if (!booking.requestedPartners || booking.requestedPartners.length === 0) {
+    const dispatchedAt = new Date();
+    const requestExpiresAt = new Date(dispatchedAt.getTime() + PARTNER_REQUEST_TTL_MS);
     const claimedBooking = await Booking.findOneAndUpdate(
       {
         _id: booking._id,
@@ -595,7 +601,8 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
           status: "sent_to_partner",
           dispatchRadiusKm: match.radiusKm,
           dispatchMode: match.mode,
-          dispatchedAt: new Date()
+          dispatchedAt,
+          requestExpiresAt
         },
         $inc: { dispatchAttempt: 1 },
         $push: {
@@ -738,6 +745,14 @@ async function getOrCreateUser(req, body) {
 
 async function createBooking(req, res, next) {
   try {
+    const launch = await getBookingLaunchConfig();
+    if (!launch.bookingOpen) {
+      return res.status(423).json({
+        code: "BOOKING_PRELAUNCH",
+        message: `Service booking opens on ${launch.launchDateLabel}.`,
+        ...launch
+      });
+    }
     const body = createBookingSchema.parse(req.body || {});
     const submittedPrimaryPhone = normalizeCustomerPhone(body.primaryPhone || body.userPhone);
     const submittedAlternatePhone = normalizeCustomerPhone(body.alternatePhone);
@@ -931,7 +946,8 @@ async function listPartnerBookings(req, res, next) {
           partnerId: null,
           requestedPartners: partner._id,
           rejectedPartners: { $ne: partner._id },
-          status: { $in: pendingAssignmentStatuses() }
+          status: { $in: pendingAssignmentStatuses() },
+          requestExpiresAt: { $gt: new Date() }
         },
         canViewOpenJobs ? partnerOpenBookingVisibility(partner, categories) : { _id: null }
       ]
@@ -962,6 +978,7 @@ async function acceptBooking(req, res, next) {
     const idFilter = bookingIdFilter(bookingId);
     const query = {
       partnerId: null,
+      requestExpiresAt: { $gt: acceptedAt },
       $and: [
         idFilter,
         partnerOpenBookingVisibility(partner, partnerCategoryVariants(partner))
@@ -1711,6 +1728,35 @@ async function getBooking(req, res, next) {
   }
 }
 
+async function requestLaunchNotification(req, res, next) {
+  try {
+    const launch = await getBookingLaunchConfig();
+    const now = new Date();
+    const user = await User.findOneAndUpdate(
+      { firebaseUid: req.auth.uid },
+      {
+        $set: {
+          launchNotificationRequestedAt: now,
+          launchNotificationFor: new Date(launch.bookingLaunchAt)
+        },
+        $setOnInsert: {
+          name: req.auth.name || "ApnaServo Customer",
+          email: req.auth.email || ""
+        }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    await ensureLaunchNotificationSchedule(launch);
+    emitAdminEvent("user:launch_notification_requested", {
+      userId: String(user._id),
+      bookingLaunchAt: launch.bookingLaunchAt,
+      requestedAt: now
+    });
+    return res.json({ requested: true, bookingLaunchAt: launch.bookingLaunchAt });
+  } catch (error) {
+    return next(error);
+  }
+}
 async function updateBookingContacts(req, res, next) {
   try {
     const body = bookingContactSchema.parse(req.body || {});
@@ -2300,6 +2346,7 @@ async function getBookingLaunchStatus(req, res, next) {
 
 module.exports = {
   getBookingLaunchStatus,
+  requestLaunchNotification,
   createBooking,
   listUserBookings,
   listPartnerBookings,
