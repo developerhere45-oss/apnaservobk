@@ -13,6 +13,24 @@ const SERVICE_ALIASES = {
   ro: ["ro", "ro_service", "ro service", "water purifier", "purifier", "water filter"]
 };
 
+// This is the customer application's implemented catalog.  It is deliberately
+// kept here (rather than invented in the admin UI) so App Control still works
+// before the optional Service Mongo collection has been populated.
+const SERVICE_CATALOG = [
+  ["ac", "AC Repair & Service", "AC inspection, cleaning, gas refilling, performance check, and repair replacement."],
+  ["electrician", "Electrician", "Switchboard, wiring, fan, MCB, socket, inverter, and urgent electrical repair."],
+  ["plumbing", "Plumber", "Tap, sink, flush tank, blocked drain, water motor, leakage, and pipe repair."],
+  ["carpenter", "Carpenter", "Door, lock, curtain rod, furniture assembly, wall shelf, and cabinet fixes."],
+  ["painting", "Painting", "Wall painting, touch-ups, damp patch repair, rental move-out paint, and finish work."],
+  ["interior", "Interior Design", "Consultation for room planning, furniture placement, lighting, and home styling."],
+  ["roadside", "Roadside Assistance", "Emergency roadside help, jump-start support, towing coordination, and tyre help."],
+  ["cleaning", "Cleaning Services", "Home and office cleaning, bathroom cleaning, sofa cleaning, and deep cleaning."],
+  ["laundry", "Laundry", "Clothes washing, ironing, dry cleaning pickup, stain care, and doorstep laundry service."],
+  ["pest", "Pest Control", "Safe pest treatment for home, kitchen, bathroom, and office spaces."],
+  ["appliances", "Appliances", "Washing machine, refrigerator, microwave, RO, chimney, and geyser inspection."],
+  ["ro", "RO Service", "RO water purifier inspection, filter change, leakage repair, servicing, and installation."]
+].map(([serviceCategory, name, description]) => ({ serviceCategory, name, description }));
+
 const COMPANY_SERVICE_MATCHERS = {
   laundry: /laundry|dry\s*clean|wash|iron/,
   cleaning: /cleaning|cleaner|housekeeping|deep\s*clean/,
@@ -78,6 +96,10 @@ function serviceLabel(value) {
   return labels[key] || key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function serviceCatalog() {
+  return SERVICE_CATALOG.map((service) => ({ ...service }));
+}
+
 function normalizedPartnerCategories(partner) {
   return [...new Set((partner?.serviceCategory || [])
     .map(normalizeServiceCategory)
@@ -108,6 +130,7 @@ module.exports = {
   normalizeServiceCategory,
   serviceCategoryVariants,
   serviceLabel,
+  serviceCatalog,
   companySingleServiceCategory,
   partnerCanServeService
 };
