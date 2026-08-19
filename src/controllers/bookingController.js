@@ -955,7 +955,55 @@ async function listPartnerBookings(req, res, next) {
     }).sort({ createdAt: -1 }).limit(80);
 
     await expireQuotesIfNeeded(bookings);
-    return res.json({ bookings: bookings.map((booking) => protectCustomerPhoneForPartner(serializeBooking(booking), booking, partner)) });
+
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfWeek = new Date(startOfDay);
+    const mondayOffset = (startOfWeek.getDay() + 6) % 7;
+    startOfWeek.setDate(startOfWeek.getDate() - mondayOffset);
+    const activeStatuses = ["accepted", "on_the_way", "arrived", "started", "amount_pending", "customer_no_response"];
+    const amountExpression = {
+      $cond: [
+        { $gt: ["$completionAccounting.grossAmount", 0] },
+        "$completionAccounting.grossAmount",
+        { $cond: [{ $gt: ["$finalAmount", 0] }, "$finalAmount", { $ifNull: ["$price", 0] }] }
+      ]
+    };
+    const [activeJobs, handledRequests, rejectedRequests, earningsRows] = await Promise.all([
+      Booking.countDocuments({ partnerId: partner._id, status: { $in: activeStatuses } }),
+      Booking.countDocuments({ partnerId: partner._id }),
+      Booking.countDocuments({ rejectedPartners: partner._id, partnerId: { $ne: partner._id } }),
+      Booking.aggregate([
+        { $match: { partnerId: partner._id, status: "completed" } },
+        {
+          $group: {
+            _id: null,
+            completedJobs: { $sum: 1 },
+            totalEarnings: { $sum: amountExpression },
+            todayEarnings: { $sum: { $cond: [{ $gte: ["$completedAt", startOfDay] }, amountExpression, 0] } },
+            weekEarnings: { $sum: { $cond: [{ $gte: ["$completedAt", startOfWeek] }, amountExpression, 0] } },
+            monthEarnings: { $sum: { $cond: [{ $gte: ["$completedAt", startOfMonth] }, amountExpression, 0] } }
+          }
+        }
+      ])
+    ]);
+    const earnings = earningsRows[0] || {};
+    const respondedRequests = handledRequests + rejectedRequests;
+    const responseRate = respondedRequests > 0 ? Math.round((handledRequests * 100) / respondedRequests) : 0;
+    return res.json({
+      bookings: bookings.map((booking) => protectCustomerPhoneForPartner(serializeBooking(booking), booking, partner)),
+      stats: {
+        activeJobs,
+        completedJobs: Number(earnings.completedJobs || 0),
+        responseRate,
+        todayEarnings: Number(earnings.todayEarnings || 0),
+        weekEarnings: Number(earnings.weekEarnings || 0),
+        monthEarnings: Number(earnings.monthEarnings || 0),
+        totalEarnings: Number(earnings.totalEarnings || 0),
+        updatedAt: now.toISOString()
+      }
+    });
   } catch (error) {
     return next(error);
   }
