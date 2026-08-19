@@ -36,6 +36,7 @@ const {
 } = require("../sockets/bookingSocket");
 
 const createBookingSchema = z.object({
+  bookingId: z.string().trim().toUpperCase().regex(/^ASB-\d{8}-[A-Z0-9]{8}$/).optional(),
   bookingCode: z.string().trim().regex(/^[A-Za-z0-9_-]{6,64}$/).optional(),
   serviceCategory: z.string().trim().min(1).max(80).optional(),
   serviceName: z.string().trim().max(120).optional(),
@@ -361,8 +362,8 @@ function virtualCallNumber() {
 function bookingIdFilter(bookingId) {
   const publicId = String(bookingId || "").trim().toUpperCase();
   return mongoose.Types.ObjectId.isValid(bookingId)
-    ? { $or: [{ _id: new mongoose.Types.ObjectId(bookingId) }, { bookingCode: bookingId }, { publicId }] }
-    : { $or: [{ bookingCode: bookingId }, { publicId }] };
+    ? { $or: [{ _id: new mongoose.Types.ObjectId(bookingId) }, { bookingId: publicId }, { bookingCode: bookingId }, { publicId }] }
+    : { $or: [{ bookingId: publicId }, { bookingCode: bookingId }, { publicId }] };
 }
 
 function quoteExpiresAtFrom(now = new Date()) {
@@ -648,7 +649,8 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
       priority: "high",
       data: {
         type: claimedBooking.emergency?.isEmergency ? "booking:emergency_request" : "booking:new_request",
-        bookingId: claimedBooking._id,
+        bookingId: claimedBooking.bookingId || claimedBooking.publicId || claimedBooking.bookingCode,
+        internalBookingId: String(claimedBooking._id),
         bookingCode: claimedBooking.bookingCode,
         serviceCategory: claimedBooking.serviceCategory,
         emergencyType: claimedBooking.emergency?.type || "none",
@@ -826,10 +828,20 @@ async function createBooking(req, res, next) {
     const lng = hasCustomerLocation ? Number(body.lng) : 91.7362;
     const dispatchLat = hasCustomerLocation ? lat : null;
     const dispatchLng = hasCustomerLocation ? lng : null;
-    const requestedBookingCode = body.bookingCode || bookingCode();
+    const requestedBookingId = String(body.bookingId || "").trim().toUpperCase();
+    if (requestedBookingId && body.bookingCode
+        && requestedBookingId !== String(body.bookingCode).trim().toUpperCase()) {
+      return res.status(400).json({ code: "BOOKING_ID_MISMATCH", message: "Booking ID does not match the idempotency key" });
+    }
+    // New production clients provide bookingId. Keep the legacy fallback only
+    // for already-released app versions so rollout does not break bookings.
+    const requestedBookingCode = requestedBookingId || body.bookingCode || bookingCode();
     const emergency = emergencyPayload(body);
 
-    const existingBooking = await Booking.findOne({ bookingCode: requestedBookingCode });
+    const identityFilter = requestedBookingId
+      ? { $or: [{ bookingId: requestedBookingId }, { bookingCode: requestedBookingId }, { publicId: requestedBookingId }] }
+      : { bookingCode: requestedBookingCode };
+    const existingBooking = await Booking.findOne(identityFilter);
     if (existingBooking) {
       if (String(existingBooking.userId) !== String(user._id)) {
         return res.status(409).json({ message: "Booking code already exists" });
@@ -850,6 +862,7 @@ async function createBooking(req, res, next) {
     let booking;
     try {
       booking = await Booking.create({
+        ...(requestedBookingId ? { bookingId: requestedBookingId, publicId: requestedBookingId } : {}),
         bookingCode: requestedBookingCode,
         userId: user._id,
         serviceCategory: category,
@@ -895,7 +908,7 @@ async function createBooking(req, res, next) {
       });
     } catch (createError) {
       if (createError?.code === 11000) {
-        const duplicate = await Booking.findOne({ bookingCode: requestedBookingCode });
+        const duplicate = await Booking.findOne(identityFilter);
         if (duplicate && String(duplicate.userId) === String(user._id)) {
           if (!duplicate.requestedPartners?.length && !duplicate.partnerId) {
             queueBookingDispatch(duplicate, duplicate.serviceCategory || category, dispatchLat, dispatchLng);

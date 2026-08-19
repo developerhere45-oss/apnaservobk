@@ -29,10 +29,11 @@ const noteSchema = z.object({
 
 function bookingFilter(raw) {
   const value = String(raw || "");
+  const canonical = value.toUpperCase();
   if (mongoose.Types.ObjectId.isValid(value)) {
-    return { $or: [{ _id: value }, { bookingCode: value }] };
+    return { $or: [{ _id: value }, { bookingId: canonical }, { publicId: canonical }, { bookingCode: value }] };
   }
-  return { bookingCode: value };
+  return { $or: [{ bookingId: canonical }, { publicId: canonical }, { bookingCode: value }] };
 }
 
 async function hydrateAssignments(assignments) {
@@ -67,7 +68,7 @@ function serializeBookingBasics(booking) {
   const doc = toSafeObject(booking);
   return {
     bookingId: id(doc._id),
-    bookingCode: safeText(doc.bookingCode, ""),
+    bookingCode: safeText(doc.bookingId || doc.publicId || doc.bookingCode, ""),
     service: safeText(doc.serviceName || doc.serviceCategory, "Service"),
     serviceCategory: safeText(doc.serviceCategory, ""),
     bookingDate: doc.createdAt,

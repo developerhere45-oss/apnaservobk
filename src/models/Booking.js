@@ -13,6 +13,9 @@ const pointSchema = new mongoose.Schema(
 
 const bookingSchema = new mongoose.Schema(
   {
+    // Canonical public ID generated once by the customer app. Sparse keeps all
+    // existing production rows valid while enforcing uniqueness for new flow.
+    bookingId: { type: String, trim: true, unique: true, sparse: true, index: true },
     bookingCode: { type: String, required: true, unique: true, index: true },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     partnerId: { type: mongoose.Schema.Types.ObjectId, ref: "Partner", default: null, index: true },

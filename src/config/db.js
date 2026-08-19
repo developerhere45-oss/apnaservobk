@@ -25,6 +25,14 @@ async function connectDb() {
     socketTimeoutMS: Number(process.env.MONGODB_SOCKET_TIMEOUT_MS || 45000)
   });
 
+  // Client-issued production booking IDs are the cross-system idempotency key.
+  // Create this additive index explicitly because production disables Mongoose
+  // auto-indexing and must still enforce uniqueness at the database boundary.
+  await mongoose.connection.collection("bookings").createIndex(
+    { bookingId: 1 },
+    { unique: true, sparse: true, name: "bookingId_1" }
+  );
+
   if (process.env.MONGODB_SYNC_INDEXES === "true") {
     await mongoose.syncIndexes();
     console.log("MongoDB indexes synced");

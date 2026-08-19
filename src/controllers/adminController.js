@@ -198,7 +198,7 @@ function serializeBookingHistory(booking, payments = [], messages = []) {
   const completedAt = booking.completedAt || bookingTime(booking, ["completed"]);
   return {
     id: id(booking._id),
-    bookingId: booking.publicId || booking.bookingCode || "",
+    bookingId: booking.bookingId || booking.publicId || booking.bookingCode || "",
     serviceCategory: booking.serviceCategory || "",
     serviceName: booking.serviceName || "",
     dateTimeBooked: iso(booking.createdAt),
@@ -435,8 +435,8 @@ async function bookingSummaryTotals() {
 function bookingRow(booking) {
   booking = decryptAdminRecord(booking);
   return {
-    id: booking.publicId || booking.bookingCode || "",
-    bookingCode: booking.publicId || booking.bookingCode || "",
+    id: booking.bookingId || booking.publicId || booking.bookingCode || "",
+    bookingCode: booking.bookingId || booking.publicId || booking.bookingCode || "",
     internalBookingCode: booking.bookingCode || "",
     userName: booking.userSnapshot?.name || "",
     userMobile: booking.userSnapshot?.phone || "",
@@ -697,7 +697,7 @@ function smartStatus(booking) {
 function smartBookingRow(booking) {
   return {
     id: id(booking._id),
-    bookingCode: booking.publicId || booking.bookingCode || id(booking._id),
+    bookingCode: booking.bookingId || booking.publicId || booking.bookingCode || id(booking._id),
     customerName: booking.userSnapshot?.name || "Customer",
     customerMobile: booking.userSnapshot?.phone || "",
     serviceCategory: booking.serviceCategory || "",
@@ -833,6 +833,7 @@ async function smartAssignmentDashboard(req, res, next) {
     const searchFilter = search
       ? {
         $or: [
+          { bookingId: regex(search) },
           { bookingCode: regex(search) },
           { serviceName: regex(search) },
           { "userSnapshot.name": regex(search) },
@@ -979,7 +980,9 @@ async function smartAssignBooking(req, res, next) {
     const booking = await Booking.findOne({
       $or: [
         { _id: objectId(bookingId) || undefined },
-        { bookingCode: bookingId }
+        { bookingId: bookingId.toUpperCase() },
+        { bookingCode: bookingId },
+        { publicId: bookingId.toUpperCase() }
       ].filter((entry) => Object.values(entry)[0])
     });
     if (!booking) return res.status(404).json({ message: "Booking not found" });
@@ -1836,6 +1839,7 @@ async function userRestrictSetFromBookings({ bookingId, serviceType, bookingStat
   if (bookingId) {
     filter.$or = [
       ...(bookingObjectId ? [{ _id: bookingObjectId }] : []),
+      { bookingId: regex(bookingId) },
       { bookingCode: regex(bookingId) },
       { publicId: regex(bookingId) }
     ];
@@ -1932,6 +1936,7 @@ async function usersControlCenter(req, res, next) {
         Booking.distinct("userId", {
           $or: [
             ...(searchObjectId ? [{ _id: searchObjectId }] : []),
+            { bookingId: searchRegex },
             { bookingCode: searchRegex },
             { publicId: searchRegex },
             { serviceName: searchRegex },
@@ -2526,7 +2531,8 @@ async function bookingTimelineDetails(req, res, next) {
     const booking = await Booking.findOne({
       $or: [
         ...(bookingObjectId ? [{ _id: bookingObjectId }] : []),
-        { bookingCode: raw },
+          { bookingId: raw.toUpperCase() },
+          { bookingCode: raw },
         { publicId: raw.toUpperCase() }
       ]
     });
@@ -2548,7 +2554,9 @@ async function updateBookingLocation(req, res, next) {
     const current = await Booking.findOne({
       $or: [
         ...(bookingObjectId ? [{ _id: bookingObjectId }] : []),
-        { bookingCode: raw }
+        { bookingId: raw.toUpperCase() },
+        { bookingCode: raw },
+        { publicId: raw.toUpperCase() }
       ]
     });
     if (!current) return res.status(404).json({ message: "Booking not found" });
