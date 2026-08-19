@@ -117,6 +117,7 @@ const partnerDocumentTypes = [
 const documentUploadSchema = z.object({
   documentType: z.string().trim().min(2).max(80)
     .transform((value) => value.toLowerCase().replace(/[\s-]+/g, "_"))
+    .transform((value) => value === "identity_document" ? "id_proof" : value)
     .refine(
       (value) => partnerDocumentTypes.includes(value) || /^laundry_staff_\d+_identity$/.test(value),
       "Unsupported partner document type"
@@ -982,30 +983,15 @@ async function uploadDocument(req, res, next) {
       documentType: body.documentType,
       aadhaarLast4: body.aadhaarLast4 || ""
     });
+    // A valid JPG/PNG/PDF that cannot be confidently OCR-validated must still
+    // reach the admin review queue. Do not block partner registration merely
+    // because an older camera produced a small or low-contrast image.
     if (validation.validationStatus === "rejected") {
-      const document = await PartnerDocument.create({
-        partnerId: partner._id,
-        documentType: body.documentType,
-        originalName: file.originalname || "document.jpg",
-        mimeType: file.mimetype,
-        sizeBytes: file.size,
-        contentHash,
-        compressedByClient: Boolean(body.compressedByClient),
-        originalSizeBytes: body.originalSizeBytes || file.size,
-        validationStatus: validation.validationStatus,
-        validationScore: validation.validationScore,
-        validationReasons: validation.validationReasons,
-        ocrStatus: validation.ocrStatus,
-        ocrTextHash: validation.ocrTextHash,
-        aadhaarLast4: body.aadhaarLast4 || ""
-      });
-      return res.status(422).json({
-        message: file.mimetype === "application/pdf"
-          ? "The PDF document could not be validated. Upload a valid PDF."
-          : "Document image is not clear enough. Retake a sharp photo.",
-        documentId: document._id,
-        validation
-      });
+      validation.validationStatus = "review";
+      validation.validationReasons = [
+        ...(validation.validationReasons || []),
+        "Automatic validation inconclusive; manual admin review required"
+      ];
     }
 
     const uploaded = await uploadDocumentToCloudinary(file, partner._id, body.documentType, req, "document");
