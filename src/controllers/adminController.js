@@ -1719,6 +1719,36 @@ async function performAdminAction(req, res, next) {
       return res.json({ ok: true, action, targetId, status: "deleted", deleted: true });
     }
 
+    if (action === "resume-partner") {
+      const partner = await Partner.findById(targetId);
+      if (!partner) return res.status(404).json({ message: "Partner not found" });
+      if (partner.accountStatus === "deleted" || partner.accountStatus === "deletion_requested") {
+        return res.status(409).json({ message: "Deleted partner cannot be resumed. They must register again." });
+      }
+      if (partner.accountStatus === "active" && partner.trustStatus === "trusted" && partner.isVerified) {
+        return res.status(409).json({ message: "Partner is already active" });
+      }
+      // Resume only restores a previously verified suspended/blocked partner;
+      // it never bypasses KYC for a rejected or unverified account.
+      if (partner.kycStatus !== "verified") {
+        return res.status(409).json({ message: "Partner must complete verification before their account can be resumed" });
+      }
+      const now = new Date();
+      const actor = req.auth?.email || req.auth?.uid || "admin";
+      partner.accountStatus = "active";
+      partner.trustStatus = "trusted";
+      partner.isVerified = true;
+      partner.isOnline = false;
+      partner.rejectedAt = null;
+      partner.rejectionReason = "";
+      partner.verificationHistory.push({ action: "reapproved", at: now, by: actor, note: "Partner access resumed by admin after review" });
+      await partner.save();
+      await cache.del("admin:dashboard:v1");
+      emitAdminEvent("partner:resumed", { partnerId: String(partner._id), partnerCode: partner.partnerCode || "", partnerName: partner.name || "", partnerPhone: partner.phone || "", status: "active", by: actor });
+      await reliableNotify({ recipients: [partnerNotificationRecipient(partner)], title: "Your partner account is active again", body: "Your ApnaServo partner access has been resumed. Go online when you are ready to receive bookings.", category: "partner_approval", priority: "high", data: { type: "partner:resumed", targetApp: "partner", actionType: "OPEN_PARTNER_HOME", partnerId: partner._id, status: "active" } });
+      return res.json({ ok: true, action, targetId, status: "active", resumed: true });
+    }
+
     if (action === "delete-device") {
       const deleted = await deactivateAdminDevice(targetId);
       await cache.del("admin:dashboard:v1");
