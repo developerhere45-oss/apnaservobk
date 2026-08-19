@@ -1276,7 +1276,15 @@ async function updateStatus(req, res, next) {
       query.partnerId = staffActor.partner._id;
     } else if (user && CUSTOMER_STATUS_UPDATES.includes(nextStatus)) {
       actorRole = "user";
-      query.userId = user._id;
+      const identityFilters = [];
+      if (user.phoneHash) identityFilters.push({ phoneHash: user.phoneHash });
+      if (req.auth.email_verified === true && user.emailHash) identityFilters.push({ emailHash: user.emailHash });
+      const linkedUsers = identityFilters.length
+        ? await User.find({ $or: identityFilters }).select("_id").lean()
+        : [];
+      query.userId = {
+        $in: [...new Set([String(user._id), ...linkedUsers.map((entry) => String(entry._id))])]
+      };
     } else {
       return res.status(403).json({ message: "Not allowed to update this booking" });
     }
