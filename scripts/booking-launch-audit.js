@@ -8,6 +8,8 @@ async function run() {
   const PlatformSetting = require("../src/models/PlatformSetting");
   const User = require("../src/models/User");
   const AdminNotification = require("../src/models/AdminNotification");
+  const AppControlConfig = require("../src/models/AppControlConfig");
+  const { invalidatePublishedConfig } = require("../src/utils/appControl");
   const { getBookingLaunchConfig, setBookingLaunchAt } = require("../src/utils/bookingLaunchConfig");
   const bookingController = require("../src/controllers/bookingController");
 
@@ -33,6 +35,30 @@ async function run() {
   );
   assert.equal(responseStatus, 423);
   assert.equal(responseBody.code, "BOOKING_PRELAUNCH");
+
+  // A published Control Center state is the source of truth for both the
+  // public launch-status endpoint and booking creation.  A future legacy date
+  // must not block booking once the published app is Live and launch is off.
+  await AppControlConfig.create({
+    key: "customer-app",
+    version: 1,
+    published: { appStatus: { mode: "LIVE" }, launch: { enabled: false } }
+  });
+  invalidatePublishedConfig("customer");
+  responseStatus = 200;
+  responseBody = null;
+  let validationError = null;
+  await bookingController.createBooking(
+    { body: {}, auth: { uid: "audit-user" } },
+    {
+      status(code) { responseStatus = code; return this; },
+      json(body) { responseBody = body; return this; }
+    },
+    (error) => { validationError = error; }
+  );
+  assert.ok(validationError, "Live published control should pass the launch gate and reach request validation");
+  assert.equal(responseStatus, 200);
+  assert.equal(responseBody, null);
 
   await bookingController.requestLaunchNotification(
     { body: {}, auth: { uid: "audit-user", name: "Audit User", email: "audit@example.com" } },

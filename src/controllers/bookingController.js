@@ -86,6 +86,20 @@ const bookingLocationSchema = z.object({
   landmark: z.string().trim().max(180).optional()
 });
 
+function effectiveBookingLaunchStatus(publishedControl) {
+  const config = publishedControl?.config || {};
+  const version = Number(publishedControl?.version || 0);
+  const hasPublishedControl = version > 0;
+  const bookingOpen = hasPublishedControl
+    ? ["LIVE", "PARTIALLY_AVAILABLE"].includes(config.appStatus?.mode)
+      && config.launch?.enabled !== true
+    : String(process.env.BOOKING_OPEN || "false").trim().toLowerCase() === "true";
+  const launchDateLabel = hasPublishedControl
+    ? (config.launch?.dateText || config.launch?.title || "ApnaServo launch")
+    : String(process.env.BOOKING_LAUNCH_DATE_LABEL || "20th August").trim();
+  return { bookingOpen, launchDateLabel, controlVersion: version };
+}
+
 const locationResponseSchema = z.object({
   action: z.enum(["accept", "reject"]),
   reason: z.string().trim().max(500).optional()
@@ -746,7 +760,11 @@ async function getOrCreateUser(req, body) {
 
 async function createBooking(req, res, next) {
   try {
-    const launch = await getBookingLaunchConfig();
+    // Use the exact same published Control Center state returned by
+    // /bookings/launch-status.  The legacy date setting must never report the
+    // app as open while rejecting the corresponding create request.
+    const publishedControl = await getPublishedConfig();
+    const launch = effectiveBookingLaunchStatus(publishedControl);
     if (!launch.bookingOpen) {
       return res.status(423).json({
         code: "BOOKING_PRELAUNCH",
@@ -765,10 +783,8 @@ async function createBooking(req, res, next) {
     }
     if (submittedPrimaryPhone) body.userPhone = submittedPrimaryPhone;
     const category = normalizeServiceCategory(body.serviceCategory || serviceCategoryForEmergency(body.emergencyType));
-    const [{ config }, service] = await Promise.all([
-      getPublishedConfig(),
-      Service.findOne({ serviceCategory: { $in: serviceCategoryVariants(category) } }).lean()
-    ]);
+    const config = publishedControl.config;
+    const service = await Service.findOne({ serviceCategory: { $in: serviceCategoryVariants(category) } }).lean();
     // This is intentionally before user/profile creation.  A blocked booking
     // attempt must not have any booking-side effects, even when called directly.
     const availability = bookingAvailability(config, body);
@@ -2376,18 +2392,8 @@ async function createRevisitRequest(req, res, next) {
 
 async function getBookingLaunchStatus(req, res, next) {
   try {
-    const { config, version } = await getPublishedConfig();
-    // Preserve the legacy environment switch until the first Control Center
-    // configuration is published, then the dashboard becomes the only source.
-    const hasPublishedControl = Number(version || 0) > 0;
-    const bookingOpen = hasPublishedControl
-      ? ["LIVE", "PARTIALLY_AVAILABLE"].includes(config.appStatus.mode)
-        && config.launch.enabled !== true
-      : String(process.env.BOOKING_OPEN || "false").trim().toLowerCase() === "true";
-    const launchDateLabel = hasPublishedControl
-      ? (config.launch.dateText || config.launch.title || "ApnaServo launch")
-      : String(process.env.BOOKING_LAUNCH_DATE_LABEL || "20th August").trim();
-    return res.json({ success: true, bookingOpen, launchDateLabel, controlVersion: Number(version || 0) });
+    const launch = effectiveBookingLaunchStatus(await getPublishedConfig());
+    return res.json({ success: true, ...launch });
   } catch (error) {
     return next(error);
   }
