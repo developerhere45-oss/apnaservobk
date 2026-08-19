@@ -200,14 +200,24 @@ async function verifyProviderOtp(challenge, otp) {
 
 async function firebaseCustomTokenForPhone(phone, role) {
   const uid = `${role || "user"}_phone_91${phone}`;
-  const firebaseUser = await admin.auth().getUser(uid).catch((error) => {
-    if (error.code === "auth/user-not-found") {
-      return admin.auth().createUser({ uid, phoneNumber: `+91${phone}` });
-    }
+  const phoneNumber = `+91${phone}`;
+  let firebaseUser = await admin.auth().getUser(uid).catch((error) => {
+    if (error.code === "auth/user-not-found") return null;
     throw error;
   });
+  // Reuse accounts previously created by Firebase Phone Auth. Creating a
+  // second UID with the same number fails after MSG91 has verified the OTP.
+  if (!firebaseUser) {
+    firebaseUser = await admin.auth().getUserByPhoneNumber(phoneNumber).catch((error) => {
+      if (error.code === "auth/user-not-found") return null;
+      throw error;
+    });
+  }
+  if (!firebaseUser) {
+    firebaseUser = await admin.auth().createUser({ uid, phoneNumber });
+  }
   const token = await admin.auth().createCustomToken(firebaseUser.uid, {
-    phone: `+91${phone}`,
+    phone: phoneNumber,
     role: role || "user"
   });
   return { uid: firebaseUser.uid, customToken: token };
