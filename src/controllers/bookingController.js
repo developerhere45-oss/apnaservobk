@@ -24,6 +24,7 @@ const {
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens } = require("../utils/notificationTokens");
+const { expireDueBookingRequests } = require("../utils/bookingRequestExpiry");
 const { getPublishedConfig, isScheduleActive, bookingAvailability } = require("../utils/appControl");
 const { getBookingLaunchConfig, ensureLaunchNotificationSchedule } = require("../utils/bookingLaunchConfig");
 const {
@@ -847,14 +848,16 @@ async function createBooking(req, res, next) {
         return res.status(409).json({ message: "Booking code already exists" });
       }
 
-      if (!existingBooking.requestedPartners?.length && !existingBooking.partnerId) {
+      if (pendingAssignmentStatuses().includes(existingBooking.status)
+          && !existingBooking.requestedPartners?.length && !existingBooking.partnerId) {
         queueBookingDispatch(existingBooking, existingBooking.serviceCategory || category, dispatchLat, dispatchLng);
       }
 
       return res.status(200).json({
         booking: serializeBooking(existingBooking),
         matchedPartners: existingBooking.requestedPartners?.length || 0,
-        dispatchQueued: !existingBooking.requestedPartners?.length && !existingBooking.partnerId,
+        dispatchQueued: pendingAssignmentStatuses().includes(existingBooking.status)
+          && !existingBooking.requestedPartners?.length && !existingBooking.partnerId,
         idempotent: true
       });
     }
@@ -890,6 +893,7 @@ async function createBooking(req, res, next) {
         price: body.price || 0,
         slot: body.slot || "",
         status: "pending",
+        requestExpiresAt: new Date(Date.now() + PARTNER_REQUEST_TTL_MS),
         emergency,
         userSnapshot: {
           name: body.userName || user.name,
@@ -910,13 +914,15 @@ async function createBooking(req, res, next) {
       if (createError?.code === 11000) {
         const duplicate = await Booking.findOne(identityFilter);
         if (duplicate && String(duplicate.userId) === String(user._id)) {
-          if (!duplicate.requestedPartners?.length && !duplicate.partnerId) {
+          if (pendingAssignmentStatuses().includes(duplicate.status)
+              && !duplicate.requestedPartners?.length && !duplicate.partnerId) {
             queueBookingDispatch(duplicate, duplicate.serviceCategory || category, dispatchLat, dispatchLng);
           }
           return res.status(200).json({
             booking: serializeBooking(duplicate),
             matchedPartners: duplicate.requestedPartners?.length || 0,
-            dispatchQueued: !duplicate.requestedPartners?.length && !duplicate.partnerId,
+            dispatchQueued: pendingAssignmentStatuses().includes(duplicate.status)
+              && !duplicate.requestedPartners?.length && !duplicate.partnerId,
             idempotent: true
           });
         }
@@ -951,9 +957,10 @@ async function listUserBookings(req, res, next) {
       ? await User.find({ $or: identityFilters }).select("_id")
       : [];
     const userIds = [...new Set([String(user._id), ...linkedUsers.map((entry) => String(entry._id))])];
-    const bookings = await Booking.find({ userId: { $in: userIds } }).sort({ createdAt: -1 });
-    await expireQuotesIfNeeded(bookings);
-    return res.json({ bookings: bookings.map(serializeBooking) });
+    await expireDueBookingRequests({ userId: { $in: userIds } });
+    const refreshedBookings = await Booking.find({ userId: { $in: userIds } }).sort({ createdAt: -1 });
+    await expireQuotesIfNeeded(refreshedBookings);
+    return res.json({ bookings: refreshedBookings.map(serializeBooking) });
   } catch (error) {
     return next(error);
   }

@@ -23,7 +23,8 @@ const BOOKING_STATUSES = [
   "rejected",
   "started",
   "amount_pending",
-  "customer_no_response"
+  "customer_no_response",
+  "expired"
 ];
 
 const TERMINAL_BOOKING_STATUSES = [
@@ -31,7 +32,8 @@ const TERMINAL_BOOKING_STATUSES = [
   "cancelled",
   "refunded",
   "disputed",
-  "customer_no_response"
+  "customer_no_response",
+  "expired"
 ];
 
 const STORAGE_STATUS_ALIASES = {
@@ -112,6 +114,9 @@ function lifecycleStatusForBooking(booking) {
     return "work_completed";
   }
   if (rawStatus === "customer_no_response" || rawStatus === "rejected") {
+    return "cancelled";
+  }
+  if (rawStatus === "expired") {
     return "cancelled";
   }
   if (rawStatus === "completed" && paymentStatus === "refunded") {

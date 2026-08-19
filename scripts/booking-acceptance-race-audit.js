@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const { MongoMemoryServer } = require("mongodb-memory-server");
 const { Booking } = require("../src/models/Booking");
 const { pendingAssignmentStatuses } = require("../src/utils/bookingLifecycle");
+const { expireDueBookingRequests } = require("../src/utils/bookingRequestExpiry");
 
 async function claimBooking(bookingId, partnerId) {
   return Booking.findOneAndUpdate(
@@ -67,8 +68,14 @@ async function main() {
       requestExpiresAt: new Date(Date.now() - 1)
     });
     assert.equal(await claimBooking(expiredBooking._id, firstPartnerId), null, "A request must not be accepted after its 10-minute window");
+    await expireDueBookingRequests({ _id: expiredBooking._id });
+    const closedBooking = await Booking.findById(expiredBooking._id).lean();
+    assert.equal(closedBooking.status, "expired", "Expired partner request must close for the customer");
+    assert.equal(closedBooking.requestedPartners.length, 0, "Expired request must be removed from every partner queue");
+    assert.equal(closedBooking.expiryReason, "No partner accepted within 10 minutes");
     console.log("PASS concurrent booking acceptance has exactly one winner and one unavailable loser");
     console.log("PASS expired booking request cannot be accepted");
+    console.log("PASS 10-minute expiry closes the booking and enables a clean retry");
   } finally {
     await mongoose.disconnect();
     await server.stop();

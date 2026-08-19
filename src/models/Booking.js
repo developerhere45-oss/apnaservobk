@@ -118,6 +118,8 @@ const bookingSchema = new mongoose.Schema(
     dispatchAttempt: { type: Number, default: 0 },
     dispatchedAt: { type: Date, default: null },
     requestExpiresAt: { type: Date, default: null, index: true },
+    requestExpiredAt: { type: Date, default: null },
+    expiryReason: { type: String, trim: true, default: "" },
     userSnapshot: {
       name: String,
       phone: String,
