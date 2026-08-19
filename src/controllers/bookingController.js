@@ -25,6 +25,7 @@ const findNearbyPartners = require("../utils/findNearbyPartners");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens } = require("../utils/notificationTokens");
 const { expireDueBookingRequests } = require("../utils/bookingRequestExpiry");
+const { validateServiceArea } = require("../utils/serviceArea");
 const { getPublishedConfig, isScheduleActive, bookingAvailability } = require("../utils/appControl");
 const { getBookingLaunchConfig, ensureLaunchNotificationSchedule } = require("../utils/bookingLaunchConfig");
 const {
@@ -776,6 +777,15 @@ async function createBooking(req, res, next) {
       });
     }
     const body = createBookingSchema.parse(req.body || {});
+    const serviceArea = validateServiceArea(body.lat, body.lng);
+    if (!serviceArea.allowed) {
+      return res.status(422).json({
+        code: serviceArea.code,
+        message: serviceArea.code === "SERVICE_AREA_LOCATION_REQUIRED"
+          ? "We couldn't verify the service location. Please select the location again."
+          : "ApnaServo is currently available only in Guwahati. We'll be available in your area soon."
+      });
+    }
     const submittedPrimaryPhone = normalizeCustomerPhone(body.primaryPhone || body.userPhone);
     const submittedAlternatePhone = normalizeCustomerPhone(body.alternatePhone);
     if (body.alternatePhone && !submittedAlternatePhone) {
@@ -1879,6 +1889,15 @@ async function updateBookingContacts(req, res, next) {
 async function updateBookingLocation(req, res, next) {
   try {
     const body = bookingLocationSchema.parse(req.body || {});
+    const serviceArea = validateServiceArea(body.lat, body.lng);
+    if (!serviceArea.allowed) {
+      return res.status(422).json({
+        code: serviceArea.code,
+        message: serviceArea.code === "SERVICE_AREA_LOCATION_REQUIRED"
+          ? "We couldn't verify the service location. Please select the location again."
+          : "ApnaServo is currently available only in Guwahati. We'll be available in your area soon."
+      });
+    }
     const user = await User.findOne({ firebaseUid: req.auth.uid });
     if (!user) return res.status(404).json({ message: "User profile not found" });
     const current = await Booking.findOne({
