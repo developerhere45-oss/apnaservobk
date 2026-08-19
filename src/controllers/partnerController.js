@@ -10,6 +10,7 @@ const LocationLog = require("../models/LocationLog");
 const { cloudinary } = require("../config/cloudinary");
 const { normalizeServiceCategory, serviceCategoryVariants, serviceLabel } = require("../utils/serviceCategory");
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
+const findNearbyPartners = require("../utils/findNearbyPartners");
 const { validateDocumentUpload } = require("../utils/documentValidation");
 const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
 const { reliableNotify } = require("../utils/reliableNotify");
@@ -283,6 +284,21 @@ async function dispatchPendingBookingsToPartner(partner) {
 
   let dispatched = 0;
   for (const booking of candidates) {
+    const coordinates = booking.location?.coordinates || [];
+    const hasBookingLocation = findNearbyPartners.validCoordinates(coordinates[1], coordinates[0]);
+    if (!hasBookingLocation) {
+      continue;
+    }
+    const match = await findNearbyPartners.withMetadata({
+      serviceCategory: booking.serviceCategory,
+      city: booking.city,
+      lat: coordinates[1],
+      lng: coordinates[0],
+      excludePartnerIds: booking.rejectedPartners || []
+    });
+    if (!match.partners.some((entry) => String(entry._id) === String(partner._id))) {
+      continue;
+    }
     const updated = await Booking.findOneAndUpdate(
       {
         _id: booking._id,
@@ -295,6 +311,8 @@ async function dispatchPendingBookingsToPartner(partner) {
         $addToSet: { requestedPartners: partner._id },
         $set: {
           status: "sent_to_partner",
+          dispatchRadiusKm: match.radiusKm,
+          dispatchMode: match.mode,
           dispatchedAt: booking.dispatchedAt || now,
           requestExpiresAt: booking.requestExpiresAt || new Date(now.getTime() + PARTNER_REQUEST_TTL_MS)
         },
@@ -303,7 +321,7 @@ async function dispatchPendingBookingsToPartner(partner) {
             status: "sent_to_partner",
             at: new Date(),
             by: "system",
-            note: "Dispatched when partner came online"
+            note: `Dispatched within ${match.radiusKm} km when partner came online`
           }
         }
       },
