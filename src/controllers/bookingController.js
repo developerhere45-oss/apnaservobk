@@ -218,7 +218,6 @@ async function findLaundryStaffActor(auth) {
   if (!staff || ["blocked", "rejected"].includes(staff.verificationStatus)) return null;
   return { partner, staff };
 }
-
 function hasStatusLocationPayload(body = {}) {
   return Number.isFinite(Number(body.lat)) && Number.isFinite(Number(body.lng));
 }
