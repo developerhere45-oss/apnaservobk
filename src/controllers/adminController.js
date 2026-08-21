@@ -196,6 +196,9 @@ function bookingTimeline(booking, payments = [], messages = []) {
 function serializeBookingHistory(booking, payments = [], messages = []) {
   booking = decryptAdminRecord(booking);
   const completedAt = booking.completedAt || bookingTime(booking, ["completed"]);
+  const finalServiceCost = money(booking.finalAmount);
+  const proposedServiceCost = finalServiceCost > 0 ? 0 : money(booking.quoteAmount);
+  const estimatedServiceCost = money(booking.price);
   return {
     id: id(booking._id),
     bookingId: booking.bookingId || booking.publicId || booking.bookingCode || "",
@@ -218,7 +221,9 @@ function serializeBookingHistory(booking, payments = [], messages = []) {
     locationUpdatedBy: booking.locationUpdatedBy || "",
     locationChange: booking.locationChange || {},
     customerNotes: [booking.issue || "", booking.emergency?.notes || ""].filter(Boolean).join(" | "),
-    finalServiceCost: money(booking.finalAmount || booking.quoteAmount || booking.price),
+    finalServiceCost,
+    proposedServiceCost,
+    estimatedServiceCost,
     paymentStatus: booking.paymentStatus || "",
     timeline: bookingTimeline(booking, payments, messages)
   };
@@ -340,7 +345,7 @@ function startOfToday() {
 }
 
 function bookingAmount(booking) {
-  return money(booking?.finalAmount || booking?.quoteAmount || booking?.price);
+  return money(booking?.finalAmount);
 }
 
 function safeLimit(value, fallback = 100, maximum = 250) {
