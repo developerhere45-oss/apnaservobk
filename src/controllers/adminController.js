@@ -1545,7 +1545,7 @@ async function performAdminAction(req, res, next) {
     }
 
     if (action === "approve-technician") {
-      const existingPartner = await Partner.findById(targetId).select("kycStatus accountStatus approvalVersion businessType laundryBusiness");
+      const existingPartner = await Partner.findById(targetId).select("kycStatus accountStatus approvalVersion businessType laundryBusiness phoneHash emailHash");
       if (!existingPartner) return res.status(404).json({ message: "Partner not found" });
       if (existingPartner.accountStatus === "deleted") {
         return res.status(409).json({ message: "Deleted partner cannot be approved" });
@@ -1581,6 +1581,40 @@ async function performAdminAction(req, res, next) {
         },
         { new: true }
       );
+      const linkedIdentityFilters = [];
+      if (existingPartner.phoneHash) linkedIdentityFilters.push({ phoneHash: existingPartner.phoneHash });
+      if (existingPartner.emailHash) linkedIdentityFilters.push({ emailHash: existingPartner.emailHash });
+      if (linkedIdentityFilters.length) {
+        await Partner.updateMany(
+          {
+            _id: { $ne: partner._id },
+            accountStatus: { $ne: "deleted" },
+            $or: linkedIdentityFilters
+          },
+          {
+            $set: {
+              isOnline: true,
+              isVerified: true,
+              trustStatus: "trusted",
+              kycStatus: "verified",
+              businessVerificationStatus: existingPartner.businessType === "laundry" ? "approved" : "not_required",
+              accountStatus: "active",
+              approvedAt: now,
+              rejectedAt: null,
+              rejectionReason: ""
+            },
+            $inc: { approvalVersion: 1 },
+            $push: {
+              verificationHistory: {
+                action: "approved_linked_identity",
+                at: now,
+                by: actor,
+                note: "Approval synchronized across the same verified partner identity"
+              }
+            }
+          }
+        );
+      }
       if (partner.businessType === "laundry" && partner.laundryBusiness?.staffMembers?.length) {
         for (const staff of partner.laundryBusiness.staffMembers) {
           if (staff.verificationStatus !== "blocked") staff.verificationStatus = "verified";
