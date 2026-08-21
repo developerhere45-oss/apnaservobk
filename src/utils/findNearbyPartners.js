@@ -56,7 +56,16 @@ function approvalFilter(categories, excludedIds) {
     kycStatus: "verified",
     trustStatus: "trusted",
     locationTrustStatus: "trusted",
-    lastLocationAt: { $gt: new Date(Date.now() - LIVE_LOCATION_MAX_AGE_MS) }
+    // Mobile partners move, so only a recent GPS heartbeat is safe for them.
+    // Verified company accounts operate from their registered fixed location
+    // and use the web dashboard, which cannot maintain the partner-app GPS
+    // heartbeat. Requiring a five-minute heartbeat for those accounts made
+    // every Cleaning/Laundry company disappear from dispatch and therefore
+    // from its dashboard even though its stored GeoJSON location was valid.
+    $or: [
+      { lastLocationAt: { $gt: new Date(Date.now() - LIVE_LOCATION_MAX_AGE_MS) } },
+      { businessType: "laundry" }
+    ]
   };
   if (excludedIds.size) {
     filter._id = { $nin: [...excludedIds] };

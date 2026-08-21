@@ -17,6 +17,7 @@
     "audit:public-ids": "node scripts/public-id-concurrency-audit.js",
     "audit:booking-launch": "node scripts/booking-launch-audit.js",
     "audit:laundry-workflow": "node scripts/laundry-workflow-audit.js",
+    "audit:cleaning-routing": "node scripts/cleaning-booking-routing-audit.js",
     "db:audit": "node scripts/db-audit.js",
     "db:audit:schema": "node scripts/db-audit.js --schema-only",
     "db:migrate": "node scripts/db-migrate-fixes.js",
