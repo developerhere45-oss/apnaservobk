@@ -2057,7 +2057,10 @@ async function createCallLog(req, res, next) {
       ? (body.contactType === "alternate"
         ? booking.contact?.alternatePhone
         : booking.contact?.primaryPhone || booking.userSnapshot?.phone || bookingUser?.phone || "")
-      : (booking.partnerSnapshot?.phone || assignedPartner?.phone || "");
+      : (booking.laundryAssignment?.staffPhone
+        || booking.partnerSnapshot?.phone
+        || assignedPartner?.phone
+        || "");
     const virtualNumber = isPartner && configuredVirtualNumber ? configuredVirtualNumber : "";
     const phoneNumber = virtualNumber || String(directNumber || "");
     const status = body.action === "report"

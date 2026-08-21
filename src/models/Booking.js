@@ -138,6 +138,7 @@ const bookingSchema = new mongoose.Schema(
       ownerPartnerId: { type: mongoose.Schema.Types.ObjectId, ref: "Partner", default: null },
       staffSequence: { type: Number, default: 0 },
       staffName: { type: String, trim: true, default: "" },
+      staffPhone: { type: String, trim: true, default: "" },
       staffPhoneHash: { type: String, trim: true, default: "" },
       staffEmailHash: { type: String, trim: true, default: "" },
       staffFirebaseUid: { type: String, trim: true, default: "" },

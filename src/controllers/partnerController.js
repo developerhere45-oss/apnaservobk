@@ -1467,6 +1467,7 @@ async function assignLaundryStaff(req, res, next) {
       ownerPartnerId: owner._id,
       staffSequence: Number(staff.sequence || 0),
       staffName: staff.name || `${serviceLabel(isolatedCompanyCategories(owner)?.[0] || "service")} Staff`,
+      staffPhone: normalizePhone(staff.phone),
       staffPhoneHash: staff.phoneHash || identityHash(normalizePhone(staff.phone)),
       staffEmailHash: staff.emailHash || identityHash(normalizeEmail(staff.email)),
       staffFirebaseUid: staff.firebaseUid || "",
@@ -1495,6 +1496,27 @@ async function assignLaundryStaff(req, res, next) {
           type: "laundry:staff_assignment",
           targetApp: "partner",
           actionType: "OPEN_LAUNDRY_JOB",
+          bookingId: String(booking._id),
+          bookingCode: booking.bookingCode
+        }
+      });
+    }
+    if (booking.userSnapshot?.fcmToken) {
+      await reliableNotify({
+        recipients: [{
+          role: "user",
+          userId: booking.userId,
+          token: booking.userSnapshot.fcmToken,
+          phone: booking.userSnapshot.phone || ""
+        }],
+        title: "Laundry Staff Assigned",
+        body: `${booking.laundryAssignment.staffName} is now assigned to booking ${booking.bookingCode}.`,
+        category: "booking_staff_assigned",
+        priority: "high",
+        data: {
+          type: "booking:staff_assigned",
+          targetApp: "user",
+          actionType: "OPEN_BOOKING",
           bookingId: String(booking._id),
           bookingCode: booking.bookingCode
         }

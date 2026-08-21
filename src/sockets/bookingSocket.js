@@ -191,6 +191,9 @@ function serializeBooking(booking) {
     : (doc.status === "amount_pending" ? "pending" : "none");
   const quoteAmount = Number(doc.quoteAmount || doc.finalAmount || 0);
   const lifecycleStatus = lifecycleStatusForBooking(doc);
+  const assignedStaffName = doc.laundryAssignment?.staffName || "";
+  const assignedStaffPhone = doc.laundryAssignment?.staffPhone || "";
+  const hasAssignedLaundryStaff = Boolean(assignedStaffName && assignedStaffPhone);
   return {
     _id: String(doc._id),
     bookingId: String(doc._id),
@@ -267,6 +270,9 @@ function serializeBooking(booking) {
     partnerRating: Number(doc.partnerSnapshot?.rating || 0),
     partnerRatingCount: Number(doc.partnerSnapshot?.ratingCount || 0),
     laundryAssignment: doc.laundryAssignment || {},
+    serviceContactName: hasAssignedLaundryStaff ? assignedStaffName : (doc.partnerSnapshot?.name || ""),
+    serviceContactPhone: hasAssignedLaundryStaff ? assignedStaffPhone : (doc.partnerSnapshot?.phone || ""),
+    serviceContactRole: hasAssignedLaundryStaff ? "laundry_staff" : "partner_owner",
     dispatchRadiusKm: Number(doc.dispatchRadiusKm || 0),
     dispatchMode: doc.dispatchMode || "",
     dispatchedAt: doc.dispatchedAt || null,
@@ -565,6 +571,11 @@ function emitLaundryStaffAssignment(booking, owner, staff) {
       assignedAt: booking.laundryAssignment?.assignedAt || new Date()
     }
   });
+  const userPayload = serializeBooking(booking);
+  emitAdminEvent("booking:staff_assigned", userPayload);
+  if (booking.userId) {
+    io.to(`user:${booking.userId}`).emit("booking:staff_assigned", userPayload);
+  }
 }
 
 function emitBookingAccepted(booking, acceptedPartner = null) {
