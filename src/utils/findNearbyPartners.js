@@ -3,7 +3,6 @@ const { normalizeServiceCategory, serviceCategoryVariants, partnerCanServeServic
 
 const EARTH_RADIUS_M = 6378137;
 const DEFAULT_RADIUS_STEPS_KM = [5, 8];
-const LIVE_LOCATION_MAX_AGE_MS = 5 * 60 * 1000;
 
 function safeNumber(value, fallback = 0) {
   const parsed = Number(value);
@@ -55,17 +54,12 @@ function approvalFilter(categories, excludedIds) {
     isVerified: true,
     kycStatus: "verified",
     trustStatus: "trusted",
-    locationTrustStatus: "trusted",
-    // Mobile partners move, so only a recent GPS heartbeat is safe for them.
-    // Verified company accounts operate from their registered fixed location
-    // and use the web dashboard, which cannot maintain the partner-app GPS
-    // heartbeat. Requiring a five-minute heartbeat for those accounts made
-    // every Cleaning/Laundry company disappear from dispatch and therefore
-    // from its dashboard even though its stored GeoJSON location was valid.
-    $or: [
-      { lastLocationAt: { $gt: new Date(Date.now() - LIVE_LOCATION_MAX_AGE_MS) } },
-      { businessType: "laundry" }
-    ]
+    // A partner explicitly marked online can still miss a GPS heartbeat when
+    // Android pauses the socket/background location task. Keep the last valid
+    // stored GeoJSON point as a dispatch fallback so requests do not silently
+    // disappear. Suspicious locations remain excluded and the normal 8 km
+    // distance/service-radius checks below still apply.
+    locationTrustStatus: { $ne: "suspicious" }
   };
   if (excludedIds.size) {
     filter._id = { $nin: [...excludedIds] };

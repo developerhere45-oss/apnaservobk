@@ -683,6 +683,29 @@ function queueBookingDispatch(booking, category, lat, lng) {
   });
 }
 
+async function recoverRecentUndispatchedBookings(partner, categories) {
+  if (!partnerCanViewOpenJobs(partner) || !categories.length) return;
+  const cutoff = new Date(Date.now() - PARTNER_REQUEST_TTL_MS);
+  const candidates = await Booking.find({
+    partnerId: null,
+    requestedPartners: { $size: 0 },
+    status: { $in: pendingAssignmentStatuses() },
+    serviceCategory: { $in: categories },
+    createdAt: { $gt: cutoff }
+  }).sort({ createdAt: -1 }).limit(10);
+
+  for (const booking of candidates) {
+    const coordinates = booking.location?.coordinates || [];
+    if (!findNearbyPartners.validCoordinates(coordinates[1], coordinates[0])) continue;
+    await dispatchBookingToPartners(
+      booking,
+      booking.serviceCategory,
+      coordinates[1],
+      coordinates[0]
+    );
+  }
+}
+
 async function getOrCreateUser(req, body) {
   const existing = await User.findOne({ firebaseUid: req.auth.uid })
     .select("_id phone phoneVerified phoneVerifiedAt")
@@ -982,6 +1005,11 @@ async function listPartnerBookings(req, res, next) {
 
     const categories = partnerCategoryVariants(partner);
     const canViewOpenJobs = partnerCanViewOpenJobs(partner);
+    // Recover a request when the initial background dispatch ran while the
+    // partner's Android GPS/socket heartbeat was temporarily unavailable.
+    // Partner apps poll this endpoint, so a still-valid request is repaired
+    // immediately without requiring an offline/online toggle.
+    await recoverRecentUndispatchedBookings(partner, categories);
     const companyServiceFilter = partner.businessType === "laundry"
       ? { serviceCategory: { $in: categories } }
       : {};
