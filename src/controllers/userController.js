@@ -2,11 +2,13 @@ const { z } = require("zod");
 const crypto = require("crypto");
 const User = require("../models/User");
 const SupportTicket = require("../models/SupportTicket");
+const JobProofPhoto = require("../models/JobProofPhoto");
 const { Booking } = require("../models/Booking");
 const { emitAdminEvent } = require("../sockets/bookingSocket");
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 const { sendWelcomeEmail } = require("../utils/welcomeEmail");
 const { admin, initFirebase } = require("../config/firebase");
+const { cloudinary, initCloudinary } = require("../config/cloudinary");
 
 const profileSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
@@ -417,14 +419,40 @@ async function deleteAccount(req, res, next) {
 
     const userId = user._id;
     const deletedLabel = `Deleted customer ${String(userId).slice(-6)}`;
+    const proofPhotos = await JobProofPhoto.find({ userId }).select("cloudinaryPublicId storageProvider");
+    const cloudinaryIds = proofPhotos
+      .filter((photo) => photo.storageProvider === "cloudinary" && photo.cloudinaryPublicId)
+      .map((photo) => photo.cloudinaryPublicId);
+    if (cloudinaryIds.length) {
+      initCloudinary();
+      await Promise.all(cloudinaryIds.map((publicId) => cloudinary.uploader.destroy(publicId)));
+    }
     await Booking.updateMany(
       { userId },
       {
         $set: {
+          issue: "Deleted account service record",
           address: "Deleted account",
+          "addressDetails.houseFlat": "",
+          "addressDetails.building": "",
+          "addressDetails.floor": "",
+          "addressDetails.room": "",
+          "addressDetails.landmark": "",
           location: { type: "Point", coordinates: [0, 0] },
+          "locationChange.reason": "",
           "contact.primaryPhone": "",
           "contact.alternatePhone": "",
+          "emergency.notes": "",
+          "customerVerification.authPhone": "",
+          quoteCounterMessage: "",
+          quoteHistory: [],
+          "serviceWorkDetails.description": "",
+          "serviceWorkDetails.customWork": [],
+          "serviceWorkDetails.additionalNotes": "",
+          "noResponseReport.reason": "",
+          "noResponseReport.lat": 0,
+          "noResponseReport.lng": 0,
+          "noResponseReport.evidenceUrl": "",
           "userSnapshot.name": deletedLabel,
           "userSnapshot.phone": "",
           "userSnapshot.email": "",
@@ -443,13 +471,15 @@ async function deleteAccount(req, res, next) {
       await collection.deleteMany({ userId });
     }));
 
+    // Remove the application account first. If Firebase deletion temporarily fails,
+    // the authenticated retry follows the idempotent branch above and completes it.
+    await User.deleteOne({ _id: userId });
     initFirebase();
     try {
       await admin.auth().deleteUser(req.auth.uid);
     } catch (error) {
       if (error?.code !== "auth/user-not-found") throw error;
     }
-    await User.deleteOne({ _id: userId });
     emitAdminEvent("user:deleted", { userId: String(userId), deletedAt: new Date() });
     return res.json({ ok: true, deleted: true });
   } catch (error) {
