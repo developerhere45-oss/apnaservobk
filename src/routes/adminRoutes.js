@@ -10,6 +10,7 @@ const roleAuth = require("../controllers/roleAuthController");
 const employees = require("../controllers/adminEmployeeController");
 const chats = require("../controllers/adminChatController");
 const appControl = require("../controllers/appControlController");
+const serviceChecklists = require("../controllers/serviceChecklistController");
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -73,6 +74,9 @@ router.patch("/chats/:chatId/status", chats.updateStatus);
 router.post("/chats/:chatId/note", chats.addNote);
 router.get("/chats/:chatId/assignment-history", chats.assignmentHistory);
 router.get("/dashboard", controller.dashboard);
+router.get("/service-work/checklists", serviceChecklists.list);
+router.put("/service-work/checklists/:serviceCategory", serviceChecklists.save);
+router.get("/service-work/reports", serviceChecklists.reports);
 router.get("/activity", controller.listAdminActivity);
 router.get("/settings/booking-launch", controller.bookingLaunchSettings);
 router.patch("/settings/booking-launch", controller.updateBookingLaunchSettings);

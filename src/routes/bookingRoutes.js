@@ -25,6 +25,7 @@ router.get("/launch-status", controller.getBookingLaunchStatus);
 router.use(verifyFirebaseToken);
 router.post("/launch-notify", bookingWriteLimiter, controller.requestLaunchNotification);
 router.post("/", bookingCreateLimiter, controller.createBooking);
+router.get("/service-checklists/:serviceCategory", bookingReadLimiter, controller.getServiceChecklist);
 router.get("/user", bookingReadLimiter, controller.listUserBookings);
 router.get("/partner", bookingReadLimiter, controller.listPartnerBookings);
 router.get("/:bookingId", bookingReadLimiter, controller.getBooking);

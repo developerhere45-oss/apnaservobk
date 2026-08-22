@@ -86,6 +86,21 @@ const bookingSchema = new mongoose.Schema(
     quoteCounterAmount: { type: Number, default: 0 },
     quoteCounterMessage: { type: String, default: "" },
     quoteCounterAt: { type: Date, default: null },
+    serviceWorkDetails: {
+      description: { type: String, trim: true, default: "" },
+      completedTasks: [
+        {
+          taskId: { type: String, trim: true, default: "" },
+          name: { type: String, trim: true, default: "" }
+        }
+      ],
+      customWork: [{ type: String, trim: true }],
+      additionalNotes: { type: String, trim: true, default: "" },
+      checklistVersion: { type: Number, default: 1 },
+      submittedAt: { type: Date, default: null },
+      submittedBy: { type: String, enum: ["", "partner", "laundry_staff"], default: "" },
+      idempotencyKey: { type: String, trim: true, default: "" }
+    },
     quoteHistory: [
       {
         kind: String,
@@ -222,6 +237,10 @@ bookingSchema.plugin(encryptedFieldsPlugin, {
     "partnerArrivalEstimateLabel",
     "emergency.notes",
     "quoteCounterMessage",
+    "serviceWorkDetails.description",
+    "serviceWorkDetails.completedTasks.name",
+    "serviceWorkDetails.customWork",
+    "serviceWorkDetails.additionalNotes",
     "quoteHistory.message",
     "customerVerification.authPhone",
     "noResponseReport.reason",

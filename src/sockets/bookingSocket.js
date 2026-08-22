@@ -245,6 +245,13 @@ function serializeBooking(booking) {
     quoteCounterMessage: doc.quoteCounterMessage || "",
     quoteCounterAt: doc.quoteCounterAt || null,
     quoteCounterAtMillis: millis(doc.quoteCounterAt),
+    serviceWorkDetails: doc.serviceWorkDetails || {
+      description: "",
+      completedTasks: [],
+      customWork: [],
+      additionalNotes: "",
+      checklistVersion: 1
+    },
     noResponseReport: doc.noResponseReport || {},
     noResponseReported: Boolean(doc.noResponseReport?.reported),
     noResponseReportedAtMillis: millis(doc.noResponseReport?.reportedAt),

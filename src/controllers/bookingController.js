@@ -28,6 +28,7 @@ const { expireDueBookingRequests } = require("../utils/bookingRequestExpiry");
 const { validateServiceArea } = require("../utils/serviceArea");
 const { getPublishedConfig, isScheduleActive, bookingAvailability } = require("../utils/appControl");
 const { getBookingLaunchConfig, ensureLaunchNotificationSchedule } = require("../utils/bookingLaunchConfig");
+const { getChecklist } = require("../utils/serviceChecklist");
 const {
   emitNewBookingToPartners,
   emitBookingAccepted,
@@ -111,6 +112,18 @@ const locationResponseSchema = z.object({
 const quoteCounterSchema = z.object({
   amount: z.coerce.number().positive(),
   message: z.string().max(250).optional()
+});
+
+const structuredWorkDetailsSchema = z.object({
+  workDescription: z.string().trim().min(3).max(300),
+  completedTasks: z.array(z.union([
+    z.string().trim().min(1).max(140),
+    z.object({ taskId: z.string().trim().min(1).max(160), name: z.string().trim().min(1).max(140) })
+  ])).min(1).max(30),
+  customWork: z.array(z.string().trim().min(1).max(140)).max(12).optional().default([]),
+  additionalNotes: z.string().trim().max(200).optional().default(""),
+  checklistVersion: z.coerce.number().int().min(1).max(100000).optional().default(1),
+  idempotencyKey: z.string().trim().min(8).max(120)
 });
 
 const chatMonitorSchema = z.object({
@@ -1301,6 +1314,10 @@ async function updateStatus(req, res, next) {
     const user = await User.findOne({ firebaseUid: req.auth.uid });
     const query = bookingIdFilter(String(req.params.bookingId || ""));
     const finalAmount = Number(req.body?.finalAmount || 0);
+    let structuredWorkDetails = null;
+    if (nextStatus === "amount_pending" && Number(req.body?.structuredQuoteVersion || 0) >= 1) {
+      structuredWorkDetails = structuredWorkDetailsSchema.parse(req.body || {});
+    }
     const now = new Date();
     let actorRole = "";
     if (partner) {
@@ -1386,6 +1403,9 @@ async function updateStatus(req, res, next) {
         if (Math.round(finalAmount) !== Math.round(currentAmount)) {
           return res.status(409).json({ message: "A quote is already pending customer approval" });
         }
+        if (structuredWorkDetails && currentBooking.serviceWorkDetails?.idempotencyKey === structuredWorkDetails.idempotencyKey) {
+          return res.json({ booking: serializeBooking(currentBooking), idempotent: true });
+        }
       }
       return res.json({ booking: serializeBooking(currentBooking), idempotent: true });
     }
@@ -1456,6 +1476,27 @@ async function updateStatus(req, res, next) {
       update.$set.quoteCounterAt = null;
       update.$set.paymentStatus = "pending";
       update.$set.amountRequestedAt = now;
+      const legacyTasks = Array.isArray(req.body?.completedTasks) ? req.body.completedTasks : [];
+      const work = structuredWorkDetails || {
+        workDescription: String(req.body?.additionalWork || "").trim().slice(0, 300),
+        completedTasks: legacyTasks,
+        customWork: [],
+        additionalNotes: String(req.body?.partnerNotes || "").trim().slice(0, 200),
+        checklistVersion: 1,
+        idempotencyKey: `legacy-${currentBooking._id}-${Date.now()}`
+      };
+      update.$set.serviceWorkDetails = {
+        description: work.workDescription,
+        completedTasks: work.completedTasks.map((task, index) => typeof task === "string"
+          ? { taskId: `legacy_${index + 1}`, name: task }
+          : { taskId: task.taskId, name: task.name }),
+        customWork: work.customWork,
+        additionalNotes: work.additionalNotes,
+        checklistVersion: work.checklistVersion,
+        submittedAt: now,
+        submittedBy: staffActor ? "laundry_staff" : "partner",
+        idempotencyKey: work.idempotencyKey
+      };
       update.$push.quoteHistory = {
         kind: "partner_quote",
         amount: roundedFinalAmount,
@@ -2493,9 +2534,18 @@ async function getBookingLaunchStatus(req, res, next) {
   }
 }
 
+async function getServiceChecklist(req, res, next) {
+  try {
+    return res.json({ checklist: await getChecklist(req.params.serviceCategory) });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   getBookingLaunchStatus,
   requestLaunchNotification,
+  getServiceChecklist,
   createBooking,
   listUserBookings,
   listPartnerBookings,
