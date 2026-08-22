@@ -640,7 +640,7 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
     }
 
     emitNewBookingToPartners(claimedBooking, partners);
-    await reliableNotify({
+    reliableNotify({
       recipients: partners.map(partnerRecipient),
       title: claimedBooking.emergency?.isEmergency ? "Emergency Booking Request" : "New Booking Request",
       body: claimedBooking.emergency?.isEmergency
@@ -660,6 +660,12 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
       smsBody: claimedBooking.emergency?.isEmergency
         ? `ApnaServo Emergency: ${claimedBooking.serviceName} near ${claimedBooking.city}. Open partner app now.`
         : ""
+    }).catch((error) => {
+      console.error("Partner booking push notification failed", {
+        bookingId: String(claimedBooking._id),
+        bookingCode: claimedBooking.bookingCode,
+        message: error.message
+      });
     });
   }
 
@@ -963,15 +969,26 @@ async function createBooking(req, res, next) {
     }
 
     emitAdminEvent("booking:new_request", serializeBooking(booking));
-    queueBookingDispatch(booking, category, dispatchLat, dispatchLng);
+    // Match and emit before acknowledging creation. The former setImmediate
+    // path made the customer receive success while the partner request was
+    // still waiting in the event-loop queue (and relied on the poll recovery
+    // path under load). This guarantees that the socket event is emitted as
+    // part of the booking transaction's request lifecycle.
+    const matchedPartners = await dispatchBookingToPartners(
+      booking,
+      category,
+      dispatchLat,
+      dispatchLng
+    );
+    const dispatchedBooking = await Booking.findById(booking._id);
     User.findByIdAndUpdate(user._id, { $set: { lastBookingAt: new Date() } }).catch((error) => {
       console.error("Failed to update user last booking time", { userId: String(user._id), message: error.message });
     });
 
     return res.status(201).json({
-      booking: serializeBooking(booking),
-      matchedPartners: 0,
-      dispatchQueued: true
+      booking: serializeBooking(dispatchedBooking || booking),
+      matchedPartners: matchedPartners.length,
+      dispatchQueued: false
     });
   } catch (error) {
     return next(error);
