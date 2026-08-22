@@ -16,11 +16,21 @@ async function sendNotification({ token, tokens, title, body, data = {} }) {
   const notificationTag = messageData.bookingId || messageData.actionId || "";
   const isChat = String(messageData.actionType || "").toUpperCase() === "OPEN_BOOKING_CHAT"
     || String(messageData.type || "").toLowerCase().includes("chat");
+  const targetApp = String(messageData.targetApp || "").toUpperCase();
+  const category = String(messageData.category || "").toLowerCase();
+  const type = String(messageData.type || "").toLowerCase();
+  // Incoming partner bookings must be data-only. With a notification+data
+  // payload Android renders the notification itself while the app is in the
+  // background, bypassing FirebaseMessagingService and therefore losing the
+  // existing Accept/Reject actions, deterministic dedupe and booking ringtone.
+  const isIncomingPartnerBooking = targetApp === "PARTNER"
+    && (category === "booking_request" || category === "emergency_booking"
+      || type.includes("new_request") || type.includes("emergency_request"));
   const notificationMessage = {
-    notification: {
+    ...(!isIncomingPartnerBooking ? { notification: {
       title: notificationTitle,
       body: notificationBody
-    },
+    } } : {}),
     data: {
       ...messageData,
       title: notificationTitle,
@@ -28,11 +38,12 @@ async function sendNotification({ token, tokens, title, body, data = {} }) {
     },
     android: {
       priority: "high",
-      notification: {
+      ttl: 10 * 60 * 1000,
+      ...(!isIncomingPartnerBooking ? { notification: {
         channelId: isChat ? "booking_chat" : "booking_requests",
         sound: "default",
         ...(notificationTag ? { tag: notificationTag } : {})
-      }
+      } } : {})
     },
     apns: {
       headers: {

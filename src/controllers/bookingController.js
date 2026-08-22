@@ -666,7 +666,13 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
         bookingId: claimedBooking.bookingId || claimedBooking.publicId || claimedBooking.bookingCode,
         internalBookingId: String(claimedBooking._id),
         bookingCode: claimedBooking.bookingCode,
+        serviceName: claimedBooking.serviceName,
         serviceCategory: claimedBooking.serviceCategory,
+        customerName: claimedBooking.userSnapshot?.name || "Customer",
+        location: claimedBooking.city || "",
+        paymentMethod: "Pay after service",
+        createdAt: claimedBooking.createdAt?.toISOString?.() || new Date().toISOString(),
+        requestExpiresAt: claimedBooking.requestExpiresAt?.toISOString?.() || "",
         emergencyType: claimedBooking.emergency?.type || "none",
         emergencyPriority: claimedBooking.emergency?.priority || "normal"
       },
