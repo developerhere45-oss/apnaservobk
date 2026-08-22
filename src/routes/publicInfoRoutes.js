@@ -26,4 +26,15 @@ router.get("/support", (req, res) => {
   `));
 });
 
+router.get("/terms", (req, res) => {
+  res.type("html").send(page("ApnaServo Terms & Conditions", `
+    <h1>ApnaServo Terms &amp; Conditions</h1><small>Effective: 22 August 2026</small>
+    <p>ApnaServo connects customers with independent service partners for home and commercial service requests.</p>
+    <h2>Bookings and service quotes</h2><p>Booking details must be accurate. Availability depends on service area and partner capacity. The final scope and amount are shown for customer approval after inspection; ApnaServo does not require upfront payment before service completion.</p>
+    <h2>Cancellations and conduct</h2><p>Customers may cancel before work starts through the booking screen. Customers and partners must communicate respectfully and must not misuse the platform, submit fraudulent requests, or compromise safety.</p>
+    <h2>Support</h2><p>For booking, account, cancellation, quote, privacy, or safety assistance, use <strong>Profile → Help &amp; Support</strong> in the app. Each submitted message creates or updates an authenticated support ticket.</p>
+    <h2>Accounts</h2><p>Account deletion is available in the app under <strong>Profile → Legal &amp; Account → Delete Account</strong>. Deletion is permanent; legally necessary transaction records may be retained only after personal data is removed or de-identified.</p>
+  `));
+});
+
 module.exports = router;

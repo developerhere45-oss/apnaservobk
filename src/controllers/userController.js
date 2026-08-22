@@ -70,6 +70,20 @@ function tokenPhoneVerified(req, phone) {
   return tokenPhone.length === 10 && profilePhone.length === 10 && tokenPhone === profilePhone;
 }
 
+function firebaseAuthProvider(auth = {}) {
+  const provider = String(auth.firebase?.sign_in_provider || "").trim().toLowerCase();
+  if (provider === "apple.com") return "apple";
+  if (provider === "phone") return "phone";
+  if (provider === "google.com") return "google";
+  if (provider === "password") return "password";
+  return provider ? "firebase" : "unknown";
+}
+
+function appleUserId(auth = {}) {
+  const identities = auth.firebase?.identities?.["apple.com"];
+  return Array.isArray(identities) && identities[0] ? String(identities[0]).trim() : "";
+}
+
 function supportCategory(message, requested) {
   if (requested) return requested.toLowerCase();
   const text = String(message || "").toLowerCase();
@@ -110,6 +124,8 @@ async function upsertProfile(req, res, next) {
     const existing = await User.findOne({ firebaseUid: req.auth.uid }).select("_id").lean();
     const update = {
       firebaseUid: req.auth.uid,
+      authProvider: firebaseAuthProvider(req.auth),
+      appleUserId: appleUserId(req.auth),
       bookingRiskStatus: verified ? "trusted" : "otp_required",
       lastLoginAt: now
     };

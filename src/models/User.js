@@ -70,6 +70,8 @@ const deviceTokenSchema = new mongoose.Schema(
 const userSchema = new mongoose.Schema(
   {
     firebaseUid: { type: String, required: true, unique: true, index: true },
+    authProvider: { type: String, enum: ["phone", "apple", "google", "password", "firebase", "unknown"], default: "unknown", index: true },
+    appleUserId: { type: String, trim: true, default: "", index: true },
     name: { type: String, trim: true, default: "ApnaServo Customer" },
     phone: { type: String, trim: true, default: "" },
     phoneHash: { type: String, trim: true, default: "", index: true },
