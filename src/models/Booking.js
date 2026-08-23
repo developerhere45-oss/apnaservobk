@@ -166,6 +166,32 @@ const bookingSchema = new mongoose.Schema(
       startedAt: { type: Date, default: null },
       completedAt: { type: Date, default: null }
     },
+    pickupAssignment: {
+      ownerPartnerId: { type: mongoose.Schema.Types.ObjectId, ref: "Partner", default: null },
+      staffSequence: { type: Number, default: 0 },
+      staffName: { type: String, trim: true, default: "" },
+      staffPhone: { type: String, trim: true, default: "" },
+      staffPhoneHash: { type: String, trim: true, default: "" },
+      staffEmailHash: { type: String, trim: true, default: "" },
+      staffFirebaseUid: { type: String, trim: true, default: "" },
+      taskStatus: { type: String, enum: ["unassigned", "assigned", "in_progress", "completed"], default: "unassigned" },
+      assignedAt: { type: Date, default: null },
+      startedAt: { type: Date, default: null },
+      completedAt: { type: Date, default: null }
+    },
+    deliveryAssignment: {
+      ownerPartnerId: { type: mongoose.Schema.Types.ObjectId, ref: "Partner", default: null },
+      staffSequence: { type: Number, default: 0 },
+      staffName: { type: String, trim: true, default: "" },
+      staffPhone: { type: String, trim: true, default: "" },
+      staffPhoneHash: { type: String, trim: true, default: "" },
+      staffEmailHash: { type: String, trim: true, default: "" },
+      staffFirebaseUid: { type: String, trim: true, default: "" },
+      taskStatus: { type: String, enum: ["unassigned", "assigned", "in_progress", "completed"], default: "unassigned" },
+      assignedAt: { type: Date, default: null },
+      startedAt: { type: Date, default: null },
+      completedAt: { type: Date, default: null }
+    },
     slot: { type: String, default: "" },
     partnerArrivalEstimateMinutes: { type: Number, default: 0, min: 0, max: 1440 },
     partnerArrivalEstimateLabel: { type: String, default: "" },

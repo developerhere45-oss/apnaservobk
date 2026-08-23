@@ -1240,7 +1240,15 @@ async function staffJobsFor(partner, staff) {
       { "laundryAssignment.staffSequence": Number(staff.sequence || 0) },
       { "laundryAssignment.staffFirebaseUid": staff.firebaseUid },
       { "laundryAssignment.staffPhoneHash": staff.phoneHash },
-      { "laundryAssignment.staffEmailHash": staff.emailHash }
+      { "laundryAssignment.staffEmailHash": staff.emailHash },
+      { "pickupAssignment.staffSequence": Number(staff.sequence || 0) },
+      { "pickupAssignment.staffFirebaseUid": staff.firebaseUid },
+      { "pickupAssignment.staffPhoneHash": staff.phoneHash },
+      { "pickupAssignment.staffEmailHash": staff.emailHash },
+      { "deliveryAssignment.staffSequence": Number(staff.sequence || 0) },
+      { "deliveryAssignment.staffFirebaseUid": staff.firebaseUid },
+      { "deliveryAssignment.staffPhoneHash": staff.phoneHash },
+      { "deliveryAssignment.staffEmailHash": staff.emailHash }
     ]
   }).sort({ updatedAt: -1, createdAt: -1 }).limit(200);
 }
@@ -1475,6 +1483,10 @@ async function assignLaundryStaff(req, res, next) {
     }
     owner = await enforceCompanyServiceIsolation(owner);
     const sequence = Number(req.body?.staffSequence || 0);
+    const assignmentType = String(req.body?.assignmentType || "pickup").trim().toLowerCase();
+    if (!["pickup", "delivery"].includes(assignmentType)) {
+      return res.status(400).json({ message: "assignmentType must be pickup or delivery" });
+    }
     const staff = (owner.laundryBusiness?.staffMembers || []).find((member) => Number(member.sequence) === sequence);
     if (!staff || staff.verificationStatus !== "verified") {
       return res.status(404).json({ message: "Verified company staff member not found" });
@@ -1499,7 +1511,9 @@ async function assignLaundryStaff(req, res, next) {
     if (["completed", "cancelled"].includes(booking.status)) {
       return res.status(409).json({ message: "Completed or cancelled bookings cannot be assigned" });
     }
-    if (["in_progress", "completed"].includes(booking.laundryAssignment?.taskStatus)) {
+    const assignmentKey = assignmentType === "delivery" ? "deliveryAssignment" : "pickupAssignment";
+    const currentAssignment = booking[assignmentKey] || (assignmentType === "pickup" ? booking.laundryAssignment : null);
+    if (["in_progress", "completed"].includes(currentAssignment?.taskStatus)) {
       return res.status(409).json({ message: "A task already in progress cannot be reassigned" });
     }
     const acceptedDuringAssignment = !currentPartnerId;
@@ -1514,7 +1528,7 @@ async function assignLaundryStaff(req, res, next) {
         note: "Company accepted the booking while assigning staff"
       });
     }
-    booking.laundryAssignment = {
+    const nextAssignment = {
       ownerPartnerId: owner._id,
       staffSequence: Number(staff.sequence || 0),
       staffName: staff.name || `${serviceLabel(isolatedCompanyCategories(owner)?.[0] || "service")} Staff`,
@@ -1527,6 +1541,9 @@ async function assignLaundryStaff(req, res, next) {
       startedAt: null,
       completedAt: null
     };
+    booking[assignmentKey] = nextAssignment;
+    // Keep the original field as a pickup alias for older Partner app builds.
+    if (assignmentType === "pickup") booking.laundryAssignment = nextAssignment;
     await booking.save();
     if (acceptedDuringAssignment) emitBookingAccepted(booking, owner);
     emitLaundryStaffAssignment(booking, owner, staff);
@@ -1561,11 +1578,11 @@ async function assignLaundryStaff(req, res, next) {
           phone: booking.userSnapshot.phone || ""
         }],
         title: "Laundry Staff Assigned",
-        body: `${booking.laundryAssignment.staffName} is now assigned to booking ${booking.bookingCode}.`,
+        body: `${nextAssignment.staffName} is now assigned for ${assignmentType} on booking ${booking.bookingCode}.`,
         category: "booking_staff_assigned",
         priority: "high",
         data: {
-          type: "booking:staff_assigned",
+          type: `booking:${assignmentType}_staff_assigned`,
           targetApp: "user",
           actionType: "OPEN_BOOKING",
           bookingId: String(booking._id),
@@ -1587,6 +1604,10 @@ async function updateStaffBookingStatus(req, res, next) {
       await partner.save();
     }
     const status = String(req.body?.status || "").trim().toLowerCase();
+    const assignmentType = String(req.body?.assignmentType || "pickup").trim().toLowerCase();
+    if (!["pickup", "delivery"].includes(assignmentType)) {
+      return res.status(400).json({ message: "assignmentType must be pickup or delivery" });
+    }
     if (status !== "in_progress") {
       return res.status(400).json({ message: "Use the live status workflow to update pickup, delivery and completion" });
     }
@@ -1597,18 +1618,27 @@ async function updateStaffBookingStatus(req, res, next) {
         { "laundryAssignment.staffSequence": Number(staff.sequence || 0) },
         { "laundryAssignment.staffFirebaseUid": staff.firebaseUid },
         { "laundryAssignment.staffPhoneHash": staff.phoneHash },
-        { "laundryAssignment.staffEmailHash": staff.emailHash }
+        { "laundryAssignment.staffEmailHash": staff.emailHash },
+        { "pickupAssignment.staffSequence": Number(staff.sequence || 0) },
+        { "deliveryAssignment.staffSequence": Number(staff.sequence || 0) }
       ]
     });
     if (!booking) return res.status(404).json({ message: "Assigned Laundry order not found" });
-    const current = booking.laundryAssignment?.taskStatus || "assigned";
+    const assignmentKey = assignmentType === "delivery" ? "deliveryAssignment" : "pickupAssignment";
+    const assignment = booking[assignmentKey] || (assignmentType === "pickup" ? booking.laundryAssignment : null);
+    if (!assignment || Number(assignment.staffSequence || 0) !== Number(staff.sequence || 0)) {
+      return res.status(403).json({ message: `You are not assigned for this order ${assignmentType}` });
+    }
+    const current = assignment.taskStatus || "assigned";
     if (status === "in_progress" && !["assigned", "in_progress"].includes(current)) {
       return res.status(409).json({ message: "Only assigned tasks can be started" });
     }
-    booking.laundryAssignment.taskStatus = status;
-    if (status === "in_progress" && !booking.laundryAssignment.startedAt) {
-      booking.laundryAssignment.startedAt = new Date();
+    assignment.taskStatus = status;
+    if (status === "in_progress" && !assignment.startedAt) {
+      assignment.startedAt = new Date();
     }
+    booking[assignmentKey] = assignment;
+    if (assignmentType === "pickup") booking.laundryAssignment = assignment;
     await booking.save();
     return res.json({ ok: true, booking: serializeBooking(booking) });
   } catch (error) {
