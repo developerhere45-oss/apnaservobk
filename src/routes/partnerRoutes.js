@@ -40,6 +40,9 @@ router.post("/staff/session", profileWriteLimiter, controller.staffSession);
 router.get("/staff/bookings", controller.listStaffBookings);
 router.patch("/staff/online", profileWriteLimiter, controller.setStaffOnline);
 router.post("/laundry/staff", profileWriteLimiter, controller.addLaundryStaff);
+// Service-scoped alias used by current Partner app. The controller applies
+// owner/company service isolation before creating the staff record.
+router.post("/services/laundry/staff", profileWriteLimiter, controller.addLaundryStaff);
 router.post("/laundry/staff/:staffSequence/photo", verificationLimiter, imageUpload.single("photo"), validateUploadedImage(["image/jpeg", "image/png"]), controller.uploadLaundryStaffPhoto);
 router.post("/laundry/staff/:staffSequence/identity", verificationLimiter, documentUpload.single("document"), validateUploadedDocument(["image/jpeg", "image/png", "application/pdf"]), controller.uploadLaundryStaffIdentity);
 router.patch("/staff/bookings/:bookingId/status", profileWriteLimiter, controller.updateStaffBookingStatus);
