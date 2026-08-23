@@ -371,6 +371,7 @@ function staffPublicProfile(partner, staff) {
     serviceCategory: companyService,
     photoUrl: staff.photoUrl || "",
     idType: staff.idType || "Government ID",
+    joinedAt: staff.createdAt || partner.createdAt || null,
     identityVerified: staff.verificationStatus === "verified",
     verificationStatus: staff.verificationStatus === "blocked"
       ? "blocked"
@@ -1336,6 +1337,7 @@ async function addLaundryStaff(req, res, next) {
       idType: "Company ID",
       documentType: `laundry_staff_${sequence}_identity`,
       documentTitle: `${serviceName} Staff ${sequence} ID Proof`,
+      createdAt: new Date(),
       verificationStatus: "verified",
       isOnline: false
     });
@@ -1351,6 +1353,55 @@ async function addLaundryStaff(req, res, next) {
   } catch (error) {
     return next(error);
   }
+}
+
+async function listLaundryStaff(req, res, next) {
+  try {
+    let owner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    if (!owner || owner.businessType !== "laundry") {
+      return res.status(403).json({ message: "Company owner access required" });
+    }
+    owner = await enforceCompanyServiceIsolation(owner);
+    const members = owner.laundryBusiness?.staffMembers || [];
+    const sequences = members.map((member) => Number(member.sequence || 0)).filter(Boolean);
+    const totals = new Map();
+    if (sequences.length) {
+      const rows = await Booking.aggregate([
+        { $match: { partnerId: owner._id, "laundryAssignment.staffSequence": { $in: sequences } } },
+        { $group: { _id: "$laundryAssignment.staffSequence", totalOrders: { $sum: 1 } } }
+      ]);
+      rows.forEach((row) => totals.set(Number(row._id || 0), Number(row.totalOrders || 0)));
+    }
+    const staffMembers = members.map((member) => ({
+      ...staffPublicProfile(owner, member),
+      id: String(member.sequence || ""),
+      serviceType: "laundry",
+      totalOrders: totals.get(Number(member.sequence || 0)) || 0
+    }));
+    return res.json({ ok: true, serviceType: "laundry", totalActive: staffMembers.length, staffMembers });
+  } catch (error) { return next(error); }
+}
+
+async function removeLaundryStaff(req, res, next) {
+  try {
+    let owner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    if (!owner || owner.businessType !== "laundry") {
+      return res.status(403).json({ message: "Company owner access required" });
+    }
+    owner = await enforceCompanyServiceIsolation(owner);
+    const staffId = String(req.params.staffId || "").trim();
+    const sequence = Number(staffId.replace(/^laundry:/i, ""));
+    if (!Number.isInteger(sequence) || sequence <= 0) {
+      return res.status(400).json({ message: "Valid staff record ID is required" });
+    }
+    const members = owner.laundryBusiness?.staffMembers || [];
+    const staff = members.find((member) => Number(member.sequence) === sequence);
+    if (!staff) return res.status(404).json({ message: "Laundry staff member not found" });
+    owner.laundryBusiness.staffMembers = members.filter((member) => Number(member.sequence) !== sequence);
+    owner.markModified("laundryBusiness.staffMembers");
+    await owner.save();
+    return res.json({ ok: true, removedStaffId: String(sequence), serviceType: "laundry" });
+  } catch (error) { return next(error); }
 }
 
 async function ownerStaffContext(req) {
@@ -1809,6 +1860,8 @@ module.exports = {
   listStaffBookings,
   setStaffOnline,
   addLaundryStaff,
+  listLaundryStaff,
+  removeLaundryStaff,
   uploadLaundryStaffPhoto,
   uploadLaundryStaffIdentity,
   assignLaundryStaff,

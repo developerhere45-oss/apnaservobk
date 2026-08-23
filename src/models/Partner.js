@@ -62,6 +62,7 @@ const laundryStaffSchema = new mongoose.Schema(
     idType: { type: String, trim: true, default: "" },
     documentType: { type: String, trim: true, default: "" },
     documentTitle: { type: String, trim: true, default: "" },
+    createdAt: { type: Date, default: Date.now },
     welcomeEmailSentAt: { type: Date, default: null }
   },
   { _id: false }
