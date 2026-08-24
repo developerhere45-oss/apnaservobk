@@ -460,13 +460,21 @@ async function bookingSummaryTotals() {
 
 function bookingRow(booking) {
   booking = decryptAdminRecord(booking);
+  // The number entered for this booking is authoritative. The account
+  // snapshot can be older (or belong to a subsequently deleted profile), so
+  // it is only a legacy fallback for rows created before booking contacts.
+  const customerPhone = booking.contact?.primaryPhone
+    || booking.userSnapshot?.phone
+    || booking.customerVerification?.authPhone
+    || "";
   return {
     id: booking.bookingId || booking.publicId || booking.bookingCode || "",
     bookingCode: booking.bookingId || booking.publicId || booking.bookingCode || "",
     internalBookingCode: booking.bookingCode || "",
     userName: booking.userSnapshot?.name || "",
-    userMobile: booking.userSnapshot?.phone || "",
-    primaryPhone: booking.contact?.primaryPhone || booking.userSnapshot?.phone || "",
+    userMobile: customerPhone,
+    customerPhone,
+    primaryPhone: customerPhone,
     alternatePhone: booking.contact?.alternatePhone || "",
     serviceCategory: booking.serviceCategory || "",
     serviceName: booking.serviceName || booking.serviceCategory || "",
