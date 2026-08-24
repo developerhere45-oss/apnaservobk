@@ -842,7 +842,19 @@ async function upsertProfile(req, res, next) {
       isOnline: Boolean(partner.isOnline)
     });
 
-    return res.json({ partner });
+    return res.json({
+      role: "PARTNER",
+      partnerType: partner?.businessType === "laundry" ? "LAUNDRY_OWNER" : "SERVICE_PARTNER",
+      accountStatus: partner?.accountStatus || "active",
+      services: partner?.serviceCategory || [],
+      permissions: {
+        dashboard: partner?.accountStatus === "active",
+        bookings: partner?.accountStatus === "active",
+        earnings: partner?.accountStatus === "active",
+        staff: partner?.accountStatus === "active" && partner?.businessType === "laundry"
+      },
+      partner
+    });
   } catch (error) {
     return next(error);
   }
@@ -874,7 +886,19 @@ async function me(req, res, next) {
       }
     }
     if (partner) partner = await enforceCompanyServiceIsolation(partner);
-    return res.json({ partner });
+    return res.json({
+      role: "PARTNER",
+      partnerType: partner?.businessType === "laundry" ? "LAUNDRY_OWNER" : "SERVICE_PARTNER",
+      accountStatus: partner?.accountStatus || "active",
+      services: partner?.serviceCategory || [],
+      permissions: {
+        dashboard: partner?.accountStatus === "active",
+        bookings: partner?.accountStatus === "active",
+        earnings: partner?.accountStatus === "active",
+        staff: partner?.accountStatus === "active" && partner?.businessType === "laundry"
+      },
+      partner
+    });
   } catch (error) {
     return next(error);
   }

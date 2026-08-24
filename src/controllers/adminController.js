@@ -1284,42 +1284,69 @@ async function createPartner(req, res, next) {
     const name = String(body.name || "").trim();
     const phone = normalizePartnerPhone(body.phone);
     const email = normalizePartnerEmail(body.email);
-    const category = normalizeServiceCategory(body.serviceCategory || "ac");
+    const requestedCategories = Array.isArray(body.serviceCategories) ? body.serviceCategories : [body.serviceCategory || "ac"];
     const allowedCategories = new Set(["ac", "plumbing", "electrician", "carpenter", "painting", "cleaning", "laundry", "interior", "roadside", "appliances", "pest", "ro"]);
     const city = String(body.city || "Guwahati").trim();
     const state = String(body.state || "Assam").trim();
     const serviceArea = String(body.serviceArea || city || "Guwahati").trim();
-    const approved = body.approved !== false;
+    const categories = [...new Set(requestedCategories.map(normalizeServiceCategory).filter((value) => allowedCategories.has(value)))];
+    const category = categories[0] || "";
+    const partnerType = String(body.partnerType || (categories.includes("laundry") ? "LAUNDRY_OWNER" : "SERVICE_PARTNER")).trim().toUpperCase();
+    const status = String(body.status || "ACTIVE").trim().toUpperCase();
+    const approved = body.approved !== false && status === "ACTIVE";
 
     if (name.length < 2 || name.length > 100) return res.status(400).json({ message: "Partner name must be between 2 and 100 characters." });
-    if (!phone) return res.status(400).json({ message: "Enter a valid 10-digit Indian mobile number." });
+    if (!phone && !email) return res.status(400).json({ message: "Enter a valid mobile number or email address." });
+    if (body.phone && !phone) return res.status(400).json({ message: "Enter a valid 10-digit Indian mobile number." });
     if (body.email && !email) return res.status(400).json({ message: "Enter a valid email address." });
-    if (!allowedCategories.has(category)) return res.status(400).json({ message: "Select a valid service category." });
+    if (!categories.length) return res.status(400).json({ message: "Select at least one valid service category." });
+    if (!["SERVICE_PARTNER", "LAUNDRY_OWNER", "LAUNDRY_PARTNER"].includes(partnerType)) return res.status(400).json({ message: "Select a valid partner type." });
+    if (!["ACTIVE", "INACTIVE", "SUSPENDED"].includes(status)) return res.status(400).json({ message: "Select a valid partner status." });
 
     const phoneHash = partnerIdentityHash(phone);
     const emailHash = partnerIdentityHash(email);
-    const duplicateFilters = [{ phoneHash }];
+    const duplicateFilters = [];
+    if (phoneHash) duplicateFilters.push({ phoneHash });
     if (emailHash) duplicateFilters.push({ emailHash });
-    if (await Partner.exists({ $or: duplicateFilters })) {
-      return res.status(409).json({ message: "A partner with this mobile number or email already exists." });
+    const duplicatePartner = duplicateFilters.length ? await Partner.findOne({ $or: duplicateFilters }).select("_id partnerCode name phone email accountStatus").lean() : null;
+    if (duplicatePartner) {
+      return res.status(409).json({ message: "Partner already exists", existingPartner: { id: id(duplicatePartner._id), partnerCode: duplicatePartner.partnerCode || "", name: duplicatePartner.name, phone: duplicatePartner.phone, email: duplicatePartner.email, status: duplicatePartner.accountStatus } });
     }
 
     const firebase = initFirebase();
-    const e164 = `+91${phone}`;
+    const e164 = phone ? `+91${phone}` : "";
     let firebaseUser;
-    try {
-      firebaseUser = await firebase.auth().getUserByPhoneNumber(e164);
-    } catch (error) {
-      if (error?.code !== "auth/user-not-found") throw error;
-      firebaseUser = await firebase.auth().createUser({ phoneNumber: e164, displayName: name, ...(email ? { email } : {}) });
-      createdFirebaseUid = firebaseUser.uid;
+    let phoneUser;
+    let emailUser;
+    if (phone) {
+      try { phoneUser = await firebase.auth().getUserByPhoneNumber(e164); }
+      catch (error) { if (error?.code !== "auth/user-not-found") throw error; }
     }
-    if (await Partner.exists({ firebaseUid: firebaseUser.uid })) {
-      return res.status(409).json({ message: "This Firebase phone account is already linked to a partner." });
+    if (email) {
+      try { emailUser = await firebase.auth().getUserByEmail(email); }
+      catch (error) { if (error?.code !== "auth/user-not-found") throw error; }
+    }
+    if (phoneUser && emailUser && phoneUser.uid !== emailUser.uid) {
+      return res.status(409).json({ message: "Email and phone belong to different authentication accounts. Use one registered identity or link them in Firebase first." });
+    }
+    firebaseUser = phoneUser || emailUser;
+    if (!firebaseUser) {
+      firebaseUser = await firebase.auth().createUser({ ...(phone ? { phoneNumber: e164 } : {}), displayName: name, ...(email ? { email } : {}) });
+      createdFirebaseUid = firebaseUser.uid;
+    } else if ((phone && !firebaseUser.phoneNumber) || (email && !firebaseUser.email) || firebaseUser.displayName !== name) {
+      firebaseUser = await firebase.auth().updateUser(firebaseUser.uid, {
+        ...(phone && !firebaseUser.phoneNumber ? { phoneNumber: e164 } : {}),
+        ...(email && !firebaseUser.email ? { email } : {}),
+        displayName: name
+      });
+    }
+    const uidPartner = await Partner.findOne({ firebaseUid: firebaseUser.uid }).select("_id partnerCode name phone email accountStatus").lean();
+    if (uidPartner) {
+      return res.status(409).json({ message: "Partner already exists", existingPartner: { id: id(uidPartner._id), partnerCode: uidPartner.partnerCode || "", name: uidPartner.name, phone: uidPartner.phone, email: uidPartner.email, status: uidPartner.accountStatus } });
     }
 
     const now = new Date();
-    const isLaundry = category === "laundry";
+    const isLaundry = partnerType !== "SERVICE_PARTNER" || categories.includes("laundry");
     const partner = await Partner.create({
       firebaseUid: firebaseUser.uid,
       name,
@@ -1327,7 +1354,7 @@ async function createPartner(req, res, next) {
       phoneHash,
       email,
       emailHash,
-      serviceCategory: [category],
+      serviceCategory: isLaundry ? ["laundry"] : categories,
       city,
       state,
       pinCode: String(body.pinCode || "").trim(),
@@ -1349,8 +1376,8 @@ async function createPartner(req, res, next) {
       isOnline: false,
       isVerified: approved,
       kycStatus: approved ? "verified" : "pending_review",
-      trustStatus: approved ? "trusted" : "review_required",
-      accountStatus: "active",
+      trustStatus: status === "SUSPENDED" ? "suspended" : approved ? "trusted" : "review_required",
+      accountStatus: status === "ACTIVE" ? "active" : status === "INACTIVE" ? "inactive" : "suspended",
       approvedAt: approved ? now : null,
       termsConsent: {
         accepted: true,
@@ -1377,10 +1404,10 @@ async function createPartner(req, res, next) {
     });
 
     await cache.del("admin:dashboard:v1");
-    emitAdminEvent("partner:created", { partnerId: id(partner._id), approved, serviceCategory: category });
+    emitAdminEvent("partner:created", { partnerId: id(partner._id), approved, serviceCategory: partner.serviceCategory, partnerType, status: partner.accountStatus });
     return res.status(201).json({
       message: approved ? "Partner created and approved." : "Partner created for verification.",
-      partner: { id: id(partner._id), partnerCode: partner.partnerCode || "", name, phone, email, serviceCategory: partner.serviceCategory, isVerified: partner.isVerified }
+      partner: { id: id(partner._id), partnerCode: partner.partnerCode || "", name, phone, email, partnerType, serviceCategory: partner.serviceCategory, status: partner.accountStatus, isVerified: partner.isVerified }
     });
   } catch (error) {
     if (createdFirebaseUid) {
@@ -1852,6 +1879,11 @@ async function performAdminAction(req, res, next) {
         partnerPhone: partner.phone || "",
         status: isSuspend ? partner.trustStatus : partner.kycStatus
       });
+      emitPartnerEvent(partner._id, "partner:approval_updated", {
+        status: isSuspend ? "suspended" : "rejected",
+        accountStatus: partner.accountStatus,
+        trustStatus: partner.trustStatus
+      });
       await reliableNotify({
         recipients: [partnerNotificationRecipient(partner)],
         title: isSuspend ? "Partner account blocked" : "Verification not approved",
@@ -1931,6 +1963,7 @@ async function performAdminAction(req, res, next) {
       await partner.save();
       await cache.del("admin:dashboard:v1");
       emitAdminEvent("partner:resumed", { partnerId: String(partner._id), partnerCode: partner.partnerCode || "", partnerName: partner.name || "", partnerPhone: partner.phone || "", status: "active", by: actor });
+      emitPartnerEvent(partner._id, "partner:approval_updated", { status: "approved", accountStatus: "active", action: "resumed" });
       await reliableNotify({ recipients: [partnerNotificationRecipient(partner)], title: "Your partner account is active again", body: "Your ApnaServo partner access has been resumed. Go online when you are ready to receive bookings.", category: "partner_approval", priority: "high", data: { type: "partner:resumed", targetApp: "partner", actionType: "OPEN_PARTNER_HOME", partnerId: partner._id, status: "active" } });
       return res.json({ ok: true, action, targetId, status: "active", resumed: true });
     }
