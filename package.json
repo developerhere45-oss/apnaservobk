@@ -19,6 +19,7 @@
     "audit:laundry-workflow": "node scripts/laundry-workflow-audit.js",
     "audit:cleaning-routing": "node scripts/cleaning-booking-routing-audit.js",
     "audit:service-mapping": "node scripts/all-service-booking-mapping-audit.js",
+    "audit:partner-version-compatibility": "node scripts/partner-version-compatibility-audit.js",
     "db:audit": "node scripts/db-audit.js",
     "db:audit:schema": "node scripts/db-audit.js --schema-only",
     "db:migrate": "node scripts/db-migrate-fixes.js",

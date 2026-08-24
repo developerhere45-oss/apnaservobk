@@ -196,7 +196,9 @@ function serializeBooking(booking) {
   const hasAssignedLaundryStaff = Boolean(assignedStaffName && assignedStaffPhone);
   return {
     _id: String(doc._id),
+    id: String(doc._id),
     bookingId: String(doc._id),
+    booking_id: String(doc._id),
     publicId: publicBookingId,
     canonicalBookingId: publicBookingId,
     bookingCode: publicBookingId,
@@ -204,9 +206,13 @@ function serializeBooking(booking) {
     userId: doc.userId ? String(doc.userId) : "",
     partnerId: doc.partnerId ? String(doc.partnerId) : "",
     serviceCategory: doc.serviceCategory,
+    serviceId: doc.serviceCategory,
+    serviceType: doc.serviceCategory,
+    service_category: doc.serviceCategory,
     serviceName: doc.serviceName,
     issue: doc.issue,
     address: doc.address,
+    customerAddress: doc.address,
     addressDetails: doc.addressDetails || {},
     city: doc.city,
     lat: location.coordinates ? location.coordinates[1] : 0,
@@ -217,6 +223,7 @@ function serializeBooking(booking) {
     locationUpdatedBy: doc.locationUpdatedBy || "user",
     locationChange: doc.locationChange || { state: "none" },
     status: doc.status,
+    bookingStatus: doc.status,
     legacyStatus: doc.status,
     lifecycleStatus,
     lifecycleLabel: lifecycleLabel(lifecycleStatus),
@@ -267,6 +274,7 @@ function serializeBooking(booking) {
     expectedArrivalAt: doc.expectedArrivalAt || null,
     expectedArrivalAtMillis: millis(doc.expectedArrivalAt),
     userName: doc.userSnapshot?.name || "",
+    customerName: doc.userSnapshot?.name || "",
     userPhone: doc.userSnapshot?.phone || "",
     primaryPhone: doc.contact?.primaryPhone || doc.userSnapshot?.phone || "",
     alternatePhone: doc.contact?.alternatePhone || "",
@@ -562,7 +570,14 @@ function emitNewBookingToPartners(booking, partners) {
   const payload = partnerBookingPayload(booking);
   const targetPartners = Array.isArray(partners) ? partners : [];
   for (const partner of targetPartners) {
-    io.to(`partner:${partner._id}`).emit("booking:new_request", payload);
+    const room = io.to(`partner:${partner._id}`);
+    room.emit("booking:new_request", payload);
+    // Released legacy Partner builds used these names before the socket
+    // contract was namespaced. Keep them partner-room scoped; never broadcast
+    // by city/service, and keep the REST polling endpoint as the source of
+    // truth when a background socket is paused by Android.
+    room.emit("new_booking", payload);
+    room.emit("booking:new", payload);
   }
 }
 
