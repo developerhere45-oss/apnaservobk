@@ -19,6 +19,9 @@ const DEFAULT_CONFIG = Object.freeze({
   home: { sections: [] },
   forms: {},
   booking: { enabled: true, maxActiveBookings: 10, minimumNoticeMinutes: 0, cancellationEnabled: true },
+  partnerHome: { sections: [] },
+  navigation: [],
+  laundry: { sections: [], dashboardCards: [], services: [], items: [], pickupWorkflow: [], deliveryWorkflow: [], settings: { pickupEnabled: true, deliveryEnabled: true, staffEnabled: true } },
   features: {},
   services: {},
   // Empty URLs mean use the signed application's bundled artwork. This makes
@@ -90,6 +93,30 @@ function normalizeConfig(value) {
     })).filter((field) => field.id && field.label && field.visible).sort((a, b) => a.order - b.order)
   }]));
   output.booking = { enabled: source.booking?.enabled !== false, maxActiveBookings: boundedNumber(source.booking?.maxActiveBookings, 10, 1, 100), minimumNoticeMinutes: boundedNumber(source.booking?.minimumNoticeMinutes, 0, 0, 10080), cancellationEnabled: source.booking?.cancellationEnabled !== false };
+  const partnerSectionTypes = new Set(["online", "stats", "recent_requests", "quick_actions", "active_jobs", "earnings", "banner", "imageBanner", "text", "card", "announcement", "promotion", "emptyState", "staffList", "orderList"]);
+  const normalizePartnerSections = (items) => (Array.isArray(items) ? items : []).slice(0, 40).map((item, index) => ({
+    id: cleanText(item?.id, 60), type: partnerSectionTypes.has(item?.type) ? item.type : "card", enabled: item?.enabled !== false,
+    position: boundedNumber(item?.position, index, 0, 1000), title: cleanText(item?.title, 120), subtitle: cleanText(item?.subtitle, 300),
+    body: cleanText(item?.body, 1000), imageUrl: validMediaUrl(item?.imageUrl), icon: cleanText(item?.icon, 40),
+    ctaText: cleanText(item?.ctaText, 50), ctaAction: cleanText(item?.ctaAction, 100)
+  })).filter((item) => item.id).sort((a, b) => a.position - b.position);
+  output.partnerHome = { sections: normalizePartnerSections(source.partnerHome?.sections) };
+  const safeDestinations = new Set(["home", "bookings", "orders", "earnings", "profile", "laundry", "staff", "notifications"]);
+  output.navigation = (Array.isArray(source.navigation) ? source.navigation : []).slice(0, 12).map((item, index) => ({
+    id: cleanText(item?.id, 40), label: cleanText(item?.label, 40), icon: cleanText(item?.icon, 40), destination: cleanText(item?.destination, 40),
+    enabled: item?.enabled !== false, position: boundedNumber(item?.position, index, 0, 100)
+  })).filter((item) => item.id && safeDestinations.has(item.destination)).sort((a, b) => a.position - b.position);
+  const metricIds = new Set(["new_orders", "pickup_scheduled", "in_washing", "ready_for_delivery", "out_for_delivery", "today_earnings", "active_staff"]);
+  const workflowStatuses = new Set(["accepted", "pickup_scheduled", "on_the_way", "arrived", "picked_up", "in_washing", "ready_for_delivery", "delivery_assigned", "out_for_delivery", "delivered"]);
+  const catalogItems = (items) => (Array.isArray(items) ? items : []).slice(0, 100).map((item, index) => ({ id: cleanText(item?.id, 60), name: cleanText(item?.name, 100), description: cleanText(item?.description, 300), imageUrl: validMediaUrl(item?.imageUrl), icon: cleanText(item?.icon, 40), enabled: item?.enabled !== false, order: boundedNumber(item?.order, index, 0, 1000) })).filter((item) => item.id && item.name).sort((a, b) => a.order - b.order);
+  const workflow = (steps) => (Array.isArray(steps) ? steps : []).slice(0, 20).map((step, index) => ({ id: cleanText(step?.id, 60), status: cleanText(step?.status, 60), label: cleanText(step?.label, 100), description: cleanText(step?.description, 300), enabled: step?.enabled !== false, order: boundedNumber(step?.order, index, 0, 100), color: color(step?.color, "#f32368"), staffRequired: Boolean(step?.staffRequired) })).filter((step) => step.id && workflowStatuses.has(step.status)).sort((a, b) => a.order - b.order);
+  output.laundry = {
+    sections: normalizePartnerSections(source.laundry?.sections),
+    dashboardCards: (Array.isArray(source.laundry?.dashboardCards) ? source.laundry.dashboardCards : []).slice(0, 20).map((card, index) => ({ id: cleanText(card?.id, 60), metric: cleanText(card?.metric, 60), title: cleanText(card?.title, 80), subtitle: cleanText(card?.subtitle, 120), icon: cleanText(card?.icon, 40), color: color(card?.color, "#f32368"), enabled: card?.enabled !== false, order: boundedNumber(card?.order, index, 0, 100) })).filter((card) => card.id && metricIds.has(card.metric)).sort((a, b) => a.order - b.order),
+    services: catalogItems(source.laundry?.services), items: catalogItems(source.laundry?.items),
+    pickupWorkflow: workflow(source.laundry?.pickupWorkflow), deliveryWorkflow: workflow(source.laundry?.deliveryWorkflow),
+    settings: { pickupEnabled: source.laundry?.settings?.pickupEnabled !== false, deliveryEnabled: source.laundry?.settings?.deliveryEnabled !== false, staffEnabled: source.laundry?.settings?.staffEnabled !== false }
+  };
   output.features = Object.fromEntries(Object.entries(source.features && typeof source.features === "object" ? source.features : {}).slice(0, 100).map(([key, item]) => [cleanText(key, 80), { enabled: Boolean(item?.enabled), audience: ["all", "users", "partners", "logged_in"].includes(item?.audience) ? item.audience : "all", startsAt: validDate(item?.startsAt), endsAt: validDate(item?.endsAt), description: cleanText(item?.description, 300) }]));
   output.services = Object.fromEntries(Object.entries(source.services && typeof source.services === "object" ? source.services : {}).slice(0, 300).map(([key, item]) => [cleanText(key, 80), { status: ["AVAILABLE", "PREPARING", "HIGH_DEMAND", "TEMPORARILY_UNAVAILABLE", "DISABLED"].includes(String(item?.status || "").toUpperCase()) ? String(item.status).toUpperCase() : "AVAILABLE", message: cleanText(item?.message, 300), startsAt: validDate(item?.startsAt), endsAt: validDate(item?.endsAt) }]));
   const mediaServices = source.media?.services && typeof source.media.services === "object" ? source.media.services : {};
