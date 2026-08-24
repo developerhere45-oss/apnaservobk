@@ -806,6 +806,16 @@ function emitAdminEvent(eventName, payload = {}) {
   }
 }
 
+function emitPartnerEvent(partnerId, eventName, payload = {}) {
+  if (!io || !partnerId || !eventName) return;
+  io.to(`partner:${partnerId}`).emit(eventName, {
+    ...payload,
+    partnerId: String(partnerId),
+    eventName,
+    emittedAt: new Date().toISOString()
+  });
+}
+
 function getIO() {
   return io;
 }
@@ -820,6 +830,7 @@ module.exports = {
   emitBookingChatMessage,
   emitBookingChatSeen,
   emitAdminEvent,
+  emitPartnerEvent,
   serializeBooking,
   partnerBookingPayload,
   getIO

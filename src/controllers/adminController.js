@@ -20,7 +20,7 @@ const SupportTicket = require("../models/SupportTicket");
 const AdminActivity = require("../models/AdminActivity");
 const cache = require("../config/cache");
 const { recomputePartnerRating } = require("../utils/ratingAggregation");
-const { emitAdminEvent, emitNewBookingToPartners, emitBookingStatusUpdate } = require("../sockets/bookingSocket");
+const { emitAdminEvent, emitPartnerEvent, emitNewBookingToPartners, emitBookingStatusUpdate } = require("../sockets/bookingSocket");
 const { getBookingLaunchConfig, setBookingLaunchAt } = require("../utils/bookingLaunchConfig");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens, tokenHash } = require("../utils/notificationTokens");
@@ -1773,6 +1773,11 @@ async function performAdminAction(req, res, next) {
         source: "admin_dashboard",
         approvalVersion: Number(partner.approvalVersion || 0),
         previousKycStatus: existingPartner.kycStatus
+      });
+      emitPartnerEvent(partner._id, "partner:approval_updated", {
+        status: "approved",
+        approvalVersion: Number(partner.approvalVersion || 0),
+        action: isReapproval ? "reapproved" : "approved"
       });
       await reliableNotify({
         recipients: [partnerNotificationRecipient(partner)],
