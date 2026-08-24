@@ -22,6 +22,9 @@ const bookingSchema = new mongoose.Schema(
     serviceCategory: { type: String, required: true, index: true },
     serviceName: { type: String, default: "Service" },
     issue: { type: String, default: "Service request" },
+    formAnswers: { type: mongoose.Schema.Types.Mixed, default: {} },
+    formSchemaVersion: { type: Number, default: 0 },
+    appConfigVersion: { type: Number, default: 0 },
     address: { type: String, required: true },
     addressDetails: {
       houseFlat: { type: String, trim: true, default: "" },

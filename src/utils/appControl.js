@@ -8,6 +8,17 @@ const DEFAULT_CONFIG = Object.freeze({
   launch: { enabled: false, launchAt: "", timezone: "Asia/Kolkata", title: "", dateText: "", description: "", ctaText: "Notify me", imageUrl: "" },
   update: { enabled: false, type: "soft", latestVersion: "", minimumVersion: "", title: "", message: "", buttonText: "Update now", storeUrl: "" },
   ui: { homeTitle: "", homeSubtitle: "", primaryColor: "#f32368", hiddenSections: [] },
+  theme: {
+    primaryColor: "#f32368", secondaryColor: "#7e0012", accentColor: "#ff3f5f",
+    backgroundColor: "#fff8f4", surfaceColor: "#ffffff", cardColor: "#ffffff",
+    textColor: "#161616", secondaryTextColor: "#605b58", borderColor: "#eee1dd",
+    successColor: "#16b16f", warningColor: "#d9898d", errorColor: "#d92d55",
+    buttonColor: "#ff3f5f", buttonTextColor: "#ffffff", fontFamily: "system",
+    borderRadius: 12, buttonRadius: 12, cardRadius: 18
+  },
+  home: { sections: [] },
+  forms: {},
+  booking: { enabled: true, maxActiveBookings: 10, minimumNoticeMinutes: 0, cancellationEnabled: true },
   features: {},
   services: {},
   // Empty URLs mean use the signed application's bundled artwork. This makes
@@ -32,6 +43,8 @@ function validMediaUrl(value) {
     return url.protocol === "https:" ? url.toString() : "";
   } catch { return ""; }
 }
+function color(value, fallback) { const raw = cleanText(value, 7); return /^#[0-9a-fA-F]{6}$/.test(raw) ? raw.toLowerCase() : fallback; }
+function boundedNumber(value, fallback, min, max) { const number = Number(value); return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback; }
 
 function normalizeConfig(value) {
   const source = value && typeof value === "object" ? value : {};
@@ -47,6 +60,36 @@ function normalizeConfig(value) {
   const primaryColor = cleanText(source.ui?.primaryColor, 7);
   const allowedSections = new Set(["hero", "announcements", "quick_services", "commercial", "popular_services", "more_services", "feature_strip", "online", "stats", "recent_requests"]);
   output.ui = { homeTitle: cleanText(source.ui?.homeTitle, 80), homeSubtitle: cleanText(source.ui?.homeSubtitle, 160), primaryColor: /^#[0-9a-fA-F]{6}$/.test(primaryColor) ? primaryColor : "#f32368", hiddenSections: [...new Set(Array.isArray(source.ui?.hiddenSections) ? source.ui.hiddenSections.map((item) => cleanText(item, 40)).filter((item) => allowedSections.has(item)) : [])].slice(0, 12) };
+  const defaults = output.theme;
+  output.theme = {
+    primaryColor: color(source.theme?.primaryColor || source.ui?.primaryColor, defaults.primaryColor),
+    secondaryColor: color(source.theme?.secondaryColor, defaults.secondaryColor), accentColor: color(source.theme?.accentColor, defaults.accentColor),
+    backgroundColor: color(source.theme?.backgroundColor, defaults.backgroundColor), surfaceColor: color(source.theme?.surfaceColor, defaults.surfaceColor),
+    cardColor: color(source.theme?.cardColor, defaults.cardColor), textColor: color(source.theme?.textColor, defaults.textColor),
+    secondaryTextColor: color(source.theme?.secondaryTextColor, defaults.secondaryTextColor), borderColor: color(source.theme?.borderColor, defaults.borderColor),
+    successColor: color(source.theme?.successColor, defaults.successColor), warningColor: color(source.theme?.warningColor, defaults.warningColor),
+    errorColor: color(source.theme?.errorColor, defaults.errorColor), buttonColor: color(source.theme?.buttonColor, defaults.buttonColor),
+    buttonTextColor: color(source.theme?.buttonTextColor, defaults.buttonTextColor),
+    fontFamily: ["system", "sans", "serif", "monospace"].includes(cleanText(source.theme?.fontFamily, 20)) ? cleanText(source.theme?.fontFamily, 20) : "system",
+    borderRadius: boundedNumber(source.theme?.borderRadius, 12, 0, 32), buttonRadius: boundedNumber(source.theme?.buttonRadius, 12, 0, 32), cardRadius: boundedNumber(source.theme?.cardRadius, 18, 0, 40)
+  };
+  const sectionIds = new Set(["hero", "announcements", "quick_services", "commercial", "popular_services", "more_services", "feature_strip", "support"]);
+  output.home = { sections: (Array.isArray(source.home?.sections) ? source.home.sections : []).slice(0, 30).map((item, index) => ({
+    id: cleanText(item?.id, 40), enabled: item?.enabled !== false, position: boundedNumber(item?.position, index, 0, 100),
+    title: cleanText(item?.title, 100), subtitle: cleanText(item?.subtitle, 200), imageUrl: validMediaUrl(item?.imageUrl),
+    ctaText: cleanText(item?.ctaText, 40), ctaAction: cleanText(item?.ctaAction, 120)
+  })).filter((item) => sectionIds.has(item.id)).sort((a, b) => a.position - b.position) };
+  const allowedFieldTypes = new Set(["text", "textarea", "number", "phone", "email", "date", "time", "dateTime", "singleSelect", "multiSelect", "radio", "checkbox", "imageUpload", "location", "address"]);
+  output.forms = Object.fromEntries(Object.entries(source.forms && typeof source.forms === "object" ? source.forms : {}).slice(0, 100).map(([serviceId, schema]) => [cleanText(serviceId, 80), {
+    version: boundedNumber(schema?.version, 1, 1, 100000), fields: (Array.isArray(schema?.fields) ? schema.fields : []).slice(0, 60).map((field, index) => ({
+      id: cleanText(field?.id, 80), label: cleanText(field?.label, 120), type: allowedFieldTypes.has(field?.type) ? field.type : "text",
+      placeholder: cleanText(field?.placeholder, 200), required: Boolean(field?.required), defaultValue: cleanText(field?.defaultValue, 500),
+      options: (Array.isArray(field?.options) ? field.options : []).slice(0, 100).map((option) => cleanText(option, 120)).filter(Boolean),
+      visible: field?.visible !== false, order: boundedNumber(field?.order, index, 0, 1000), helpText: cleanText(field?.helpText, 300),
+      validation: { minLength: boundedNumber(field?.validation?.minLength, 0, 0, 10000), maxLength: boundedNumber(field?.validation?.maxLength, 1000, 1, 10000), minValue: boundedNumber(field?.validation?.minValue, 0, -100000000, 100000000), maxValue: boundedNumber(field?.validation?.maxValue, 100000000, -100000000, 100000000), regex: cleanText(field?.validation?.regex, 300) }
+    })).filter((field) => field.id && field.label && field.visible).sort((a, b) => a.order - b.order)
+  }]));
+  output.booking = { enabled: source.booking?.enabled !== false, maxActiveBookings: boundedNumber(source.booking?.maxActiveBookings, 10, 1, 100), minimumNoticeMinutes: boundedNumber(source.booking?.minimumNoticeMinutes, 0, 0, 10080), cancellationEnabled: source.booking?.cancellationEnabled !== false };
   output.features = Object.fromEntries(Object.entries(source.features && typeof source.features === "object" ? source.features : {}).slice(0, 100).map(([key, item]) => [cleanText(key, 80), { enabled: Boolean(item?.enabled), audience: ["all", "users", "partners", "logged_in"].includes(item?.audience) ? item.audience : "all", startsAt: validDate(item?.startsAt), endsAt: validDate(item?.endsAt), description: cleanText(item?.description, 300) }]));
   output.services = Object.fromEntries(Object.entries(source.services && typeof source.services === "object" ? source.services : {}).slice(0, 300).map(([key, item]) => [cleanText(key, 80), { status: ["AVAILABLE", "PREPARING", "HIGH_DEMAND", "TEMPORARILY_UNAVAILABLE", "DISABLED"].includes(String(item?.status || "").toUpperCase()) ? String(item.status).toUpperCase() : "AVAILABLE", message: cleanText(item?.message, 300), startsAt: validDate(item?.startsAt), endsAt: validDate(item?.endsAt) }]));
   const mediaServices = source.media?.services && typeof source.media.services === "object" ? source.media.services : {};
@@ -77,6 +120,9 @@ async function getPublishedConfig({ force = false, app = "customer" } = {}) {
 }
 
 function bookingAvailability(config) {
+  if (config?.booking?.enabled === false) {
+    return { allowed: false, httpStatus: 503, code: "NEW_BOOKINGS_DISABLED", message: "New bookings are temporarily paused. Existing bookings remain available." };
+  }
   const mode = config?.appStatus?.mode || "LIVE";
   if (mode === "MAINTENANCE") {
     return { allowed: false, httpStatus: 503, code: "APP_MAINTENANCE", message: "ApnaServo is under maintenance. Please try again after some time." };

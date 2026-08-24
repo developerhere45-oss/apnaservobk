@@ -63,8 +63,35 @@ const createBookingSchema = z.object({
   emergency: z.boolean().optional(),
   emergencyType: z.enum(["electric_short_circuit", "water_leakage", "ac_breakdown", "other"]).optional(),
   emergencyPriority: z.enum(["normal", "urgent", "critical"]).optional(),
-  emergencyNotes: z.string().trim().max(500).optional()
+  emergencyNotes: z.string().trim().max(500).optional(),
+  formAnswers: z.record(z.string().max(500)).optional().default({}),
+  formConfigVersion: z.union([z.string().max(40), z.number()]).optional()
 });
+
+function validatedFormAnswers(config, category, submitted) {
+  const schema = config?.forms?.[category];
+  const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+  if (!fields.length) return {};
+  const answers = submitted && typeof submitted === "object" ? submitted : {};
+  const output = {};
+  for (const field of fields) {
+    if (!field?.id || field.visible === false) continue;
+    const value = String(answers[field.id] ?? "").trim();
+    if (field.required && !value) {
+      const error = new Error(`${field.label || field.id} is required`); error.status = 400; error.code = "FORM_FIELD_REQUIRED"; throw error;
+    }
+    if (!value) continue;
+    const validation = field.validation || {};
+    if (value.length < Number(validation.minLength || 0) || value.length > Number(validation.maxLength || 1000)) {
+      const error = new Error(`${field.label || field.id} is invalid`); error.status = 400; error.code = "FORM_FIELD_INVALID"; throw error;
+    }
+    if (["singleSelect", "radio"].includes(field.type) && Array.isArray(field.options) && field.options.length && !field.options.includes(value)) {
+      const error = new Error(`${field.label || field.id} must use a published option`); error.status = 400; error.code = "FORM_OPTION_INVALID"; throw error;
+    }
+    output[field.id] = value;
+  }
+  return output;
+}
 
 const callActionSchema = z.object({
   action: z.enum(["start", "report"]),
@@ -844,6 +871,7 @@ async function createBooking(req, res, next) {
     if (submittedPrimaryPhone) body.userPhone = submittedPrimaryPhone;
     const category = normalizeServiceCategory(body.serviceCategory || serviceCategoryForEmergency(body.emergencyType));
     const config = publishedControl.config;
+    const formAnswers = validatedFormAnswers(config, category, body.formAnswers);
     const service = await Service.findOne({ serviceCategory: { $in: serviceCategoryVariants(category) } }).lean();
     // This is intentionally before user/profile creation.  A blocked booking
     // attempt must not have any booking-side effects, even when called directly.
@@ -919,6 +947,12 @@ async function createBooking(req, res, next) {
       });
     }
 
+    const maxActiveBookings = Number(config.booking?.maxActiveBookings || 10);
+    const activeBookingCount = await Booking.countDocuments({ userId: user._id, status: { $nin: ["completed", "cancelled", "expired"] } });
+    if (activeBookingCount >= maxActiveBookings) {
+      return res.status(409).json({ code: "MAX_ACTIVE_BOOKINGS", message: `You can have up to ${maxActiveBookings} active bookings at a time.` });
+    }
+
     let booking;
     try {
       booking = await Booking.create({
@@ -952,6 +986,9 @@ async function createBooking(req, res, next) {
         status: "pending",
         requestExpiresAt: new Date(Date.now() + PARTNER_REQUEST_TTL_MS),
         emergency,
+        formAnswers,
+        formSchemaVersion: Number(config.forms?.[category]?.version || 0),
+        appConfigVersion: Number(publishedControl.version || 0),
         userSnapshot: {
           name: body.userName || user.name,
           phone: primaryPhone,
