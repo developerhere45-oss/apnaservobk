@@ -1,14 +1,14 @@
 const SERVICE_ALIASES = {
-  ac: ["ac", "ac_repair", "ac repair", "air conditioner"],
+  ac: ["ac", "ac_repair", "ac repair", "ac_service", "ac service", "air conditioner"],
   plumbing: ["plumbing", "plumber", "pipe", "tap"],
   electrician: ["electrician", "electric", "electrical"],
   carpenter: ["carpenter", "wood", "furniture"],
   painting: ["painting", "paint"],
-  cleaning: ["cleaning", "cleaning_services", "cleaning services"],
-  laundry: ["laundry", "dry_clean", "dry clean", "cloth", "clothes", "ironing", "washing service"],
+  laundry: ["laundry", "dry_clean", "dry clean", "dry_cleaning", "cloth_wash", "cloth wash", "clothes", "ironing", "washing service"],
+  cleaning: ["cleaning", "cleaning_services", "cleaning services", "home_cleaning", "home cleaning"],
   interior: ["interior", "interior_design", "interior design"],
   roadside: ["roadside", "roadside_assistance", "roadside assistance"],
-  appliances: ["appliances", "appliance"],
+  appliances: ["appliances", "appliance", "appliance_repair", "appliance repair", "washing_machine", "washing machine", "refrigerator", "fridge", "microwave"],
   pest: ["pest", "pest_control", "pest control"],
   ro: ["ro", "ro_service", "ro service", "water purifier", "purifier", "water filter"]
 };
@@ -52,8 +52,16 @@ function normalizeServiceCategory(value) {
     return "service";
   }
 
+  // Exact normalized IDs win before fuzzy labels. Without this pass,
+  // `dry_cleaning` matched the generic Cleaning family before Laundry.
   for (const [key, aliases] of Object.entries(SERVICE_ALIASES)) {
-    if (aliases.some((alias) => raw === alias || raw.includes(alias))) {
+    if (aliases.some((alias) => raw === String(alias).replace(/[-_]+/g, " "))) {
+      return key;
+    }
+  }
+
+  for (const [key, aliases] of Object.entries(SERVICE_ALIASES)) {
+    if (aliases.some((alias) => raw.includes(String(alias).replace(/[-_]+/g, " ")))) {
       return key;
     }
   }
