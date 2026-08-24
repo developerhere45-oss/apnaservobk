@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const crypto = require("crypto");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
 const PartnerDocument = require("../models/PartnerDocument");
@@ -29,6 +30,26 @@ const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
 const { partnerAssetUrl, verifyPartnerAssetToken } = require("../utils/partnerUploadAssets");
 const { sendPartnerApprovalWelcomeEmails } = require("../utils/welcomeEmail");
 const { decryptString } = require("../utils/fieldCrypto");
+const { initFirebase } = require("../config/firebase");
+const { normalizeServiceCategory } = require("../utils/serviceCategory");
+
+function normalizePartnerPhone(value) {
+  const valueDigits = String(value || "").replace(/\D/g, "");
+  const phone = valueDigits.length > 10 ? valueDigits.slice(-10) : valueDigits;
+  return /^[6-9]\d{9}$/.test(phone) ? phone : "";
+}
+
+function normalizePartnerEmail(value) {
+  const email = String(value || "").trim().toLowerCase();
+  return !email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "";
+}
+
+function partnerIdentityHash(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  const secret = process.env.IDENTITY_HASH_PEPPER || process.env.ENCRYPTION_KEY || "apnaservo-dev-identity-hash";
+  return crypto.createHmac("sha256", secret).update(normalized).digest("hex");
+}
 
 function iso(value) {
   return value ? new Date(value).toISOString() : "";
@@ -1252,6 +1273,124 @@ async function listAdminActivity(req, res, next) {
       activity: activity.map(serializeAdminActivity)
     });
   } catch (error) {
+    return next(error);
+  }
+}
+
+async function createPartner(req, res, next) {
+  let createdFirebaseUid = "";
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const name = String(body.name || "").trim();
+    const phone = normalizePartnerPhone(body.phone);
+    const email = normalizePartnerEmail(body.email);
+    const category = normalizeServiceCategory(body.serviceCategory || "ac");
+    const allowedCategories = new Set(["ac", "plumbing", "electrician", "carpenter", "painting", "cleaning", "laundry", "interior", "roadside", "appliances", "pest", "ro"]);
+    const city = String(body.city || "Guwahati").trim();
+    const state = String(body.state || "Assam").trim();
+    const serviceArea = String(body.serviceArea || city || "Guwahati").trim();
+    const approved = body.approved !== false;
+
+    if (name.length < 2 || name.length > 100) return res.status(400).json({ message: "Partner name must be between 2 and 100 characters." });
+    if (!phone) return res.status(400).json({ message: "Enter a valid 10-digit Indian mobile number." });
+    if (body.email && !email) return res.status(400).json({ message: "Enter a valid email address." });
+    if (!allowedCategories.has(category)) return res.status(400).json({ message: "Select a valid service category." });
+
+    const phoneHash = partnerIdentityHash(phone);
+    const emailHash = partnerIdentityHash(email);
+    const duplicateFilters = [{ phoneHash }];
+    if (emailHash) duplicateFilters.push({ emailHash });
+    if (await Partner.exists({ $or: duplicateFilters })) {
+      return res.status(409).json({ message: "A partner with this mobile number or email already exists." });
+    }
+
+    const firebase = initFirebase();
+    const e164 = `+91${phone}`;
+    let firebaseUser;
+    try {
+      firebaseUser = await firebase.auth().getUserByPhoneNumber(e164);
+    } catch (error) {
+      if (error?.code !== "auth/user-not-found") throw error;
+      firebaseUser = await firebase.auth().createUser({ phoneNumber: e164, displayName: name, ...(email ? { email } : {}) });
+      createdFirebaseUid = firebaseUser.uid;
+    }
+    if (await Partner.exists({ firebaseUid: firebaseUser.uid })) {
+      return res.status(409).json({ message: "This Firebase phone account is already linked to a partner." });
+    }
+
+    const now = new Date();
+    const isLaundry = category === "laundry";
+    const partner = await Partner.create({
+      firebaseUid: firebaseUser.uid,
+      name,
+      phone,
+      phoneHash,
+      email,
+      emailHash,
+      serviceCategory: [category],
+      city,
+      state,
+      pinCode: String(body.pinCode || "").trim(),
+      residentialAddress: String(body.residentialAddress || "").trim(),
+      serviceArea,
+      workingAreas: String(body.workingAreas || serviceArea).trim(),
+      yearsOfExperience: Math.max(0, Math.min(60, Number(body.yearsOfExperience || 0))),
+      languagesKnown: String(body.languagesKnown || "").trim(),
+      businessType: isLaundry ? "laundry" : "",
+      businessVerificationStatus: isLaundry ? (approved ? "approved" : "pending_review") : "not_required",
+      ...(isLaundry ? { laundryBusiness: {
+        shopName: String(body.shopName || name).trim(),
+        shopLicenseNumber: String(body.shopLicenseNumber || "").trim(),
+        shopLocation: String(body.shopLocation || serviceArea).trim(),
+        ownerName: name,
+        ownerPhone: phone,
+        staffMembers: []
+      } } : {}),
+      isOnline: false,
+      isVerified: approved,
+      kycStatus: approved ? "verified" : "pending_review",
+      trustStatus: approved ? "trusted" : "review_required",
+      accountStatus: "active",
+      approvedAt: approved ? now : null,
+      termsConsent: {
+        accepted: true,
+        version: "admin-created-v1",
+        acceptedAt: now,
+        clientAcceptedAt: now,
+        registrationFlow: "admin_manual",
+        serviceCategory: category,
+        documentKey: "partner_terms",
+        sourceApp: "admin_panel",
+        ipAddress: req.ip || "",
+        userAgent: req.get("user-agent") || ""
+      },
+      termsAcceptanceHistory: [{
+        accepted: true,
+        version: "admin-created-v1",
+        acceptedAt: now,
+        clientAcceptedAt: now,
+        registrationFlow: "admin_manual",
+        serviceCategory: category,
+        documentKey: "partner_terms",
+        sourceApp: "admin_panel"
+      }]
+    });
+
+    await cache.del("admin:dashboard:v1");
+    emitAdminEvent("partner:created", { partnerId: id(partner._id), approved, serviceCategory: category });
+    return res.status(201).json({
+      message: approved ? "Partner created and approved." : "Partner created for verification.",
+      partner: { id: id(partner._id), partnerCode: partner.partnerCode || "", name, phone, email, serviceCategory: partner.serviceCategory, isVerified: partner.isVerified }
+    });
+  } catch (error) {
+    if (createdFirebaseUid) {
+      try {
+        await initFirebase().auth().deleteUser(createdFirebaseUid);
+      } catch (rollbackError) {
+        console.error("Failed to roll back manually-created Firebase partner", rollbackError);
+      }
+    }
+    if (error?.code === 11000) return res.status(409).json({ message: "A partner with this mobile number or email already exists." });
     return next(error);
   }
 }
@@ -2921,6 +3060,7 @@ module.exports = {
   updateBookingLaunchSettings,
   dashboard,
   listAdminActivity,
+  createPartner,
   listResourceRows,
   performAdminAction,
   smartAssignmentDashboard,

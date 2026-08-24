@@ -97,6 +97,7 @@ router.post("/smart-assignment/bulk-assign", controller.smartBulkAssignPending);
 router.get("/users/control-center", controller.usersControlCenter);
 router.get("/users/:userId", controller.userProfile);
 router.patch("/users/:userId", controller.updateUserAdminState);
+router.post("/partners", controller.createPartner);
 router.get("/partners/:partnerId", controller.partnerProfile);
 router.patch("/partners/:partnerId/documents/:documentId", controller.updatePartnerDocument);
 router.get("/bookings/:bookingId/timeline", controller.bookingTimelineDetails);
