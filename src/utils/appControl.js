@@ -6,7 +6,7 @@ const DEFAULT_CONFIG = Object.freeze({
   // would let the dashboard and API disagree.
   appStatus: { mode: "LIVE" },
   launch: { enabled: false, launchAt: "", timezone: "Asia/Kolkata", title: "", dateText: "", description: "", ctaText: "Notify me", imageUrl: "" },
-  update: { enabled: false, type: "soft", latestVersion: "", minimumVersion: "", title: "", message: "", buttonText: "Update now", storeUrl: "" },
+  update: { platforms: { android: { enabled: false, type: "soft", latestVersion: "", latestBuild: 0, minimumVersion: "", minimumBuild: 0, title: "", message: "", buttonText: "Update now", storeUrl: "" }, ios: { enabled: false, type: "soft", latestVersion: "", latestBuild: 0, minimumVersion: "", minimumBuild: 0, title: "", message: "", buttonText: "Update now", storeUrl: "" } } },
   ui: { homeTitle: "", homeSubtitle: "", primaryColor: "#f32368", hiddenSections: [] },
   theme: {
     primaryColor: "#f32368", secondaryColor: "#7e0012", accentColor: "#ff3f5f",
@@ -58,8 +58,12 @@ function normalizeConfig(value) {
   // unknown value is fail-closed until an admin selects and publishes a valid one.
   output.appStatus = { mode: !requestedMode ? "LIVE" : modes.has(requestedMode) ? requestedMode : "MAINTENANCE" };
   output.launch = { enabled: Boolean(source.launch?.enabled), launchAt: validDate(source.launch?.launchAt), timezone: cleanText(source.launch?.timezone, 60) || "Asia/Kolkata", title: cleanText(source.launch?.title, 100), dateText: cleanText(source.launch?.dateText, 80), description: cleanText(source.launch?.description, 500), ctaText: cleanText(source.launch?.ctaText, 40) || "Notify me", imageUrl: cleanText(source.launch?.imageUrl, 500) };
-  const updateType = String(source.update?.type || "soft").toLowerCase();
-  output.update = { enabled: Boolean(source.update?.enabled), type: updateType === "force" ? "force" : "soft", latestVersion: cleanText(source.update?.latestVersion, 30), minimumVersion: cleanText(source.update?.minimumVersion, 30), title: cleanText(source.update?.title, 100), message: cleanText(source.update?.message, 500), buttonText: cleanText(source.update?.buttonText, 40) || "Update now", storeUrl: cleanText(source.update?.storeUrl, 500) };
+  const normalizeUpdate = (value = {}) => {
+    const type = ["force", "mandatory"].includes(String(value.type || "soft").toLowerCase()) ? "force" : "soft";
+    return { enabled: Boolean(value.enabled), type, latestVersion: cleanText(value.latestVersion, 30), latestBuild: boundedNumber(value.latestBuild, 0, 0, 2147483647), minimumVersion: cleanText(value.minimumVersion, 30), minimumBuild: boundedNumber(value.minimumBuild, 0, 0, 2147483647), title: cleanText(value.title, 100), message: cleanText(value.message, 2000), buttonText: cleanText(value.buttonText, 40) || "Update now", storeUrl: cleanText(value.storeUrl, 500) };
+  };
+  const legacyUpdate = source.update || {};
+  output.update = { platforms: { android: normalizeUpdate(source.update?.platforms?.android || legacyUpdate), ios: normalizeUpdate(source.update?.platforms?.ios || {}) } };
   const primaryColor = cleanText(source.ui?.primaryColor, 7);
   const allowedSections = new Set(["hero", "announcements", "quick_services", "commercial", "popular_services", "more_services", "feature_strip", "online", "stats", "recent_requests"]);
   output.ui = { homeTitle: cleanText(source.ui?.homeTitle, 80), homeSubtitle: cleanText(source.ui?.homeSubtitle, 160), primaryColor: /^#[0-9a-fA-F]{6}$/.test(primaryColor) ? primaryColor : "#f32368", hiddenSections: [...new Set(Array.isArray(source.ui?.hiddenSections) ? source.ui.hiddenSections.map((item) => cleanText(item, 40)).filter((item) => allowedSections.has(item)) : [])].slice(0, 12) };
@@ -141,7 +145,7 @@ async function getPublishedConfig({ force = false, app = "customer" } = {}) {
   const cached = cache.get(target);
   if (!force && cached && Date.now() - cached.at < CONFIG_CACHE_TTL_MS) return cached.value;
   const document = await AppControlConfig.findOne({ key: `${target}-app` }).lean();
-  const value = { config: normalizeConfig(document?.published), version: Number(document?.version || 0), updatedAt: document?.updatedAt || null };
+  const value = { config: normalizeConfig(document?.published), version: Number(document?.version || 0), publishedAt: document?.publishedAt || null, updatedAt: document?.updatedAt || null };
   cache.set(target, { at: Date.now(), value });
   return value;
 }

@@ -39,15 +39,11 @@ function compareReleaseVersions(left, right) {
   }
   return 0;
 }
-function managedCustomerUpdate(value) {
-  const type = String(value?.type || "soft").toLowerCase() === "force" ? "force" : "soft";
-  // The operator supplies the exact versionName uploaded to Play. This avoids
-  // a deployment environment variable becoming stale after a later release.
+function managedPlatformUpdate(value) {
+  const type = ["force", "mandatory"].includes(String(value?.type || "soft").toLowerCase()) ? "force" : "soft";
   const target = normalizedReleaseVersion(value?.latestVersion);
   const enabled = Boolean(value?.enabled) && Boolean(target);
-  const minimum = type === "force" && enabled
-    ? normalizedReleaseVersion(value?.minimumVersion || target)
-    : "";
+  const minimum = enabled && value?.minimumVersion ? normalizedReleaseVersion(value.minimumVersion) : "";
   if (minimum && compareReleaseVersions(minimum, target) > 0) {
     const error = new Error("Minimum version cannot be newer than the target version");
     error.status = 400;
@@ -57,13 +53,23 @@ function managedCustomerUpdate(value) {
     enabled,
     type,
     latestVersion: target,
+    latestBuild: Math.max(0, Math.trunc(Number(value?.latestBuild || 0))),
     minimumVersion: minimum,
-    title: "",
-    message: "",
-    buttonText: "Update Now",
-    storeUrl: "https://play.google.com/store/apps/details?id=com.apnaservo.user"
+    minimumBuild: Math.max(0, Math.trunc(Number(value?.minimumBuild || 0))),
+    title: String(value?.title || "").trim(),
+    message: String(value?.message || "").trim(),
+    buttonText: String(value?.buttonText || "Update Now").trim() || "Update Now",
+    storeUrl: String(value?.storeUrl || "").trim()
   };
 }
+function managedUpdate(value) {
+  const platforms = value?.platforms || { android: value };
+  return { platforms: {
+    android: managedPlatformUpdate(platforms.android || {}),
+    ios: managedPlatformUpdate(platforms.ios || {})
+  } };
+}
+const managedCustomerUpdate = managedUpdate;
 function itemPayload(body) { const fields = ["title", "message", "imageUrl", "ctaText", "ctaAction", "serviceCategory", "placement", "priority", "audience", "startsAt", "endsAt"]; const output = Object.fromEntries(fields.filter((field) => Object.hasOwn(body || {}, field)).map((field) => [field, body[field]])); const start = output.startsAt ? new Date(output.startsAt).getTime() : -Infinity; const end = output.endsAt ? new Date(output.endsAt).getTime() : Infinity; if (Number.isNaN(start) || Number.isNaN(end) || start > end) { const error = new Error("End time must be after start time"); error.status = 400; throw error; } return output; }
 async function audit(req, eventName, title, detail, payload = {}) { await AdminActivity.create({ eventName, category: "app_control", title, detail, actorRole: "admin", actorName: actor(req), status: "success", payload: { ...payload, app: targetApp(req) } }); }
 function broadcast(req, eventName, payload = {}) { emitAdminEvent(eventName, { app: targetApp(req), ...payload }); }
@@ -103,7 +109,7 @@ function mergedCustomerServices(databaseServices) {
   return [...catalogServices, ...additionalServices];
 }
 
-async function publicConfig(req, res, next) { try { const app = normalizedApp(req.query.app); res.set("Cache-Control", "no-store, max-age=0"); return res.json(await getPublicAppControlConfig(app === "partner" ? "partners" : "users", app)); } catch (error) { return next(error); } }
+async function publicConfig(req, res, next) { try { const app = normalizedApp(req.query.app); const platform = String(req.query.platform || "android").toLowerCase() === "ios" ? "ios" : "android"; res.set("Cache-Control", "no-store, max-age=0, must-revalidate"); const payload = await getPublicAppControlConfig(app === "partner" ? "partners" : "users", app); payload.appType = app === "partner" ? "PARTNER" : "USER"; payload.platform = platform.toUpperCase(); payload.configVersion = String(payload.version || 0); payload.config.update = payload.config.update?.platforms?.[platform] || {}; return res.json(payload); } catch (error) { return next(error); } }
 async function overview(req, res, next) { try { const app = targetApp(req); const doc = await AppControlConfig.findOne({ key: configKey(req) }).lean(); const filter = contentFilter(app); const [announcements, banners, auditLogs, databaseServices, features, activePartners] = await Promise.all([AppControlItem.countDocuments({ ...filter, kind: "announcement", status: { $in: ["published", "scheduled"] } }), app === "partner" ? 0 : AppControlItem.countDocuments({ ...filter, kind: "banner", status: { $in: ["published", "scheduled"] } }), AdminActivity.countDocuments({ category: "app_control", "payload.app": app }), app === "customer" ? Service.find({}, { serviceCategory: 1, name: 1, description: 1, isActive: 1, availability: 1, availabilityMessage: 1, availabilityStartsAt: 1, availabilityEndsAt: 1 }).sort({ name: 1 }).limit(250).lean() : [], featureRegistry(app), app === "partner" ? Partner.countDocuments({ accountStatus: "active" }) : 0]); return res.json({ app, draft: normalizeConfig(doc?.draft), published: normalizeConfig(doc?.published), version: Number(doc?.version || 0), updatedAt: doc?.updatedAt || null, publishedAt: doc?.publishedAt || null, publishedBy: doc?.publishedBy || "", counts: { announcements, banners, auditLogs, activePartners }, services: app === "customer" ? mergedCustomerServices(databaseServices) : [], features }); } catch (error) { return next(error); } }
 async function saveDraft(req, res, next) { try { assertSuperAdmin(req); const section = String(req.body?.section || "").trim(); let patch = req.body?.value; if (!section || !isObject(patch)) return res.status(400).json({ message: "section and object value are required" }); if (targetApp(req) === "partner" && ["launch", "services", "media"].includes(section)) return res.status(400).json({ message: "This control is not supported for the Partner App" }); if (section === "services") { const knownCategories = new Set(serviceCatalog().map((service) => service.serviceCategory)); const normalizedEntries = Object.entries(patch).map(([category, value]) => [normalizeServiceCategory(category), value]); if (normalizedEntries.some(([category]) => !knownCategories.has(category))) return res.status(400).json({ message: "Only implemented customer services can be controlled" }); patch = Object.fromEntries(normalizedEntries); } if (section === "media") { const knownCategories = new Set(serviceCatalog().map((service) => service.serviceCategory)); const normalizeMediaEntries = (value) => Object.entries(isObject(value) ? value : {}).map(([category, entry]) => [normalizeServiceCategory(category), isObject(entry) ? { imageUrl: entry.imageUrl } : { imageUrl: "" }]); const serviceEntries = normalizeMediaEntries(patch.services); const heroSlides = normalizeMediaEntries(patch.hero?.slides); if ([...serviceEntries, ...heroSlides].some(([category]) => !knownCategories.has(category))) return res.status(400).json({ message: "Only implemented customer service media can be changed" }); patch = { hero: isObject(patch.hero) ? { imageUrl: patch.hero.imageUrl, slides: Object.fromEntries(heroSlides) } : { imageUrl: "", slides: {} }, services: Object.fromEntries(serviceEntries) }; } if (section === "update") patch = managedCustomerUpdate(patch); const current = await AppControlConfig.findOne({ key: configKey(req) }).lean(); const draft = normalizeConfig(merge(current?.draft, { [section]: patch })); const updated = await AppControlConfig.findOneAndUpdate({ key: configKey(req) }, { $set: { draft, updatedBy: actor(req) } }, { upsert: true, new: true, setDefaultsOnInsert: true }); await audit(req, "app_control:draft_saved", "Draft saved", section, { section }); broadcast(req, "app_control:draft_saved", { section }); return res.json({ draft: normalizeConfig(updated.draft), updatedAt: updated.updatedAt }); } catch (error) { return next(error); } }
 async function uploadMedia(req, res, next) { try { assertSuperAdmin(req); if (targetApp(req) !== "customer") return res.status(400).json({ message: "Customer media is only supported for the Customer App" }); if (!req.file) return res.status(400).json({ message: "An image file is required" }); const file = req.file; if (process.env.CLOUDINARY_CLOUD_NAME) { const result = await uploadMediaToCloudinary(file); const asset = await AppControlMediaAsset.create({ mimeType: file.mimetype, originalName: file.originalname || "app-control-image", sizeBytes: file.size, storageProvider: "cloudinary", url: result.secure_url, publicId: result.public_id, createdBy: actor(req) }); await audit(req, "media:uploaded", "Media uploaded", asset.originalName, { assetId: String(asset._id), storageProvider: asset.storageProvider }); return res.status(201).json({ imageUrl: asset.url, assetId: String(asset._id), storageProvider: asset.storageProvider }); }
