@@ -135,6 +135,8 @@ async function notifyOne({ recipient, title, body, cleanData, type, category, pr
     bookingCode: cleanData.bookingCode || "",
     pushStatus: tokens.length ? "pending" : "skipped"
   });
+  cleanData.notificationId = String(notification._id);
+  notification.data = cleanData;
 
   let pushResult = { successCount: 0, failureCount: tokens.length };
   if (tokens.length) {
@@ -142,7 +144,9 @@ async function notifyOne({ recipient, title, body, cleanData, type, category, pr
       tokens,
       title,
       body,
-      data: cleanData
+      data: cleanData,
+      recipientRole: recipient.role || recipient.recipientRole || "",
+      category
     });
     notification.pushSuccessCount = Number(pushResult.successCount || 0);
     notification.pushFailureCount = Number(pushResult.failureCount || 0);

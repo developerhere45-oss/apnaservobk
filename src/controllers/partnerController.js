@@ -730,7 +730,10 @@ async function upsertProfile(req, res, next) {
       yearsOfExperience: Number.isFinite(body.yearsOfExperience) ? body.yearsOfExperience : 0,
       // Service matching is platform-managed and locked to the 5-8 km band.
       serviceRadiusKm: 8,
-      isOnline: isLaundryRegistration && !adminApproved ? false : body.isOnline !== false,
+      // Availability is controlled only by the explicit online/offline action.
+      // Profile refreshes run during app launch, reconnect and token refresh,
+      // so they must not overwrite an existing partner's choice.
+      ...(targetPartner ? {} : { isOnline: isLaundryRegistration && !adminApproved ? false : body.isOnline !== false }),
       isVerified: adminApproved,
       trustStatus: currentTrustStatus === "suspended"
         ? "suspended"
