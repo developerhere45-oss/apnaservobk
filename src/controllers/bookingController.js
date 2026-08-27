@@ -29,6 +29,7 @@ const { validateServiceArea } = require("../utils/serviceArea");
 const { getPublishedConfig, isScheduleActive, bookingAvailability } = require("../utils/appControl");
 const { getBookingLaunchConfig, ensureLaunchNotificationSchedule } = require("../utils/bookingLaunchConfig");
 const { getChecklist } = require("../utils/serviceChecklist");
+const cache = require("../config/cache");
 const {
   emitNewBookingToPartners,
   emitBookingAccepted,
@@ -1079,9 +1080,12 @@ async function listUserBookings(req, res, next) {
 }
 
 async function listPartnerBookings(req, res, next) {
+  let partner;
+  let responseCacheKey = "";
   try {
-    const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    partner = await Partner.findOne({ firebaseUid: req.auth.uid });
     if (!partner) return res.json({ bookings: [] });
+    responseCacheKey = `partner:bookings:${partner._id}`;
 
     const categories = partnerCategoryVariants(partner);
     const canViewOpenJobs = partnerCanViewOpenJobs(partner);
@@ -1089,7 +1093,12 @@ async function listPartnerBookings(req, res, next) {
     // partner's Android GPS/socket heartbeat was temporarily unavailable.
     // Partner apps poll this endpoint, so a still-valid request is repaired
     // immediately without requiring an offline/online toggle.
-    await recoverRecentUndispatchedBookings(partner, categories);
+    setImmediate(() => recoverRecentUndispatchedBookings(partner, categories).catch((error) => {
+      console.warn("partner_booking_recovery_failed", {
+        partnerId: String(partner._id),
+        message: error.message
+      });
+    }));
     const companyServiceFilter = partner.businessType === "laundry"
       ? { serviceCategory: { $in: categories } }
       : {};
@@ -1107,7 +1116,12 @@ async function listPartnerBookings(req, res, next) {
       ]
     }).sort({ createdAt: -1 }).limit(80);
 
-    await expireQuotesIfNeeded(bookings);
+    setImmediate(() => expireQuotesIfNeeded(bookings).catch((error) => {
+      console.warn("partner_quote_expiry_failed", {
+        partnerId: String(partner._id),
+        message: error.message
+      });
+    }));
 
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -1123,28 +1137,39 @@ async function listPartnerBookings(req, res, next) {
         { $cond: [{ $gt: ["$finalAmount", 0] }, "$finalAmount", { $ifNull: ["$price", 0] }] }
       ]
     };
-    const [activeJobs, handledRequests, rejectedRequests, earningsRows] = await Promise.all([
-      Booking.countDocuments({ partnerId: partner._id, status: { $in: activeStatuses } }),
-      Booking.countDocuments({ partnerId: partner._id }),
-      Booking.countDocuments({ rejectedPartners: partner._id, partnerId: { $ne: partner._id } }),
-      Booking.aggregate([
-        { $match: { partnerId: partner._id, status: "completed" } },
-        {
-          $group: {
-            _id: null,
-            completedJobs: { $sum: 1 },
-            totalEarnings: { $sum: amountExpression },
-            todayEarnings: { $sum: { $cond: [{ $gte: ["$completedAt", startOfDay] }, amountExpression, 0] } },
-            weekEarnings: { $sum: { $cond: [{ $gte: ["$completedAt", startOfWeek] }, amountExpression, 0] } },
-            monthEarnings: { $sum: { $cond: [{ $gte: ["$completedAt", startOfMonth] }, amountExpression, 0] } }
+    let activeJobs = 0;
+    let handledRequests = 0;
+    let rejectedRequests = 0;
+    let earningsRows = [];
+    try {
+      [activeJobs, handledRequests, rejectedRequests, earningsRows] = await Promise.all([
+        Booking.countDocuments({ partnerId: partner._id, status: { $in: activeStatuses } }),
+        Booking.countDocuments({ partnerId: partner._id }),
+        Booking.countDocuments({ rejectedPartners: partner._id, partnerId: { $ne: partner._id } }),
+        Booking.aggregate([
+          { $match: { partnerId: partner._id, status: "completed" } },
+          {
+            $group: {
+              _id: null,
+              completedJobs: { $sum: 1 },
+              totalEarnings: { $sum: amountExpression },
+              todayEarnings: { $sum: { $cond: [{ $gte: ["$completedAt", startOfDay] }, amountExpression, 0] } },
+              weekEarnings: { $sum: { $cond: [{ $gte: ["$completedAt", startOfWeek] }, amountExpression, 0] } },
+              monthEarnings: { $sum: { $cond: [{ $gte: ["$completedAt", startOfMonth] }, amountExpression, 0] } }
+            }
           }
-        }
-      ])
-    ]);
+        ])
+      ]);
+    } catch (error) {
+      console.warn("partner_booking_stats_failed", {
+        partnerId: String(partner._id),
+        message: error.message
+      });
+    }
     const earnings = earningsRows[0] || {};
     const respondedRequests = handledRequests + rejectedRequests;
     const responseRate = respondedRequests > 0 ? Math.round((handledRequests * 100) / respondedRequests) : 0;
-    return res.json({
+    const responsePayload = {
       bookings: bookings.map((booking) => protectCustomerPhoneForPartner(serializeBooking(booking), booking, partner)),
       stats: {
         activeJobs,
@@ -1156,8 +1181,22 @@ async function listPartnerBookings(req, res, next) {
         totalEarnings: Number(earnings.totalEarnings || 0),
         updatedAt: now.toISOString()
       }
-    });
+    };
+    await cache.setJson(responseCacheKey, responsePayload, 90);
+    return res.json(responsePayload);
   } catch (error) {
+    const cached = responseCacheKey ? await cache.getJson(responseCacheKey) : null;
+    if (cached) {
+      console.warn("partner_bookings_cached_fallback", {
+        partnerId: String(partner?._id || "unknown"),
+        reason: error.message
+      });
+      return res.json({ ...cached, cached: true, degraded: true });
+    }
+    console.error("partner_bookings_failed", {
+      uidSuffix: String(req.auth?.uid || "").slice(-6),
+      reason: error.message
+    });
     return next(error);
   }
 }
