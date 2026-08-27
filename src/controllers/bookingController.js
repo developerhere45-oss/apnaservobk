@@ -171,6 +171,75 @@ const noResponseReportSchema = z.object({
   recordedAt: z.coerce.number().optional()
 });
 
+const LEGACY_FALLBACK_LAT = 26.1445;
+const LEGACY_FALLBACK_LNG = 91.7362;
+
+function normalizedLocationAddress(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function pointCoordinates(location) {
+  const coordinates = location?.coordinates;
+  const lng = Number(coordinates?.[0]);
+  const lat = Number(coordinates?.[1]);
+  return findNearbyPartners.validCoordinates(lat, lng) ? { lat, lng } : null;
+}
+
+function isLegacyFallbackLocation(lat, lng) {
+  return Math.abs(Number(lat) - LEGACY_FALLBACK_LAT) < 0.0002
+    && Math.abs(Number(lng) - LEGACY_FALLBACK_LNG) < 0.0002;
+}
+
+function trustedSavedCoordinates(user, address) {
+  const normalized = normalizedLocationAddress(address);
+  if (!user || !normalized) return null;
+  const saved = (user.savedAddresses || []).find(
+    (entry) => normalizedLocationAddress(entry.address) === normalized
+      && pointCoordinates(entry.location)
+      && !isLegacyFallbackLocation(pointCoordinates(entry.location).lat, pointCoordinates(entry.location).lng)
+  );
+  if (saved) return pointCoordinates(saved.location);
+  const profilePoint = pointCoordinates(user.location);
+  if (normalizedLocationAddress(user.address) === normalized
+      && profilePoint
+      && !isLegacyFallbackLocation(profilePoint.lat, profilePoint.lng)) {
+    return profilePoint;
+  }
+  return null;
+}
+
+async function recoverLegacyFallbackCoordinates(firebaseUid, body) {
+  if (!isLegacyFallbackLocation(body.lat, body.lng)) return { recovered: false };
+  const user = await User.findOne({ firebaseUid }).select("address location savedAddresses");
+  const trusted = trustedSavedCoordinates(user, body.address);
+  if (!trusted) return { recovered: false, unresolvedFallback: true };
+  body.lat = trusted.lat;
+  body.lng = trusted.lng;
+  return { recovered: true };
+}
+
+async function repairLegacyFallbackBookingLocations(bookings) {
+  const affected = (bookings || []).filter((booking) => {
+    const point = pointCoordinates(booking.location);
+    return point && isLegacyFallbackLocation(point.lat, point.lng) && booking.userId;
+  });
+  if (!affected.length) return;
+  const users = await User.find({ _id: { $in: affected.map((booking) => booking.userId) } })
+    .select("address location savedAddresses");
+  const usersById = new Map(users.map((user) => [String(user._id), user]));
+  for (const booking of affected) {
+    const trusted = trustedSavedCoordinates(usersById.get(String(booking.userId)), booking.address);
+    if (!trusted) continue;
+    booking.location = { type: "Point", coordinates: [trusted.lng, trusted.lat] };
+    booking.locationUpdatedAt = new Date();
+    booking.locationUpdatedBy = "system";
+    setImmediate(() => Booking.updateOne(
+      { _id: booking._id, "location.coordinates.0": { $gte: LEGACY_FALLBACK_LNG - 0.0002, $lte: LEGACY_FALLBACK_LNG + 0.0002 }, "location.coordinates.1": { $gte: LEGACY_FALLBACK_LAT - 0.0002, $lte: LEGACY_FALLBACK_LAT + 0.0002 } },
+      { $set: { location: booking.location, locationUpdatedAt: booking.locationUpdatedAt, locationUpdatedBy: "system" }, $inc: { locationVersion: 1 } }
+    ).catch((error) => console.warn("legacy_booking_location_repair_failed", { bookingId: String(booking._id), message: error.message })));
+  }
+}
+
 const sosSchema = z.object({
   reason: z.enum(["emergency", "unsafe_location", "customer_issue", "accident", "other"]).optional(),
   note: z.string().max(500).optional(),
@@ -859,6 +928,13 @@ async function createBooking(req, res, next) {
       });
     }
     const body = createBookingSchema.parse(req.body || {});
+    const locationRecovery = await recoverLegacyFallbackCoordinates(req.auth.uid, body);
+    if (locationRecovery.unresolvedFallback) {
+      return res.status(422).json({
+        code: "SERVICE_LOCATION_RESELECT_REQUIRED",
+        message: "We couldn't verify the exact service location. Please select the service address again."
+      });
+    }
     const serviceArea = validateServiceArea(body.lat, body.lng);
     if (!serviceArea.allowed) {
       return res.status(422).json({
@@ -1115,6 +1191,8 @@ async function listPartnerBookings(req, res, next) {
         canViewOpenJobs ? partnerOpenBookingVisibility(partner, categories) : { _id: null }
       ]
     }).sort({ createdAt: -1 }).limit(80);
+
+    await repairLegacyFallbackBookingLocations(bookings);
 
     setImmediate(() => expireQuotesIfNeeded(bookings).catch((error) => {
       console.warn("partner_quote_expiry_failed", {
