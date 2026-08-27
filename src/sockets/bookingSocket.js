@@ -10,6 +10,7 @@ const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/loc
 const { serviceCategoryVariants } = require("../utils/serviceCategory");
 const { lifecycleLabel, lifecycleStatusForBooking } = require("../utils/bookingLifecycle");
 const findNearbyPartners = require("../utils/findNearbyPartners");
+const { verifyFirebaseIdToken } = require("../utils/firebaseTokenVerifier");
 const PARTNER_REQUEST_TTL_MS = 10 * 60 * 1000;
 
 let io;
@@ -390,7 +391,7 @@ async function identifySocket(socket, next) {
       if (!token) {
         return next(new Error("Firebase token missing"));
       }
-      decoded = await admin.auth().verifyIdToken(token, process.env.NODE_ENV === "production");
+      decoded = await verifyFirebaseIdToken(token, process.env.NODE_ENV === "production");
     }
     socket.auth = decoded;
     socket.role = role;

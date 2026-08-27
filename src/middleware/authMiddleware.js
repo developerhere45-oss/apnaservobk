@@ -5,6 +5,7 @@ const Partner = require("../models/Partner");
 const Admin = require("../models/Admin");
 const Employee = require("../models/Employee");
 const ChatAssignment = require("../models/ChatAssignment");
+const { verifyFirebaseIdToken } = require("../utils/firebaseTokenVerifier");
 
 function csvSet(value, options = {}) {
   return new Set(String(value || "")
@@ -54,7 +55,7 @@ async function verifyFirebaseToken(req, res, next) {
     }
 
     const checkRevoked = process.env.NODE_ENV === "production";
-    const decoded = await admin.auth().verifyIdToken(token, checkRevoked);
+    const decoded = await verifyFirebaseIdToken(token, checkRevoked);
     if (!decoded.uid) {
       return res.status(401).json({ message: "Invalid Firebase token" });
     }
