@@ -17,6 +17,10 @@ services:
         value: "5"
       - key: NOTIFICATION_CONCURRENCY
         value: "24"
+      - key: SOCKET_PING_INTERVAL_MS
+        value: "25000"
+      - key: SOCKET_PING_TIMEOUT_MS
+        value: "120000"
       - key: PARTNER_SEARCH_RADIUS_STEPS_KM
         value: "5,10"
       - key: REQUIRE_CUSTOMER_PHONE_OTP

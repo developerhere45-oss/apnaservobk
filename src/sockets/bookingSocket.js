@@ -463,6 +463,8 @@ async function identifySocket(socket, next) {
 }
 
 function initBookingSocket(httpServer) {
+  const pingInterval = Math.max(Number(process.env.SOCKET_PING_INTERVAL_MS || 25000), 10000);
+  const pingTimeout = Math.max(Number(process.env.SOCKET_PING_TIMEOUT_MS || 120000), 45000);
   io = require("socket.io")(httpServer, {
     cors: {
       origin: allowedCorsOrigins().includes("*") && process.env.NODE_ENV !== "production"
@@ -472,13 +474,30 @@ function initBookingSocket(httpServer) {
     },
     transports: ["websocket", "polling"],
     allowEIO3: true,
-    pingInterval: 25000,
-    pingTimeout: 45000
+    // Android can pause networking while the screen is off or while switching
+    // between Wi-Fi and mobile data. Keep heartbeats frequent while allowing a
+    // short radio/Doze pause without dropping production app connections.
+    pingInterval,
+    pingTimeout
+  });
+
+  io.engine.on("connection_error", (error) => {
+    console.warn("socket_connection_error", {
+      code: error?.code,
+      message: error?.message,
+      transport: error?.context?.transport?.name || "unknown"
+    });
   });
 
   io.use(identifySocket);
 
   io.on("connection", (socket) => {
+    socket.on("disconnect", (reason) => {
+      console.info("socket_disconnected", {
+        role: socket.role || "unknown",
+        reason: String(reason || "unknown")
+      });
+    });
     handleSocketEvent(socket, "partner:online", async (payload = {}) => {
       if (!socket.partner) return;
       if (!allowSocketEvent(socket, "partner:online", 20, 60 * 1000)) {
