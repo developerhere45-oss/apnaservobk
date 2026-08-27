@@ -4,6 +4,7 @@ const http = require("http");
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const compression = require("compression");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
@@ -65,6 +66,10 @@ app.use(cors({
   },
   credentials: true
 }));
+// Production Android clients poll the partner feed frequently. Compress JSON
+// before it crosses mobile networks so a large booking history cannot keep a
+// slow radio busy long enough for the realtime transport to be starved.
+app.use(compression({ threshold: 1024 }));
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(rejectPlainSensitiveFields);
