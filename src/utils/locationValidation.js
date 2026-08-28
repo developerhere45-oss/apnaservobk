@@ -1,4 +1,6 @@
 function numberValue(value) {
+  if (value === null || value === undefined || typeof value === "boolean"
+      || (typeof value === "string" && !value.trim())) return NaN;
   const number = Number(value);
   return Number.isFinite(number) ? number : NaN;
 }
@@ -27,10 +29,11 @@ function validatePartnerLocation({ partner, booking, payload = {}, requireNearCu
   const accuracy = Number.isFinite(numberValue(payload.accuracy)) ? numberValue(payload.accuracy) : 9999;
   const provider = String(payload.provider || "").toLowerCase();
   const isMock = payload.isMock === true || payload.isMock === "true";
-  const recordedAt = payload.recordedAt ? new Date(payload.recordedAt) : new Date();
+  const recordedAt = payload.recordedAt == null ? new Date() : new Date(payload.recordedAt);
 
   const result = {
     valid: false,
+    suspicious: false,
     reason: "",
     lat,
     lng,
@@ -42,12 +45,17 @@ function validatePartnerLocation({ partner, booking, payload = {}, requireNearCu
     distanceToCustomerM: 0
   };
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180 || (lat === 0 && lng === 0)) {
     result.reason = "Valid GPS location required";
     return result;
   }
   if (isMock || provider.includes("mock")) {
+    result.suspicious = true;
     result.reason = "Mock/fake location detected";
+    return result;
+  }
+  if (Number.isNaN(recordedAt.getTime())) {
+    result.reason = "Invalid GPS timestamp";
     return result;
   }
   if (!Number.isFinite(accuracy) || accuracy <= 0 || accuracy > 150) {
@@ -65,10 +73,24 @@ function validatePartnerLocation({ partner, booking, payload = {}, requireNearCu
   const previousLat = numberValue(previous[1]);
   const previousAt = partner?.lastLocationAt ? new Date(partner.lastLocationAt) : null;
   if (Number.isFinite(previousLat) && Number.isFinite(previousLng) && previousAt && !Number.isNaN(previousAt.getTime())) {
-    const seconds = Math.max(1, (result.recordedAt.getTime() - previousAt.getTime()) / 1000);
+    const elapsedMs = result.recordedAt.getTime() - previousAt.getTime();
+    if (elapsedMs < 0) {
+      result.reason = "Older location update ignored";
+      return result;
+    }
+    const previousAgeMs = Date.now() - previousAt.getTime();
+    const previousAccuracy = numberValue(partner?.lastLocationAccuracy);
+    if (previousAgeMs >= 0 && previousAgeMs <= 120000
+        && previousAccuracy > 0 && accuracy > Math.max(previousAccuracy * 2, previousAccuracy + 25)) {
+      result.reason = "Less accurate location ignored; retaining recent precise fix";
+      return result;
+    }
+    const seconds = Math.max(1, elapsedMs / 1000);
     const meters = distanceMeters(previousLat, previousLng, lat, lng);
     result.speedMps = meters / seconds;
-    if (seconds > 5 && result.speedMps > 60) {
+    // Allow GPS uncertainty, but do not exempt rapid/out-of-order jumps.
+    const uncertainty = accuracy + (previousAccuracy > 0 ? previousAccuracy : 150);
+    if (meters > 60 * seconds + uncertainty) {
       result.reason = "Impossible location jump detected";
       return result;
     }
@@ -88,6 +110,11 @@ function validatePartnerLocation({ partner, booking, payload = {}, requireNearCu
   return result;
 }
 
+// Compare-and-set prevents concurrent HTTP/socket updates from overwriting a newer fix.
+function locationWriteFilter(partner) {
+  return { _id: partner._id, lastLocationAt: partner.lastLocationAt || null };
+}
+
 function partnerLocationUpdate(validation) {
   return {
     location: { type: "Point", coordinates: [validation.lng, validation.lat] },
@@ -101,5 +128,6 @@ function partnerLocationUpdate(validation) {
 module.exports = {
   distanceMeters,
   validatePartnerLocation,
-  partnerLocationUpdate
+  partnerLocationUpdate,
+  locationWriteFilter
 };

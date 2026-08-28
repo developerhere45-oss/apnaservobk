@@ -9,7 +9,7 @@ const { Booking } = require("../models/Booking");
 const LocationLog = require("../models/LocationLog");
 const { cloudinary } = require("../config/cloudinary");
 const { normalizeServiceCategory, serviceCategoryVariants, serviceLabel } = require("../utils/serviceCategory");
-const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
+const { validatePartnerLocation, partnerLocationUpdate, locationWriteFilter } = require("../utils/locationValidation");
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { validateDocumentUpload } = require("../utils/documentValidation");
 const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
@@ -1707,14 +1707,16 @@ async function updateLocation(req, res, next) {
     });
 
     if (!validation.valid) {
-      partner.locationTrustStatus = "suspicious";
-      await partner.save();
+      // Weak/stale GPS is not evidence of fraud. Preserve the last trusted fix.
+      if (validation.suspicious) {
+        await Partner.updateOne(locationWriteFilter(partner), { $set: { locationTrustStatus: "suspicious" } });
+      }
       return res.status(422).json({ message: validation.reason });
     }
 
-    partner.set(partnerLocationUpdate(validation));
-    await partner.save();
-    return res.json({ ok: true, partner, locationAccepted: true });
+    const updated = await Partner.findOneAndUpdate(locationWriteFilter(partner),
+      { $set: partnerLocationUpdate(validation) }, { new: true });
+    return res.json({ ok: true, partner: updated || await Partner.findById(partner._id), locationAccepted: !!updated });
   } catch (error) {
     return next(error);
   }

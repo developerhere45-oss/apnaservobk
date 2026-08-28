@@ -6,7 +6,7 @@ const Partner = require("../models/Partner");
 const { Booking } = require("../models/Booking");
 const LocationLog = require("../models/LocationLog");
 const AdminActivity = require("../models/AdminActivity");
-const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
+const { validatePartnerLocation, partnerLocationUpdate, locationWriteFilter } = require("../utils/locationValidation");
 const { serviceCategoryVariants } = require("../utils/serviceCategory");
 const { lifecycleLabel, lifecycleStatusForBooking } = require("../utils/bookingLifecycle");
 const findNearbyPartners = require("../utils/findNearbyPartners");
@@ -508,13 +508,21 @@ function initBookingSocket(httpServer) {
       const partner = await Partner.findById(socket.partner._id);
       if (!partner) return;
       const update = { isOnline: true };
+      let acceptedLocation = false;
       if (payload.lat && payload.lng && payload.accuracy) {
         const validation = validatePartnerLocation({ partner, payload });
         if (validation.valid) {
           Object.assign(update, partnerLocationUpdate(validation));
+          acceptedLocation = true;
         }
       }
-      socket.partner = await Partner.findByIdAndUpdate(partner._id, { $set: update }, { new: true });
+      socket.partner = acceptedLocation
+        ? await Partner.findOneAndUpdate(locationWriteFilter(partner), { $set: update }, { new: true })
+        : await Partner.findByIdAndUpdate(partner._id, { $set: update }, { new: true });
+      if (!socket.partner) {
+        socket.partner = await Partner.findByIdAndUpdate(partner._id, { $set: { isOnline: true } }, { new: true });
+      }
+      if (!socket.partner) return;
       socket.join(`partner:${partner._id}`);
       const dispatchedBookings = await dispatchPendingBookingsToSocketPartner(socket.partner);
       socket.emit("partner:online", { ok: true, dispatchedBookings });
@@ -560,11 +568,16 @@ function initBookingSocket(httpServer) {
         socket.emit("partner:location_rejected", { message: validation.reason });
         return;
       }
-      socket.partner = await Partner.findByIdAndUpdate(
-        partner._id,
+      const updatedLocation = await Partner.findOneAndUpdate(
+        locationWriteFilter(partner),
         { $set: partnerLocationUpdate(validation) },
         { new: true }
       );
+      if (!updatedLocation) {
+        socket.emit("partner:location_rejected", { message: "Newer location already received" });
+        return;
+      }
+      socket.partner = updatedLocation;
       socket.emit("partner:location_ok", { ok: true });
       const activeStatuses = ["accepted", "on_the_way", "arrived", "started", "amount_pending"];
       const query = { partnerId: partner._id, status: { $in: activeStatuses } };
