@@ -102,20 +102,25 @@ async function resolveBooking(rawId, rawCode, userId) {
 async function upsertProfile(req, res, next) {
   try {
     const body = profileSchema.parse(req.body || {});
-    const phone = body.phone || req.auth.phone_number || "";
+    const requestedPhone = body.phone || req.auth.phone_number || "";
+    const existing = await User.findOne({ firebaseUid: req.auth.uid })
+      .select("_id name phone")
+      .lean();
+    // A verified identity is immutable after registration. Profile updates may
+    // change contact email and other preferences, but never name or mobile.
+    const phone = existing?.phone || requestedPhone;
     const normalizedPhone = normalizePhone(phone);
     const email = normalizeEmail(body.email !== undefined ? body.email : req.auth.email || "");
     const verified = tokenPhoneVerified(req, phone);
     const now = new Date();
-    const existing = await User.findOne({ firebaseUid: req.auth.uid }).select("_id").lean();
     const update = {
       firebaseUid: req.auth.uid,
       bookingRiskStatus: verified ? "trusted" : "otp_required",
       lastLoginAt: now
     };
 
-    if (body.name || req.auth.name) update.name = body.name || req.auth.name;
-    if (phone) {
+    if (!existing?.name && (body.name || req.auth.name)) update.name = body.name || req.auth.name;
+    if (!existing?.phone && phone) {
       update.phone = phone;
       if (normalizedPhone.length === 10) update.phoneHash = identityHash(normalizedPhone);
     }
