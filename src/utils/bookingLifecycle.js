@@ -41,7 +41,6 @@ const STORAGE_STATUS_ALIASES = {
   assigned: "accepted",
   partner_assigned: "accepted",
   technician_assigned: "accepted",
-  confirmed: "accepted",
   work_started: "started",
   work_completed: "amount_pending",
   payment_pending: "amount_pending",
@@ -136,6 +135,13 @@ function pendingAssignmentStatuses() {
   return ["pending", "sent_to_partner"];
 }
 
+// A booking may be routed only after the backend has persisted confirmation.
+// `pending` remains here solely for retrying rows created by older app/backend
+// releases; new bookings enter `confirmed` before dispatch.
+function dispatchableBookingStatuses() {
+  return ["confirmed", "pending"];
+}
+
 function activeJobStatuses() {
   return ["accepted", "on_the_way", "arrived", "started", "amount_pending"];
 }
@@ -205,7 +211,7 @@ function transitionDecision({ currentStatus, nextStatus, actorRole, quoteStatus 
 
   if (actor === "user") {
     if (next === "cancelled") {
-      const cancellable = ["pending", "sent_to_partner", "accepted", "on_the_way", "arrived"];
+      const cancellable = ["confirmed", "pending", "sent_to_partner", "accepted", "on_the_way", "arrived"];
       return cancellable.includes(current)
         ? { ok: true }
         : { ok: false, reason: "Booking cannot be cancelled after work starts" };
@@ -230,6 +236,7 @@ module.exports = {
   LIFECYCLE_STATUSES,
   TERMINAL_BOOKING_STATUSES,
   activeJobStatuses,
+  dispatchableBookingStatuses,
   isTerminalBookingStatus,
   lifecycleLabel,
   lifecycleStatusForBooking,

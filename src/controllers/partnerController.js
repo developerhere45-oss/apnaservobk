@@ -12,8 +12,9 @@ const { normalizeServiceCategory, serviceCategoryVariants, serviceLabel } = requ
 const { validatePartnerLocation, partnerLocationUpdate, locationWriteFilter } = require("../utils/locationValidation");
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { validateDocumentUpload } = require("../utils/documentValidation");
-const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
+const { dispatchableBookingStatuses, pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
 const { reliableNotify } = require("../utils/reliableNotify");
+const { addPartnerRequests } = require("../utils/partnerRequestTracking");
 const { emitAdminEvent, emitNewBookingToPartners, emitBookingAccepted, emitLaundryStaffAssignment, serializeBooking } = require("../sockets/bookingSocket");
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 const { partnerAssetUrl } = require("../utils/partnerUploadAssets");
@@ -267,7 +268,7 @@ async function dispatchPendingBookingsToPartner(partner) {
     partnerId: null,
     rejectedPartners: { $ne: partner._id },
     requestedPartners: { $ne: partner._id },
-    status: { $in: pendingAssignmentStatuses() },
+    status: { $in: dispatchableBookingStatuses() },
     serviceCategory: { $in: categories },
     $and: [
       { $or: [
@@ -305,26 +306,40 @@ async function dispatchPendingBookingsToPartner(partner) {
         partnerId: null,
         rejectedPartners: { $ne: partner._id },
         requestedPartners: { $ne: partner._id },
-        status: { $in: pendingAssignmentStatuses() }
+        status: { $in: dispatchableBookingStatuses() }
       },
-      {
+      (() => {
+        const requestExpiresAt = new Date(now.getTime() + PARTNER_REQUEST_TTL_MS);
+        const tracking = { requestExpiresAt, partnerRequests: [], statusTimeline: [] };
+        addPartnerRequests(tracking, [partner], {
+          match,
+          source: "automatic",
+          dispatchAttempt: Number(booking.dispatchAttempt || 0) + 1,
+          dispatchStage: Number(booking.dispatchAttempt || 0) + 1,
+          sentAt: now,
+          actor: "system"
+        });
+        return {
         $addToSet: { requestedPartners: partner._id },
         $set: {
           status: "sent_to_partner",
           dispatchRadiusKm: match.radiusKm,
           dispatchMode: match.mode,
           dispatchedAt: booking.dispatchedAt || now,
-          requestExpiresAt: booking.requestExpiresAt || new Date(now.getTime() + PARTNER_REQUEST_TTL_MS)
+          requestExpiresAt
         },
+        $inc: { dispatchAttempt: 1 },
         $push: {
-          statusTimeline: {
+          partnerRequests: { $each: tracking.partnerRequests },
+          statusTimeline: { $each: [{
             status: "sent_to_partner",
-            at: new Date(),
+            at: now,
             by: "system",
             note: `Dispatched within ${match.radiusKm} km when partner came online`
-          }
+          }, ...tracking.statusTimeline] }
         }
-      },
+      };
+      })(),
       { new: true }
     );
     if (!updated) {

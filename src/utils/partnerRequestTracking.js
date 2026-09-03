@@ -57,7 +57,13 @@ function buildPartnerRequest({ booking, partner, match, source = "automatic", di
       name: partner.name || "Partner",
       phone: partner.phone || "",
       photoUrl: partner.photoUrl || partner.selfieUrl || "",
-      serviceCategory: partner.serviceCategory || "",
+      // Partner profiles store serviceCategory as an array, while a request
+      // snapshot represents the single service requested by this booking.
+      // Passing the profile array into the embedded String field causes a
+      // Mongoose CastError and aborts the entire confirmation/dispatch call.
+      serviceCategory: String(booking?.serviceCategory || (Array.isArray(partner.serviceCategory)
+        ? partner.serviceCategory[0]
+        : partner.serviceCategory) || ""),
       rating: Number(partner.rating || 0),
       totalJobs: Number(partner.totalJobs || 0),
       wasOnline: partner.isOnline === true

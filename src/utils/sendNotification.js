@@ -28,7 +28,7 @@ async function sendNotification({ token, tokens, title, body, data = {} }) {
   // Android handles notification+data messages itself while the app is backgrounded
   // or swiped away, so a mismatched channel silently bypasses the app's booking ring.
   const androidChannelId = isPartnerBookingRequest
-    ? "partner_booking_requests_call_v4"
+    ? "partner_booking_requests_alert_v6"
     : (isChat ? "booking_chat" : "booking_requests");
   const androidSound = isPartnerBookingRequest ? "incoming_booking_ring" : "default";
   const notificationMessage = {

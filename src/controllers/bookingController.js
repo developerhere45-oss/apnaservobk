@@ -17,6 +17,7 @@ const { normalizeServiceCategory, serviceCategoryVariants, serviceLabel, company
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
 const { recordFraudSignal } = require("../utils/fraudDetection");
 const {
+  dispatchableBookingStatuses,
   normalizeBookingStatusInput,
   pendingAssignmentStatuses,
   transitionDecision
@@ -779,7 +780,7 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
         _id: booking._id,
         partnerId: null,
         requestedPartners: { $size: 0 },
-        status: { $in: pendingAssignmentStatuses() }
+        status: { $in: dispatchableBookingStatuses() }
       },
       {
         $set: {
@@ -893,7 +894,7 @@ async function recoverRecentUndispatchedBookings(partner, categories) {
   const candidates = await Booking.find({
     partnerId: null,
     requestedPartners: { $size: 0 },
-    status: { $in: pendingAssignmentStatuses() },
+    status: { $in: dispatchableBookingStatuses() },
     serviceCategory: { $in: categories },
     createdAt: { $gt: cutoff }
   }).sort({ createdAt: -1 }).limit(10);
@@ -1112,7 +1113,7 @@ async function createBooking(req, res, next) {
         return res.status(409).json({ message: "Booking code already exists" });
       }
 
-      if (pendingAssignmentStatuses().includes(existingBooking.status)
+      if (dispatchableBookingStatuses().includes(existingBooking.status)
           && !existingBooking.requestedPartners?.length && !existingBooking.partnerId) {
         queueBookingDispatch(existingBooking, existingBooking.serviceCategory || category, dispatchLat, dispatchLng);
       }
@@ -1120,7 +1121,7 @@ async function createBooking(req, res, next) {
       return res.status(200).json({
         booking: serializeBooking(existingBooking),
         matchedPartners: existingBooking.requestedPartners?.length || 0,
-        dispatchQueued: pendingAssignmentStatuses().includes(existingBooking.status)
+        dispatchQueued: dispatchableBookingStatuses().includes(existingBooking.status)
           && !existingBooking.requestedPartners?.length && !existingBooking.partnerId,
         idempotent: true
       });
@@ -1161,8 +1162,11 @@ async function createBooking(req, res, next) {
           updatedBy: "user"
         },
         price: body.price || 0,
-        status: "pending",
-        requestExpiresAt: new Date(Date.now() + PARTNER_REQUEST_TTL_MS),
+        // Reaching this write means authentication, payload, service-area,
+        // availability and customer verification have all succeeded. Persist
+        // confirmation before any partner-side request is allowed to exist.
+        status: "confirmed",
+        requestExpiresAt: null,
         emergency,
         formAnswers,
         formSchemaVersion: Number(config.forms?.[category]?.version || 0),
@@ -1180,20 +1184,25 @@ async function createBooking(req, res, next) {
           verifiedAt: user.phoneVerifiedAt || null,
           riskStatus: user.phoneVerified ? "trusted" : "otp_required"
         },
-        statusTimeline: [{ status: emergency.isEmergency ? "emergency_requested" : "pending", at: new Date(), by: "user" }]
+        statusTimeline: [{
+          status: "confirmed",
+          at: new Date(),
+          by: "system",
+          note: emergency.isEmergency ? "Emergency booking confirmed by backend" : "Booking confirmed by backend"
+        }]
       });
     } catch (createError) {
       if (createError?.code === 11000) {
         const duplicate = await Booking.findOne(identityFilter);
         if (duplicate && String(duplicate.userId) === String(user._id)) {
-          if (pendingAssignmentStatuses().includes(duplicate.status)
+          if (dispatchableBookingStatuses().includes(duplicate.status)
               && !duplicate.requestedPartners?.length && !duplicate.partnerId) {
             queueBookingDispatch(duplicate, duplicate.serviceCategory || category, dispatchLat, dispatchLng);
           }
           return res.status(200).json({
             booking: serializeBooking(duplicate),
             matchedPartners: duplicate.requestedPartners?.length || 0,
-            dispatchQueued: pendingAssignmentStatuses().includes(duplicate.status)
+            dispatchQueued: dispatchableBookingStatuses().includes(duplicate.status)
               && !duplicate.requestedPartners?.length && !duplicate.partnerId,
             idempotent: true
           });

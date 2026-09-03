@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const http = require("http");
+const crypto = require("crypto");
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -72,6 +73,12 @@ app.use(cors({
 app.use(compression({ threshold: 1024 }));
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
+app.use((req, res, next) => {
+  const supplied = String(req.get("x-request-id") || "").trim();
+  req.requestId = /^[A-Za-z0-9._:-]{8,100}$/.test(supplied) ? supplied : crypto.randomUUID();
+  res.setHeader("x-request-id", req.requestId);
+  next();
+});
 app.use(rejectPlainSensitiveFields);
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 app.use(

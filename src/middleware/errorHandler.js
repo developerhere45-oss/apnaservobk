@@ -35,6 +35,22 @@ function errorHandler(error, req, res, next) {
               : error.message
   };
 
+  payload.requestId = req.requestId || "";
+  if (status >= 500) {
+    console.error("request_failed", {
+      requestId: payload.requestId,
+      method: req.method,
+      path: req.originalUrl || req.path,
+      uidSuffix: String(req.auth?.uid || "").slice(-6),
+      errorName: error?.name || "Error",
+      errorCode: error?.code || "",
+      message: error?.message || "Unknown server error",
+      validationErrors: error?.errors
+        ? Object.values(error.errors).map((entry) => entry?.message).filter(Boolean).slice(0, 10)
+        : []
+    });
+  }
+
   if (process.env.NODE_ENV !== "production") {
     payload.detail = error.message;
     payload.stack = error.stack;

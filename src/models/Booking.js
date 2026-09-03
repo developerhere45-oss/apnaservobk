@@ -202,7 +202,11 @@ const bookingSchema = new mongoose.Schema(
     // field remain valid while new dispatches expose a complete admin audit.
     partnerRequests: { type: [partnerRequestSchema], default: [] },
     dispatchRadiusKm: { type: Number, default: 0 },
-    dispatchMode: { type: String, enum: ["", "customer_location", "city_fallback"], default: "" },
+    dispatchMode: {
+      type: String,
+      enum: ["", "customer_location", "city_fallback", "guwahati_service_area_fallback", "location_required"],
+      default: ""
+    },
     dispatchAttempt: { type: Number, default: 0 },
     dispatchedAt: { type: Date, default: null },
     requestExpiresAt: { type: Date, default: null, index: true },

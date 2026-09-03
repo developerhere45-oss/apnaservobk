@@ -8,10 +8,10 @@ const LocationLog = require("../models/LocationLog");
 const AdminActivity = require("../models/AdminActivity");
 const { validatePartnerLocation, partnerLocationUpdate, locationWriteFilter } = require("../utils/locationValidation");
 const { serviceCategoryVariants } = require("../utils/serviceCategory");
-const { lifecycleLabel, lifecycleStatusForBooking } = require("../utils/bookingLifecycle");
+const { dispatchableBookingStatuses, lifecycleLabel, lifecycleStatusForBooking } = require("../utils/bookingLifecycle");
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { verifyFirebaseIdToken } = require("../utils/firebaseTokenVerifier");
-const { markRequestViewed } = require("../utils/partnerRequestTracking");
+const { addPartnerRequests, markRequestViewed } = require("../utils/partnerRequestTracking");
 const PARTNER_REQUEST_TTL_MS = 10 * 60 * 1000;
 
 let io;
@@ -105,7 +105,7 @@ async function dispatchPendingBookingsToSocketPartner(partner) {
   const candidates = await Booking.find({
     partnerId: null,
     requestedPartners: { $size: 0 },
-    status: "pending",
+    status: { $in: dispatchableBookingStatuses() },
     serviceCategory: { $in: categories },
     createdAt: { $gt: cutoff }
   }).sort({ createdAt: -1 }).limit(20);
@@ -127,12 +127,21 @@ async function dispatchPendingBookingsToSocketPartner(partner) {
     }
     const now = new Date();
     const requestExpiresAt = new Date(now.getTime() + PARTNER_REQUEST_TTL_MS);
+    const tracking = { requestExpiresAt, partnerRequests: [], statusTimeline: [] };
+    addPartnerRequests(tracking, match.partners, {
+      match,
+      source: "automatic",
+      dispatchAttempt: Number(booking.dispatchAttempt || 0) + 1,
+      dispatchStage: Number(booking.dispatchAttempt || 0) + 1,
+      sentAt: now,
+      actor: "system"
+    });
     const updated = await Booking.findOneAndUpdate(
       {
         _id: booking._id,
         partnerId: null,
         requestedPartners: { $size: 0 },
-        status: "pending"
+        status: { $in: dispatchableBookingStatuses() }
       },
       {
         $set: {
@@ -145,14 +154,15 @@ async function dispatchPendingBookingsToSocketPartner(partner) {
         },
         $inc: { dispatchAttempt: 1 },
         $push: {
-          statusTimeline: {
+          partnerRequests: { $each: tracking.partnerRequests },
+          statusTimeline: { $each: [{
             status: "sent_to_partner",
             at: now,
             by: "system",
             note: match.mode === "customer_location"
               ? `Dispatched within ${match.radiusKm} km when a partner came online`
               : "Dispatched by city when a partner came online"
-          }
+          }, ...tracking.statusTimeline] }
         }
       },
       { new: true }

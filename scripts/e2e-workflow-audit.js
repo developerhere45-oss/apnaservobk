@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const {
   transitionDecision,
+  dispatchableBookingStatuses,
   pendingAssignmentStatuses,
   activeJobStatuses,
   isTerminalBookingStatus
@@ -34,6 +35,8 @@ function expectBlocked(currentStatus, nextStatus, actorRole, quoteStatus = "none
 
 record("customer registration creates a booking only after backend confirmation", () => {
   assert.deepEqual(pendingAssignmentStatuses(), ["pending", "sent_to_partner"]);
+  assert.deepEqual(dispatchableBookingStatuses(), ["confirmed", "pending"]);
+  expectOk("confirmed", "cancelled", "user");
   expectOk("pending", "cancelled", "user");
 });
 
