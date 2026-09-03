@@ -71,7 +71,8 @@ const createBookingSchema = z.object({
   emergencyPriority: z.enum(["normal", "urgent", "critical"]).optional(),
   emergencyNotes: z.string().trim().max(500).optional(),
   formAnswers: z.record(z.string().max(500)).optional().default({}),
-  formConfigVersion: z.union([z.string().max(40), z.number()]).optional()
+  formConfigVersion: z.union([z.string().max(40), z.number()]).optional(),
+  commercial: z.boolean().optional().default(false)
 });
 
 function validatedFormAnswers(config, category, submitted) {
@@ -1021,6 +1022,26 @@ async function createBooking(req, res, next) {
     if (submittedPrimaryPhone) body.userPhone = submittedPrimaryPhone;
     const category = normalizeServiceCategory(body.serviceCategory || serviceCategoryForEmergency(body.emergencyType));
     const config = publishedControl.config;
+    if (body.commercial) {
+      const commercialRule = config.services?.commercial;
+      const commercialStatus = commercialRule && isScheduleActive(commercialRule)
+        ? commercialRule.status
+        : "AVAILABLE";
+      if (commercialStatus === "HIGH_DEMAND") {
+        return res.status(409).json({
+          message: commercialRule?.message || "Commercial services are currently receiving high demand. Please try again later.",
+          code: "COMMERCIAL_HIGH_DEMAND",
+          serviceStatus: commercialStatus
+        });
+      }
+      if (["PREPARING", "TEMPORARILY_UNAVAILABLE", "DISABLED"].includes(commercialStatus)) {
+        return res.status(409).json({
+          message: commercialRule?.message || "Commercial services are not accepting enquiries right now.",
+          code: "COMMERCIAL_NOT_AVAILABLE",
+          serviceStatus: commercialStatus
+        });
+      }
+    }
     const formAnswers = validatedFormAnswers(config, category, body.formAnswers);
     const service = await Service.findOne({ serviceCategory: { $in: serviceCategoryVariants(category) } }).lean();
     // This is intentionally before user/profile creation.  A blocked booking

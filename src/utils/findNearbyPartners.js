@@ -1,8 +1,10 @@
 const Partner = require("../models/Partner");
 const { normalizeServiceCategory, serviceCategoryVariants, partnerCanServeService } = require("./serviceCategory");
+const { validateServiceArea } = require("./serviceArea");
 
 const EARTH_RADIUS_M = 6378137;
 const DEFAULT_RADIUS_STEPS_KM = [5, 8];
+const GUWAHATI_FALLBACK_RADIUS_KM = 35;
 
 function safeNumber(value, fallback = 0) {
   const parsed = Number(value);
@@ -131,7 +133,31 @@ async function findNearbyPartnersWithMeta({ serviceCategory, city, lat, lng, rad
         };
       }
     }
-    return { partners: [], radiusKm: steps[steps.length - 1] || 10, mode: "customer_location", distancesMeters: {} };
+    // Android partners can be online and approved but farther than the fast
+    // 5/8 km rings. Keep nearby partners first, then fan out the request to
+    // eligible same-service partners inside the supported Guwahati area so a
+    // valid customer booking never disappears without reaching the app.
+    const cityCandidates = partnersForRequestedService(
+      await Partner.find(filter).limit(250),
+      category
+    );
+    const cityMatches = cityCandidates
+      .map((partner) => ({ partner, distanceMeters: partnerDistance(partner, latitude, longitude) }))
+      .filter((entry) => {
+        const coordinates = entry.partner?.location?.coordinates;
+        return Array.isArray(coordinates)
+          && validateServiceArea(coordinates[1], coordinates[0]).allowed;
+      })
+      .sort((left, right) => left.distanceMeters - right.distanceMeters);
+    if (cityMatches.length) {
+      return {
+        partners: cityMatches.map((entry) => entry.partner),
+        radiusKm: GUWAHATI_FALLBACK_RADIUS_KM,
+        mode: "guwahati_service_area_fallback",
+        distancesMeters: Object.fromEntries(cityMatches.map((entry) => [String(entry.partner._id), Math.round(entry.distanceMeters)]))
+      };
+    }
+    return { partners: [], radiusKm: GUWAHATI_FALLBACK_RADIUS_KM, mode: "customer_location", distancesMeters: {} };
   }
 
   return { partners: [], radiusKm: 10, mode: "location_required", distancesMeters: {} };
