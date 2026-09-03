@@ -340,11 +340,14 @@ function serializeBookingHistory(booking, payments = [], messages = [], availabi
 
 function serializeSupportTicket(ticket) {
   ticket = decryptAdminRecord(ticket);
+  const publicTicketId = ticket.publicId || (/^(ios-|local-)/i.test(ticket.ticketCode || "") ? "" : ticket.ticketCode) || "";
+  const publicBookingCode = /^(ios-|local-)/i.test(ticket.bookingCode || "") ? "" : (ticket.bookingCode || "");
   return {
     id: id(ticket._id),
-    ticketId: ticket.publicId || ticket.ticketCode || "",
-    complaintId: ticket.publicId || ticket.ticketCode || "",
-    bookingCode: ticket.bookingCode || "",
+    ticketId: publicTicketId,
+    complaintId: publicTicketId,
+    bookingId: ticket.bookingId ? id(ticket.bookingId) : "",
+    bookingCode: publicBookingCode,
     userName: ticket.userName || "",
     partnerName: ticket.partnerName || "",
     mobileNumber: ticket.mobileNumber || "",
@@ -3079,7 +3082,10 @@ async function updateSupportTicket(req, res, next) {
     }
     const adminReply = String(body.adminReply || "").trim().slice(0, 3000);
     if (adminReply) {
-      const reply = { senderRole: "admin", senderName: actor, message: adminReply, attachments: [], createdAt: now };
+      if (!ticket.assignedTo) {
+        return res.status(400).json({ message: "Assign this ticket to a support agent before replying" });
+      }
+      const reply = { senderRole: "support", senderName: ticket.assignedTo, message: adminReply, attachments: [], createdAt: now };
       ticket.adminReplies.push(reply);
       ticket.conversation.push(reply);
       ticket.timeline.push({ event: "admin_replied", by: actor, note: adminReply.slice(0, 180), at: now });
@@ -3089,6 +3095,22 @@ async function updateSupportTicket(req, res, next) {
     }
     ticket.lastUpdatedAt = now;
     await ticket.save();
+    if (adminReply && ticket.userId) {
+      const user = await User.findById(ticket.userId);
+      await reliableNotify({
+        recipients: [userNotificationRecipient(user)].filter(Boolean),
+        title: `Reply from ${ticket.assignedTo}`,
+        body: adminReply.slice(0, 180),
+        category: "support_reply",
+        priority: "high",
+        data: {
+          type: "support:reply",
+          actionType: "OPEN_SUPPORT",
+          targetApp: "USER",
+          ticketId: ticket.publicId || ticket.ticketCode
+        }
+      });
+    }
     emitAdminEvent("support:ticket_updated", {
       ticketId: ticket.ticketCode,
       status: ticket.status,

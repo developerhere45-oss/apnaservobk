@@ -7,6 +7,7 @@ const { emitAdminEvent } = require("../sockets/bookingSocket");
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 const { sendWelcomeEmail } = require("../utils/welcomeEmail");
 const { admin, initFirebase } = require("../config/firebase");
+const { nextPublicId } = require("../utils/publicIds");
 
 const profileSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
@@ -34,7 +35,7 @@ const deletionRequestSchema = z.object({
 });
 
 const supportTicketSyncSchema = z.object({
-  ticketId: z.string().trim().min(3).max(120),
+  ticketId: z.string().trim().min(3).max(120).optional(),
   clientMessageId: z.string().trim().max(160).optional(),
   senderRole: z.enum(["user", "ai", "support", "system"]).default("user"),
   senderName: z.string().trim().max(120).optional(),
@@ -96,7 +97,7 @@ async function resolveBooking(rawId, rawCode, userId) {
   if (id) filters.push({ bookingCode: id });
   if (code) filters.push({ bookingCode: code });
   if (!filters.length) return null;
-  return Booking.findOne({ userId, $or: filters }).select("_id bookingCode");
+  return Booking.findOne({ userId, $or: filters }).select("_id bookingId publicId bookingCode");
 }
 
 async function upsertProfile(req, res, next) {
@@ -283,18 +284,25 @@ async function syncSupportTicket(req, res, next) {
       mimeType: body.attachmentMimeType || "image/jpeg",
       uploadedAt: now
     } : null;
-    let ticket = await SupportTicket.findOne({ ticketCode: body.ticketId, userId: user._id });
+    let ticket = body.ticketId
+      ? await SupportTicket.findOne({
+        userId: user._id,
+        $or: [{ ticketCode: body.ticketId }, { publicId: body.ticketId.toUpperCase() }]
+      })
+      : null;
     const isNew = !ticket;
 
     if (!ticket) {
       if (body.senderRole !== "user") {
         return res.status(400).json({ message: "A customer complaint is required to create a support ticket" });
       }
+      const officialTicketId = await nextPublicId("userComplaint");
       ticket = new SupportTicket({
-        ticketCode: body.ticketId,
+        ticketCode: officialTicketId,
+        publicId: officialTicketId,
         userId: user._id,
         bookingId: booking?._id || null,
-        bookingCode: booking?.bookingCode || body.bookingCode || "",
+        bookingCode: booking?.bookingId || booking?.publicId || booking?.bookingCode || body.bookingCode || "",
         userName: user.name || "",
         mobileNumber: user.phone || "",
         email: user.email || "",
@@ -332,7 +340,7 @@ async function syncSupportTicket(req, res, next) {
     }
     if (booking && !ticket.bookingId) {
       ticket.bookingId = booking._id;
-      ticket.bookingCode = booking.bookingCode;
+      ticket.bookingCode = booking.bookingId || booking.publicId || booking.bookingCode;
     }
     if (body.senderRole === "user" && body.aiSummary) ticket.aiSummary = body.aiSummary;
     if (!duplicate && body.senderRole === "user" && ["resolved", "closed"].includes(ticket.status)) {
@@ -355,7 +363,7 @@ async function syncSupportTicket(req, res, next) {
 
     return res.status(isNew ? 201 : 200).json({
       ok: true,
-      ticketId: ticket.ticketCode,
+      ticketId: ticket.publicId || ticket.ticketCode,
       supportTicketId: String(ticket._id),
       status: ticket.status,
       idempotent: Boolean(duplicate)
@@ -371,12 +379,17 @@ async function getSupportTicket(req, res, next) {
     const user = await User.findOne({ firebaseUid: req.auth.uid }).select("_id");
     if (!user) return res.status(404).json({ message: "Customer profile not found" });
 
-    const ticket = await SupportTicket.findOne({ ticketCode, userId: user._id });
+    const ticket = await SupportTicket.findOne({
+      userId: user._id,
+      $or: [{ ticketCode }, { publicId: ticketCode.toUpperCase() }]
+    });
     if (!ticket) return res.status(404).json({ message: "Support ticket not found" });
 
     return res.json({
-      ticketId: ticket.ticketCode,
+      ticketId: ticket.publicId || ticket.ticketCode,
       status: ticket.status,
+      assignedTo: ticket.assignedTo || "",
+      bookingCode: ticket.bookingCode || "",
       messages: (ticket.conversation || []).map((entry) => ({
         id: String(entry._id),
         bookingId: "support",
