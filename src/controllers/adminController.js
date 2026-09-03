@@ -1042,11 +1042,47 @@ async function forwardBookingToPartners({ booking, partners, reason = "Admin man
   const dispatchedAt = new Date();
   booking.dispatchedAt = dispatchedAt;
   booking.requestExpiresAt = new Date(dispatchedAt.getTime() + 10 * 60 * 1000);
+  const dispatchAttempt = Number(booking.dispatchAttempt || 0) + 1;
+  const coordinates = bookingCoordinates(booking);
+  const distancesMeters = {};
+  if (findNearbyPartners.validCoordinates(coordinates.lat, coordinates.lng)) {
+    for (const partner of forwardedPartners) {
+      const point = partner.location?.coordinates || [];
+      if (findNearbyPartners.validCoordinates(point[1], point[0])) {
+        distancesMeters[id(partner._id)] = Math.round(findNearbyPartners.distanceMeters(coordinates.lat, coordinates.lng, point[1], point[0]));
+      }
+    }
+  }
+  cancelOutstandingRequests(booking, {
+    at: dispatchedAt,
+    reason: "Superseded by an admin routing round"
+  });
+  const partnerRequests = addPartnerRequests(booking, forwardedPartners, {
+    match: { distancesMeters, radiusKm: 0, mode: "admin_selection" },
+    source: ["area", "individual", "bulk"].includes(mode) ? mode : "manual",
+    dispatchAttempt,
+    dispatchStage: dispatchAttempt,
+    sentAt: dispatchedAt,
+    actor: "admin"
+  });
+  booking.dispatchAttempt = dispatchAttempt;
   booking.statusTimeline.push({ status: mode === "bulk" ? "admin_bulk_forwarded" : "admin_forwarded", at: now, by: "admin" });
   booking.statusTimeline.push({ status: "sent_to_partner", at: now, by: "admin" });
   await booking.save();
 
   emitNewBookingToPartners(booking, forwardedPartners);
+  for (const request of partnerRequests) {
+    emitAdminEvent("booking:partner_request_sent", {
+      bookingId: String(booking._id),
+      bookingCode: booking.bookingCode,
+      userId: String(booking.userId || ""),
+      partnerId: String(request.partnerId || ""),
+      partnerName: request.partnerSnapshot?.name || "Partner",
+      requestId: request.requestId || "",
+      status: request.status || "requested",
+      source: request.source || mode
+    });
+  }
   emitAdminEvent("booking:admin_forwarded", {
     ...smartBookingRow(booking),
     assignedPartnerIds: partnerIds,
@@ -1056,7 +1092,7 @@ async function forwardBookingToPartners({ booking, partners, reason = "Admin man
     mode
   });
 
-  await reliableNotify({
+  const delivery = await reliableNotify({
     recipients: forwardedPartners.map(partnerNotificationRecipient),
     title: "Booking assigned by ApnaServo",
     body: `${booking.serviceName || serviceLabel(booking.serviceCategory)} booking ${booking.bookingCode} is available in ${booking.city || "your area"}. Accept it from the Partner App.`,
@@ -1073,6 +1109,29 @@ async function forwardBookingToPartners({ booking, partners, reason = "Admin man
     },
     smsBody: `ApnaServo: Booking ${booking.bookingCode} for ${booking.serviceName || booking.serviceCategory} is available. Open Partner App to accept.`
   });
+  const deliveryUpdates = [];
+  for (let index = 0; index < partnerRequests.length; index += 1) {
+    const outcome = recordNotificationResult(booking, partnerRequests[index].requestId, delivery.results[index] || {}, { at: new Date() });
+    if (outcome.changed && outcome.request) deliveryUpdates.push(outcome.request);
+  }
+  if (deliveryUpdates.length) {
+    await booking.save();
+    for (const request of deliveryUpdates) {
+      emitAdminEvent(
+        request.notification?.pushStatus === "sent" ? "booking:partner_request_delivered" : "booking:partner_request_failed",
+        {
+          bookingId: String(booking._id),
+          bookingCode: booking.bookingCode,
+          userId: String(booking.userId || ""),
+          partnerId: String(request.partnerId || ""),
+          partnerName: request.partnerSnapshot?.name || "Partner",
+          requestId: request.requestId || "",
+          status: request.status || "requested",
+          source: request.source || mode
+        }
+      );
+    }
+  }
 
   const user = await User.findById(booking.userId);
   await reliableNotify({

@@ -815,6 +815,9 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
     }
 
     emitNewBookingToPartners(claimedBooking, partners);
+    for (const request of partnerRequests) {
+      emitAdminEvent("booking:partner_request_sent", partnerRequestEventPayload(claimedBooking, request));
+    }
     reliableNotify({
       recipients: partners.map(partnerRecipient),
       title: claimedBooking.emergency?.isEmergency ? "Emergency Booking Request" : "New Booking Request",
@@ -856,6 +859,11 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
           bookingCode: claimedBooking.bookingCode,
           message: error.message
         });
+        return recordPartnerRequestDeliveryResults(
+          claimedBooking._id,
+          partnerRequests,
+          partnerRequests.map(() => ({ pushStatus: "failed", pushError: error.message }))
+        );
       });
   }
 

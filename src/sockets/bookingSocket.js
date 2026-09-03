@@ -11,6 +11,7 @@ const { serviceCategoryVariants } = require("../utils/serviceCategory");
 const { lifecycleLabel, lifecycleStatusForBooking } = require("../utils/bookingLifecycle");
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { verifyFirebaseIdToken } = require("../utils/firebaseTokenVerifier");
+const { markRequestViewed } = require("../utils/partnerRequestTracking");
 const PARTNER_REQUEST_TTL_MS = 10 * 60 * 1000;
 
 let io;
@@ -508,6 +509,50 @@ function initBookingSocket(httpServer) {
         reason: String(reason || "unknown")
       });
     });
+
+    handleSocketEvent(socket, "booking:request_viewed", async (payload = {}) => {
+      if (!socket.partner) return;
+      if (!allowSocketEvent(socket, "booking:request_viewed", 60, 60 * 1000)) {
+        socket.emit("rate_limited", { event: "booking:request_viewed" });
+        return;
+      }
+      const clauses = bookingIdentityClauses(payload.bookingId || payload.bookingCode);
+      if (!clauses.length) {
+        socket.emit("booking:request_viewed", { ok: false, message: "Booking id is required" });
+        return;
+      }
+      const booking = await Booking.findOne({
+        $or: clauses,
+        partnerId: null,
+        requestedPartners: socket.partner._id,
+        status: { $in: ["pending", "sent_to_partner"] },
+        requestExpiresAt: { $gt: new Date() }
+      });
+      if (!booking) {
+        socket.emit("booking:request_viewed", { ok: false, message: "Active booking request not found" });
+        return;
+      }
+      const result = markRequestViewed(booking, socket.partner._id, { source: "partner_socket" });
+      if (result.changed) {
+        await booking.save();
+        emitAdminEvent("booking:partner_request_viewed", {
+          bookingId: String(booking._id),
+          bookingCode: booking.bookingCode || "",
+          userId: String(booking.userId || ""),
+          partnerId: String(socket.partner._id),
+          partnerName: result.request?.partnerSnapshot?.name || socket.partner.name || "Partner",
+          requestId: result.request?.requestId || "",
+          status: result.request?.status || "viewed"
+        });
+      }
+      socket.emit("booking:request_viewed", {
+        ok: true,
+        idempotent: !result.changed,
+        requestId: result.request?.requestId || "",
+        viewedAt: result.request?.viewedAt || null
+      });
+    });
+
     handleSocketEvent(socket, "partner:online", async (payload = {}) => {
       if (!socket.partner) return;
       if (!allowSocketEvent(socket, "partner:online", 20, 60 * 1000)) {
