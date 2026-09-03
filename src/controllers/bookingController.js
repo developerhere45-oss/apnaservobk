@@ -2824,9 +2824,18 @@ async function getBookingLaunchStatus(req, res, next) {
   }
 }
 
+async function getServiceChecklist(req, res, next) {
+  try {
+    return res.json({ checklist: await getChecklist(req.params.serviceCategory) });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   getBookingLaunchStatus,
   requestLaunchNotification,
+  getServiceChecklist,
   createBooking,
   listUserBookings,
   listPartnerBookings,
