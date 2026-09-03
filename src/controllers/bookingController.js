@@ -1344,7 +1344,17 @@ async function listPartnerBookings(req, res, next) {
     const respondedRequests = handledRequests + rejectedRequests;
     const responseRate = respondedRequests > 0 ? Math.round((handledRequests * 100) / respondedRequests) : 0;
     const responsePayload = {
-      bookings: bookings.map((booking) => protectCustomerPhoneForPartner(serializeBooking(booking), booking, partner)),
+      bookings: bookings.map((booking) => {
+        const payload = protectCustomerPhoneForPartner(serializeBooking(booking), booking, partner);
+        if (!booking.partnerId && pendingAssignmentStatuses().includes(String(booking.status || ""))) {
+          // Compatibility for already-installed Partner builds that used the
+          // booking creation time as a 10-minute visibility TTL. The canonical
+          // createdAt stays unchanged; only the open-request availability hint
+          // remains current until the request is handled or cancelled.
+          payload.createdAtMillis = now.getTime();
+        }
+        return payload;
+      }),
       stats: {
         activeJobs,
         completedJobs: Number(earnings.completedJobs || 0),
