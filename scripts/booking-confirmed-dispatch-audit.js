@@ -59,8 +59,7 @@ async function main() {
     });
 
     const sentAt = new Date();
-    const expiresAt = new Date(sentAt.getTime() + 10 * 60 * 1000);
-    const tracking = { requestExpiresAt: expiresAt, partnerRequests: [], statusTimeline: [] };
+    const tracking = { requestExpiresAt: null, partnerRequests: [], statusTimeline: [] };
     const requests = addPartnerRequests(tracking, match.partners, {
       match,
       dispatchAttempt: 1,
@@ -82,7 +81,7 @@ async function main() {
           dispatchMode: match.mode,
           dispatchRadiusKm: match.radiusKm,
           dispatchedAt: sentAt,
-          requestExpiresAt: expiresAt
+          requestExpiresAt: null
         },
         $push: { statusTimeline: { $each: tracking.statusTimeline } }
       },
@@ -92,7 +91,7 @@ async function main() {
     assert.equal(dispatched.status, "sent_to_partner");
     assert.equal(dispatched.requestedPartners.length, 2);
     assert.equal(dispatched.partnerRequests.length, 2);
-    assert.ok(dispatched.requestExpiresAt > dispatched.dispatchedAt, "expiry must start at dispatch time");
+    assert.equal(dispatched.requestExpiresAt, null, "partner request must not expire based on time of day or elapsed time");
 
     const duplicate = await Booking.findOneAndUpdate(
       { _id: booking._id, requestedPartners: { $size: 0 }, status: { $in: dispatchableBookingStatuses() } },
@@ -111,8 +110,7 @@ async function main() {
     const visibleAfterRestart = await Booking.findOne({
       _id: booking._id,
       requestedPartners: eligible[1]._id,
-      status: "sent_to_partner",
-      requestExpiresAt: { $gt: new Date() }
+      status: "sent_to_partner"
     });
     assert.ok(visibleAfterRestart, "FCM failure must not remove the durable partner dashboard request");
 

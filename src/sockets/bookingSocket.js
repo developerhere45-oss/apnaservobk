@@ -12,7 +12,6 @@ const { dispatchableBookingStatuses, lifecycleLabel, lifecycleStatusForBooking }
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { verifyFirebaseIdToken } = require("../utils/firebaseTokenVerifier");
 const { addPartnerRequests, markRequestViewed } = require("../utils/partnerRequestTracking");
-const PARTNER_REQUEST_TTL_MS = 10 * 60 * 1000;
 
 let io;
 
@@ -101,13 +100,11 @@ async function dispatchPendingBookingsToSocketPartner(partner) {
     return 0;
   }
 
-  const cutoff = new Date(Date.now() - PARTNER_REQUEST_TTL_MS);
   const candidates = await Booking.find({
     partnerId: null,
     requestedPartners: { $size: 0 },
     status: { $in: dispatchableBookingStatuses() },
-    serviceCategory: { $in: categories },
-    createdAt: { $gt: cutoff }
+    serviceCategory: { $in: categories }
   }).sort({ createdAt: -1 }).limit(20);
 
   let dispatched = 0;
@@ -126,7 +123,7 @@ async function dispatchPendingBookingsToSocketPartner(partner) {
       continue;
     }
     const now = new Date();
-    const requestExpiresAt = new Date(now.getTime() + PARTNER_REQUEST_TTL_MS);
+    const requestExpiresAt = null;
     const tracking = { requestExpiresAt, partnerRequests: [], statusTimeline: [] };
     addPartnerRequests(tracking, match.partners, {
       match,
@@ -535,8 +532,7 @@ function initBookingSocket(httpServer) {
         $or: clauses,
         partnerId: null,
         requestedPartners: socket.partner._id,
-        status: { $in: ["pending", "sent_to_partner"] },
-        requestExpiresAt: { $gt: new Date() }
+        status: { $in: ["pending", "sent_to_partner"] }
       });
       if (!booking) {
         socket.emit("booking:request_viewed", { ok: false, message: "Active booking request not found" });

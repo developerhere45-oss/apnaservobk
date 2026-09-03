@@ -26,7 +26,7 @@ const otpRoutes = require("./routes/otpRoutes");
 const publicInfoRoutes = require("./routes/publicInfoRoutes");
 const { initBookingSocket } = require("./sockets/bookingSocket");
 const { startNotificationScheduler } = require("./utils/notificationScheduler");
-const { startBookingRequestExpiryScheduler } = require("./utils/bookingRequestExpiry");
+const { restoreLegacyTimedOutRequests } = require("./utils/bookingRequestExpiry");
 const cache = require("./config/cache");
 const { cdnFriendlyHeaders } = require("./middleware/cdnHeaders");
 const { requireHttpsInProduction } = require("./middleware/httpsOnly");
@@ -163,8 +163,8 @@ function startKeepAlive() {
 
 async function start() {
   await connectDb();
+  await restoreLegacyTimedOutRequests();
   startNotificationScheduler();
-  startBookingRequestExpiryScheduler();
   startKeepAlive();
   const port = Number(process.env.PORT || 5000);
   server.listen(port, "0.0.0.0", () => {

@@ -25,7 +25,6 @@ const {
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens } = require("../utils/notificationTokens");
-const { expireDueBookingRequests } = require("../utils/bookingRequestExpiry");
 const { validateServiceArea } = require("../utils/serviceArea");
 const { getPublishedConfig, isScheduleActive, bookingAvailability } = require("../utils/appControl");
 const { getBookingLaunchConfig, ensureLaunchNotificationSchedule } = require("../utils/bookingLaunchConfig");
@@ -616,12 +615,10 @@ function partnerOpenBookingVisibility(partner, categories) {
     rejectedPartners: { $ne: partner._id },
     status: { $in: pendingAssignmentStatuses() },
     serviceCategory: { $in: categories },
-    requestedPartners: partner._id,
-    requestExpiresAt: { $gt: new Date() }
+    requestedPartners: partner._id
   };
 }
 
-const PARTNER_REQUEST_TTL_MS = 10 * 60 * 1000;
 
 function partnerAcceptBlockReason(partner) {
   if (!partner) return "Partner profile not found";
@@ -764,7 +761,7 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
 
   if (!booking.requestedPartners || booking.requestedPartners.length === 0) {
     const dispatchedAt = new Date();
-    const requestExpiresAt = new Date(dispatchedAt.getTime() + PARTNER_REQUEST_TTL_MS);
+    const requestExpiresAt = null;
     const dispatchAttempt = Number(booking.dispatchAttempt || 0) + 1;
     const tracking = { requestExpiresAt, partnerRequests: [], statusTimeline: [] };
     const partnerRequests = addPartnerRequests(tracking, partners, {
@@ -890,13 +887,11 @@ function queueBookingDispatch(booking, category, lat, lng) {
 
 async function recoverRecentUndispatchedBookings(partner, categories) {
   if (!partnerCanViewOpenJobs(partner) || !categories.length) return;
-  const cutoff = new Date(Date.now() - PARTNER_REQUEST_TTL_MS);
   const candidates = await Booking.find({
     partnerId: null,
     requestedPartners: { $size: 0 },
     status: { $in: dispatchableBookingStatuses() },
-    serviceCategory: { $in: categories },
-    createdAt: { $gt: cutoff }
+    serviceCategory: { $in: categories }
   }).sort({ createdAt: -1 }).limit(10);
 
   for (const booking of candidates) {
@@ -1249,7 +1244,6 @@ async function listUserBookings(req, res, next) {
       ? await User.find({ $or: identityFilters }).select("_id")
       : [];
     const userIds = [...new Set([String(user._id), ...linkedUsers.map((entry) => String(entry._id))])];
-    await expireDueBookingRequests({ userId: { $in: userIds } });
     const refreshedBookings = await Booking.find({ userId: { $in: userIds } }).sort({ createdAt: -1 });
     await expireQuotesIfNeeded(refreshedBookings);
     return res.json({ bookings: refreshedBookings.map(serializeBooking) });
@@ -1288,8 +1282,7 @@ async function listPartnerBookings(req, res, next) {
           partnerId: null,
           requestedPartners: partner._id,
           rejectedPartners: { $ne: partner._id },
-          status: { $in: pendingAssignmentStatuses() },
-          requestExpiresAt: { $gt: new Date() }
+          status: { $in: pendingAssignmentStatuses() }
         },
         canViewOpenJobs ? partnerOpenBookingVisibility(partner, categories) : { _id: null }
       ]
@@ -1400,7 +1393,6 @@ async function acceptBooking(req, res, next) {
     const idFilter = bookingIdFilter(bookingId);
     const query = {
       partnerId: null,
-      requestExpiresAt: { $gt: acceptedAt },
       $and: [
         idFilter,
         partnerOpenBookingVisibility(partner, partnerCategoryVariants(partner))
@@ -2223,8 +2215,7 @@ async function recordBookingRequestViewed(req, res, next) {
       ],
       partnerId: null,
       requestedPartners: partner._id,
-      status: { $in: pendingAssignmentStatuses() },
-      requestExpiresAt: { $gt: new Date() }
+      status: { $in: pendingAssignmentStatuses() }
     });
     if (!booking) return res.status(404).json({ message: "Active booking request not found" });
     const result = markRequestViewed(booking, partner._id, { source: "partner_app" });

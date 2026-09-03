@@ -1,136 +1,38 @@
 const { Booking } = require("../models/Booking");
-const User = require("../models/User");
-const { reliableNotify } = require("./reliableNotify");
-const { activeDeviceTokens } = require("./notificationTokens");
-const { emitBookingStatusUpdate, emitAdminEvent } = require("../sockets/bookingSocket");
-const { expireOutstandingRequests } = require("./partnerRequestTracking");
 
-const SWEEP_INTERVAL_MS = 15 * 1000;
-const SWEEP_BATCH_SIZE = 100;
-let scheduler;
-let sweepInFlight = false;
-
-function userRecipient(user) {
-  const tokens = activeDeviceTokens(user, "user").map((device) => device.token);
-  return {
-    role: "user",
-    userId: user._id,
-    firebaseUid: user.firebaseUid,
-    token: tokens[0] || user.fcmToken,
-    tokens,
-    phone: user.phone
-  };
-}
-
-async function expireOne(candidateId, now) {
-  const booking = await Booking.findOneAndUpdate(
+// Partner requests no longer expire on a clock. Restore recent bookings that
+// the legacy 10-minute scheduler closed so overnight requests can be routed
+// again when an eligible partner polls or comes online.
+async function restoreLegacyTimedOutRequests(now = new Date()) {
+  const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const result = await Booking.updateMany(
     {
-      _id: candidateId,
       partnerId: null,
-      status: { $in: ["pending", "sent_to_partner"] },
-      requestExpiresAt: { $ne: null, $lte: now }
+      status: "expired",
+      expiryReason: "No partner accepted within 10 minutes",
+      createdAt: { $gte: cutoff }
     },
     {
       $set: {
-        status: "expired",
-        requestExpiredAt: now,
-        expiryReason: "No partner accepted within 10 minutes",
+        status: "confirmed",
+        requestExpiresAt: null,
+        requestExpiredAt: null,
+        expiryReason: "",
         requestedPartners: []
       },
       $push: {
         statusTimeline: {
-          status: "expired",
+          status: "confirmed",
           at: now,
           by: "system",
-          note: "No partner accepted within 10 minutes; customer may retry as a new booking"
+          note: "Restored after removal of timed partner-request expiry"
         }
       }
-    },
-    { new: true }
+    }
   );
-  if (!booking) return null;
-
-  const expiredRequests = expireOutstandingRequests(booking, { at: now });
-  if (expiredRequests.length) {
-    await booking.save();
-    for (const request of expiredRequests) {
-      emitAdminEvent("booking:partner_request_expired", {
-        bookingId: String(booking._id),
-        bookingCode: booking.bookingCode || "",
-        userId: String(booking.userId || ""),
-        partnerId: String(request.partnerId || ""),
-        partnerName: request.partnerSnapshot?.name || "Partner",
-        requestId: request.requestId || "",
-        status: "expired",
-        source: request.source || "automatic"
-      });
-    }
-  }
-
-  emitBookingStatusUpdate(booking);
-  try {
-    const user = await User.findById(booking.userId);
-    if (user) {
-      await reliableNotify({
-        recipients: [userRecipient(user)],
-        title: "No partner accepted your booking",
-        body: `Booking ${booking.bookingCode} is closed. Tap to retry the booking.`,
-        category: "booking_status",
-        priority: "high",
-        data: {
-          type: "booking:request_expired",
-          status: "expired",
-          bookingId: booking.bookingId || booking.publicId || booking.bookingCode,
-          internalBookingId: String(booking._id),
-          bookingCode: booking.bookingCode,
-          actionType: "OPEN_BOOKING"
-        },
-        smsBody: ""
-      });
-    }
-  } catch (error) {
-    console.error("Expired booking notification failed:", error.message);
-  }
-  return booking;
+  const restored = Number(result.modifiedCount || 0);
+  if (restored) console.log("restored_legacy_timed_booking_requests", { restored });
+  return restored;
 }
 
-async function expireDueBookingRequests(filter = {}) {
-  const now = new Date();
-  const candidates = await Booking.find({
-    ...filter,
-    partnerId: null,
-    status: { $in: ["pending", "sent_to_partner"] },
-    requestExpiresAt: { $ne: null, $lte: now }
-  }).select("_id").sort({ requestExpiresAt: 1 }).limit(SWEEP_BATCH_SIZE).lean();
-
-  const expired = [];
-  for (const candidate of candidates) {
-    const booking = await expireOne(candidate._id, now);
-    if (booking) expired.push(booking);
-  }
-  return expired;
-}
-
-async function tick() {
-  if (sweepInFlight) return;
-  sweepInFlight = true;
-  try {
-    await expireDueBookingRequests();
-  } finally {
-    sweepInFlight = false;
-  }
-}
-
-function startBookingRequestExpiryScheduler() {
-  if (scheduler || process.env.DISABLE_BOOKING_EXPIRY_SCHEDULER === "true") return;
-  setTimeout(() => tick().catch((error) => console.error("Booking expiry sweep failed:", error.message)), 1000).unref?.();
-  scheduler = setInterval(() => {
-    tick().catch((error) => console.error("Booking expiry sweep failed:", error.message));
-  }, SWEEP_INTERVAL_MS);
-  scheduler.unref?.();
-}
-
-module.exports = {
-  expireDueBookingRequests,
-  startBookingRequestExpiryScheduler
-};
+module.exports = { restoreLegacyTimedOutRequests };
