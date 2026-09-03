@@ -139,14 +139,18 @@ function isScheduleActive(item, now = Date.now()) {
 }
 
 function normalizedApp(app) { return String(app || "customer").toLowerCase() === "partner" ? "partner" : "customer"; }
+function normalizedPlatform(platform) { return String(platform || "android").toLowerCase() === "ios" ? "ios" : "android"; }
 
-async function getPublishedConfig({ force = false, app = "customer" } = {}) {
+async function getPublishedConfig({ force = false, app = "customer", platform = "android" } = {}) {
   const target = normalizedApp(app);
-  const cached = cache.get(target);
+  const targetPlatform = normalizedPlatform(platform);
+  const cacheKey = `${target}:${targetPlatform}`;
+  const cached = cache.get(cacheKey);
   if (!force && cached && Date.now() - cached.at < CONFIG_CACHE_TTL_MS) return cached.value;
-  const document = await AppControlConfig.findOne({ key: `${target}-app` }).lean();
+  const key = target === "customer" && targetPlatform === "ios" ? "customer-ios-app" : `${target}-app`;
+  const document = await AppControlConfig.findOne({ key }).lean();
   const value = { config: normalizeConfig(document?.published), version: Number(document?.version || 0), publishedAt: document?.publishedAt || null, updatedAt: document?.updatedAt || null };
-  cache.set(target, { at: Date.now(), value });
+  cache.set(cacheKey, { at: Date.now(), value });
   return value;
 }
 
@@ -164,13 +168,16 @@ function bookingAvailability(config) {
   return { allowed: true };
 }
 
-function invalidatePublishedConfig(app) { if (app) cache.delete(normalizedApp(app)); else cache.clear(); }
+function invalidatePublishedConfig(app, platform) { if (app) cache.delete(`${normalizedApp(app)}:${normalizedPlatform(platform)}`); else cache.clear(); }
 
-async function getPublicAppControlConfig(audience = "users", app = "customer") {
+async function getPublicAppControlConfig(audience = "users", app = "customer", platform = "android") {
   const target = normalizedApp(app);
-  const state = await getPublishedConfig({ app: target });
+  const targetPlatform = normalizedPlatform(platform);
+  const state = await getPublishedConfig({ app: target, platform: targetPlatform });
   const now = Date.now();
-  const appFilter = target === "customer" ? { $or: [{ app: "customer" }, { app: { $exists: false } }] } : { app: "partner" };
+  const appFilter = target === "customer"
+    ? { $and: [{ $or: [{ app: "customer" }, { app: { $exists: false } }] }, targetPlatform === "ios" ? { platform: "ios" } : { $or: [{ platform: "android" }, { platform: { $exists: false } }] }] }
+    : { app: "partner" };
   const announcements = await AppControlItem.find({ ...appFilter, kind: "announcement", status: "published", audience: { $in: ["all", audience] } }).sort({ priority: 1, createdAt: -1 }).limit(50).lean();
   const banners = target === "partner" ? [] : await AppControlItem.find({ ...appFilter, kind: "banner", status: "published", audience: { $in: ["all", audience] } }).sort({ priority: 1, createdAt: -1 }).limit(50).lean();
   const active = (items) => items.filter((item) => isScheduleActive(item, now)).map((item) => ({ id: String(item._id), title: item.title, message: item.message, imageUrl: item.imageUrl, ctaText: item.ctaText, ctaAction: item.ctaAction, serviceCategory: item.serviceCategory, placement: item.placement, priority: item.priority, bannerStyle: item.bannerStyle || {} }));
@@ -184,4 +191,4 @@ function compareVersions(left, right) {
   return 0;
 }
 
-module.exports = { DEFAULT_CONFIG, normalizeConfig, getPublishedConfig, getPublicAppControlConfig, invalidatePublishedConfig, isScheduleActive, bookingAvailability, compareVersions, normalizedApp };
+module.exports = { DEFAULT_CONFIG, normalizeConfig, getPublishedConfig, getPublicAppControlConfig, invalidatePublishedConfig, isScheduleActive, bookingAvailability, compareVersions, normalizedApp, normalizedPlatform };
