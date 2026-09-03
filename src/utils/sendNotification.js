@@ -16,21 +16,26 @@ async function sendNotification({ token, tokens, title, body, data = {} }) {
   const notificationTag = messageData.bookingId || messageData.actionId || "";
   const isChat = String(messageData.actionType || "").toUpperCase() === "OPEN_BOOKING_CHAT"
     || String(messageData.type || "").toLowerCase().includes("chat");
-  const targetApp = String(messageData.targetApp || "").toUpperCase();
+  const targetApp = String(messageData.targetApp || messageData.target_app || "").toLowerCase();
   const category = String(messageData.category || "").toLowerCase();
-  const type = String(messageData.type || "").toLowerCase();
-  // Incoming partner bookings must be data-only. With a notification+data
-  // payload Android renders the notification itself while the app is in the
-  // background, bypassing FirebaseMessagingService and therefore losing the
-  // existing Accept/Reject actions, deterministic dedupe and booking ringtone.
-  const isIncomingPartnerBooking = targetApp === "PARTNER"
-    && (category === "booking_request" || category === "emergency_booking"
-      || type.includes("new_request") || type.includes("emergency_request"));
+  const eventType = String(messageData.type || "").toLowerCase();
+  const isPartnerBookingRequest = targetApp === "partner"
+    && (category === "booking_request"
+      || category === "emergency_booking"
+      || eventType.includes("new_request")
+      || eventType.includes("emergency_request"));
+  // This must stay identical to PartnerBookingActionReceiver.CHANNEL_BOOKING_REQUESTS.
+  // Android handles notification+data messages itself while the app is backgrounded
+  // or swiped away, so a mismatched channel silently bypasses the app's booking ring.
+  const androidChannelId = isPartnerBookingRequest
+    ? "partner_booking_requests_call_v4"
+    : (isChat ? "booking_chat" : "booking_requests");
+  const androidSound = isPartnerBookingRequest ? "incoming_booking_ring" : "default";
   const notificationMessage = {
-    ...(!isIncomingPartnerBooking ? { notification: {
+    notification: {
       title: notificationTitle,
       body: notificationBody
-    } } : {}),
+    },
     data: {
       ...messageData,
       title: notificationTitle,
@@ -39,11 +44,14 @@ async function sendNotification({ token, tokens, title, body, data = {} }) {
     android: {
       priority: "high",
       ttl: 10 * 60 * 1000,
-      ...(!isIncomingPartnerBooking ? { notification: {
-        channelId: isChat ? "booking_chat" : "booking_requests",
-        sound: "default",
+      notification: {
+        channelId: androidChannelId,
+        sound: androidSound,
+        priority: isPartnerBookingRequest ? "max" : "high",
+        visibility: "public",
+        defaultVibrateTimings: true,
         ...(notificationTag ? { tag: notificationTag } : {})
-      } } : {})
+      }
     },
     apns: {
       headers: {

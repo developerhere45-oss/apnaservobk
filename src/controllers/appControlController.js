@@ -70,7 +70,16 @@ function managedUpdate(value) {
   } };
 }
 const managedCustomerUpdate = managedUpdate;
-function itemPayload(body) { const fields = ["title", "message", "imageUrl", "ctaText", "ctaAction", "serviceCategory", "placement", "priority", "audience", "startsAt", "endsAt"]; const output = Object.fromEntries(fields.filter((field) => Object.hasOwn(body || {}, field)).map((field) => [field, body[field]])); const start = output.startsAt ? new Date(output.startsAt).getTime() : -Infinity; const end = output.endsAt ? new Date(output.endsAt).getTime() : Infinity; if (Number.isNaN(start) || Number.isNaN(end) || start > end) { const error = new Error("End time must be after start time"); error.status = 400; throw error; } return output; }
+function bannerStyle(value) {
+  const source = isObject(value) ? value : {};
+  const safeColor = (key, fallback) => /^#[0-9a-fA-F]{6}$/.test(String(source[key] || "")) ? String(source[key]).toLowerCase() : fallback;
+  const number = (key, fallback, min, max) => Math.min(max, Math.max(min, Number.isFinite(Number(source[key])) ? Number(source[key]) : fallback));
+  const font = ["system", "rounded", "serif", "monospaced"].includes(source.titleFont) ? source.titleFont : "system";
+  const weight = ["regular", "semibold", "bold", "heavy"].includes(source.titleWeight) ? source.titleWeight : "heavy";
+  const alignment = ["leading", "center", "trailing"].includes(source.textAlignment) ? source.textAlignment : "leading";
+  return { backgroundColor: safeColor("backgroundColor", "#161616"), overlayColor: safeColor("overlayColor", "#000000"), overlayOpacity: number("overlayOpacity", 0.32, 0, 0.9), titleColor: safeColor("titleColor", "#ffffff"), messageColor: safeColor("messageColor", "#ffffff"), ctaBackgroundColor: safeColor("ctaBackgroundColor", "#ffffff"), ctaTextColor: safeColor("ctaTextColor", "#161616"), titleFont: font, titleWeight: weight, titleSize: number("titleSize", 28, 16, 42), messageSize: number("messageSize", 13, 10, 24), textAlignment: alignment };
+}
+function itemPayload(body) { const fields = ["title", "message", "imageUrl", "ctaText", "ctaAction", "serviceCategory", "placement", "priority", "audience", "startsAt", "endsAt"]; const output = Object.fromEntries(fields.filter((field) => Object.hasOwn(body || {}, field)).map((field) => [field, body[field]])); if (Object.hasOwn(body || {}, "bannerStyle")) output.bannerStyle = bannerStyle(body.bannerStyle); const start = output.startsAt ? new Date(output.startsAt).getTime() : -Infinity; const end = output.endsAt ? new Date(output.endsAt).getTime() : Infinity; if (Number.isNaN(start) || Number.isNaN(end) || start > end) { const error = new Error("End time must be after start time"); error.status = 400; throw error; } return output; }
 async function audit(req, eventName, title, detail, payload = {}) { await AdminActivity.create({ eventName, category: "app_control", title, detail, actorRole: "admin", actorName: actor(req), status: "success", payload: { ...payload, app: targetApp(req) } }); }
 function broadcast(req, eventName, payload = {}) { emitAdminEvent(eventName, { app: targetApp(req), ...payload }); }
 

@@ -8,6 +8,22 @@ const appControlItemSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true, maxlength: 120 },
   message: { type: String, trim: true, default: "", maxlength: 1000 },
   imageUrl: { type: String, trim: true, default: "" },
+  // Presentation fields are deliberately a small allow-list. Admins can make
+  // campaign banners without the mobile app ever evaluating arbitrary markup.
+  bannerStyle: {
+    backgroundColor: { type: String, trim: true, default: "#161616" },
+    overlayColor: { type: String, trim: true, default: "#000000" },
+    overlayOpacity: { type: Number, min: 0, max: 0.9, default: 0.32 },
+    titleColor: { type: String, trim: true, default: "#ffffff" },
+    messageColor: { type: String, trim: true, default: "#ffffff" },
+    ctaBackgroundColor: { type: String, trim: true, default: "#ffffff" },
+    ctaTextColor: { type: String, trim: true, default: "#161616" },
+    titleFont: { type: String, enum: ["system", "rounded", "serif", "monospaced"], default: "system" },
+    titleWeight: { type: String, enum: ["regular", "semibold", "bold", "heavy"], default: "heavy" },
+    titleSize: { type: Number, min: 16, max: 42, default: 28 },
+    messageSize: { type: Number, min: 10, max: 24, default: 13 },
+    textAlignment: { type: String, enum: ["leading", "center", "trailing"], default: "leading" }
+  },
   ctaText: { type: String, trim: true, default: "", maxlength: 40 },
   ctaAction: { type: String, trim: true, default: "" },
   serviceCategory: { type: String, trim: true, default: "", index: true },

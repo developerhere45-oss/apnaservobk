@@ -169,6 +169,9 @@ async function notifyOne({ recipient, title, body, cleanData, type, category, pr
     notificationId: notification._id,
     pushStatus: notification.pushStatus,
     pushSuccessCount: notification.pushSuccessCount,
+    pushFailureCount: notification.pushFailureCount,
+    pushError: notification.pushError || "",
+    tokenAttempted: tokens.length,
     smsStatus: notification.smsStatus
   };
 }

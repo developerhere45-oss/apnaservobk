@@ -173,7 +173,7 @@ async function getPublicAppControlConfig(audience = "users", app = "customer") {
   const appFilter = target === "customer" ? { $or: [{ app: "customer" }, { app: { $exists: false } }] } : { app: "partner" };
   const announcements = await AppControlItem.find({ ...appFilter, kind: "announcement", status: "published", audience: { $in: ["all", audience] } }).sort({ priority: 1, createdAt: -1 }).limit(50).lean();
   const banners = target === "partner" ? [] : await AppControlItem.find({ ...appFilter, kind: "banner", status: "published", audience: { $in: ["all", audience] } }).sort({ priority: 1, createdAt: -1 }).limit(50).lean();
-  const active = (items) => items.filter((item) => isScheduleActive(item, now)).map((item) => ({ id: String(item._id), title: item.title, message: item.message, imageUrl: item.imageUrl, ctaText: item.ctaText, ctaAction: item.ctaAction, serviceCategory: item.serviceCategory, placement: item.placement, priority: item.priority }));
+  const active = (items) => items.filter((item) => isScheduleActive(item, now)).map((item) => ({ id: String(item._id), title: item.title, message: item.message, imageUrl: item.imageUrl, ctaText: item.ctaText, ctaAction: item.ctaAction, serviceCategory: item.serviceCategory, placement: item.placement, priority: item.priority, bannerStyle: item.bannerStyle || {} }));
   return { ...state, app: target, configVersion: state.version, config: state.config, announcements: active(announcements), banners: active(banners) };
 }
 

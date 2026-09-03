@@ -8,6 +8,7 @@ router.post("/profile", profileWriteLimiter, controller.upsertProfile);
 router.get("/me", controller.me);
 router.post("/fcm-token", fcmTokenLimiter, controller.saveFcmToken);
 router.post("/support-tickets/sync", profileWriteLimiter, controller.syncSupportTicket);
+router.get("/support-tickets/:ticketId", controller.getSupportTicket);
 router.post("/delete-account-request", profileWriteLimiter, controller.requestDeletion);
 router.delete("/account", profileWriteLimiter, controller.deleteAccount);
 

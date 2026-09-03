@@ -11,6 +11,69 @@ const pointSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const partnerRequestSchema = new mongoose.Schema(
+  {
+    requestId: { type: String, required: true, trim: true },
+    partnerId: { type: mongoose.Schema.Types.ObjectId, ref: "Partner", required: true },
+    partnerPublicId: { type: String, trim: true, default: "" },
+    partnerSnapshot: {
+      name: { type: String, trim: true, default: "" },
+      phone: { type: String, trim: true, default: "" },
+      photoUrl: { type: String, trim: true, default: "" },
+      serviceCategory: { type: String, trim: true, default: "" },
+      rating: { type: Number, default: 0 },
+      totalJobs: { type: Number, default: 0 },
+      wasOnline: { type: Boolean, default: false }
+    },
+    routing: {
+      serviceMatched: { type: Boolean, default: false },
+      partnerOnline: { type: Boolean, default: false },
+      accountActive: { type: Boolean, default: false },
+      partnerVerified: { type: Boolean, default: false },
+      kycVerified: { type: Boolean, default: false },
+      trustedPartner: { type: Boolean, default: false },
+      locationTrusted: { type: Boolean, default: false },
+      withinDispatchRadius: { type: Boolean, default: false },
+      withinPartnerServiceRadius: { type: Boolean, default: false },
+      distanceMeters: { type: Number, default: null },
+      dispatchRadiusKm: { type: Number, default: 0 },
+      dispatchMode: { type: String, trim: true, default: "" }
+    },
+    source: { type: String, enum: ["automatic", "manual", "area", "individual", "bulk"], default: "automatic" },
+    dispatchAttempt: { type: Number, min: 1, default: 1 },
+    dispatchStage: { type: Number, min: 1, default: 1 },
+    status: {
+      type: String,
+      enum: ["requested", "delivered", "viewed", "accepted", "rejected", "expired", "cancelled", "failed"],
+      default: "requested"
+    },
+    createdAt: { type: Date, default: Date.now },
+    sentAt: { type: Date, default: null },
+    deliveredAt: { type: Date, default: null },
+    viewedAt: { type: Date, default: null },
+    viewedSource: { type: String, trim: true, default: "" },
+    respondedAt: { type: Date, default: null },
+    responseTimeSeconds: { type: Number, default: null },
+    expiresAt: { type: Date, default: null },
+    expiredAt: { type: Date, default: null },
+    cancelledAt: { type: Date, default: null },
+    failedAt: { type: Date, default: null },
+    rejectionReason: { type: String, trim: true, maxlength: 240, default: "" },
+    failureReason: { type: String, trim: true, maxlength: 240, default: "" },
+    failureTechnicalDetails: { type: String, trim: true, maxlength: 1000, default: "" },
+    expiryReason: { type: String, trim: true, maxlength: 240, default: "" },
+    cancellationReason: { type: String, trim: true, maxlength: 240, default: "" },
+    notification: {
+      notificationId: { type: String, trim: true, default: "" },
+      pushStatus: { type: String, enum: ["pending", "sent", "failed", "skipped"], default: "pending" },
+      pushSuccessCount: { type: Number, default: 0 },
+      pushFailureCount: { type: Number, default: 0 },
+      technicalDetails: { type: String, trim: true, maxlength: 1000, default: "" }
+    }
+  },
+  { _id: false }
+);
+
 const bookingSchema = new mongoose.Schema(
   {
     // Canonical public ID generated once by the customer app. Sparse keeps all
@@ -66,6 +129,25 @@ const bookingSchema = new mongoose.Schema(
     },
     price: { type: Number, default: 0 },
     finalAmount: { type: Number, default: 0 },
+    workCompletion: {
+      completedTasks: [{ type: String, trim: true, maxlength: 160 }],
+      additionalWork: { type: String, trim: true, maxlength: 1000, default: "" },
+      partnerNotes: { type: String, trim: true, maxlength: 1000, default: "" },
+      submittedBy: { type: String, trim: true, maxlength: 120, default: "" },
+      submittedAt: { type: Date, default: null }
+    },
+    serviceWorkDetails: {
+      description: { type: String, trim: true, maxlength: 1000, default: "" },
+      completedTasks: [{
+        taskId: { type: String, trim: true, maxlength: 100 },
+        name: { type: String, trim: true, maxlength: 160 }
+      }],
+      customWork: [{ type: String, trim: true, maxlength: 160 }],
+      additionalNotes: { type: String, trim: true, maxlength: 1000, default: "" },
+      checklistVersion: { type: Number, min: 1, default: 1 },
+      submittedBy: { type: String, trim: true, maxlength: 120, default: "" },
+      submittedAt: { type: Date, default: null }
+    },
     amountRequestedAt: { type: Date, default: null },
     paymentStatus: { type: String, enum: ["pending", "paid", "failed", "refunded"], default: "pending" },
     customerVerification: {
@@ -89,21 +171,6 @@ const bookingSchema = new mongoose.Schema(
     quoteCounterAmount: { type: Number, default: 0 },
     quoteCounterMessage: { type: String, default: "" },
     quoteCounterAt: { type: Date, default: null },
-    serviceWorkDetails: {
-      description: { type: String, trim: true, default: "" },
-      completedTasks: [
-        {
-          taskId: { type: String, trim: true, default: "" },
-          name: { type: String, trim: true, default: "" }
-        }
-      ],
-      customWork: [{ type: String, trim: true }],
-      additionalNotes: { type: String, trim: true, default: "" },
-      checklistVersion: { type: Number, default: 1 },
-      submittedAt: { type: Date, default: null },
-      submittedBy: { type: String, enum: ["", "partner", "laundry_staff"], default: "" },
-      idempotencyKey: { type: String, trim: true, default: "" }
-    },
     quoteHistory: [
       {
         kind: String,
@@ -131,6 +198,9 @@ const bookingSchema = new mongoose.Schema(
     },
     requestedPartners: [{ type: mongoose.Schema.Types.ObjectId, ref: "Partner" }],
     rejectedPartners: [{ type: mongoose.Schema.Types.ObjectId, ref: "Partner" }],
+    // The historical request log is additive: legacy bookings without this
+    // field remain valid while new dispatches expose a complete admin audit.
+    partnerRequests: { type: [partnerRequestSchema], default: [] },
     dispatchRadiusKm: { type: Number, default: 0 },
     dispatchMode: { type: String, enum: ["", "customer_location", "city_fallback"], default: "" },
     dispatchAttempt: { type: Number, default: 0 },
@@ -240,6 +310,7 @@ bookingSchema.index({ partnerId: 1, status: 1, updatedAt: -1 });
 bookingSchema.index({ status: 1, createdAt: -1 });
 bookingSchema.index({ status: 1, serviceCategory: 1, city: 1, rejectedPartners: 1, createdAt: -1 });
 bookingSchema.index({ requestedPartners: 1, status: 1, createdAt: -1 });
+bookingSchema.index({ "partnerRequests.partnerId": 1, createdAt: -1 });
 bookingSchema.index({ quoteStatus: 1, quoteExpiresAt: 1 });
 bookingSchema.index({ paymentStatus: 1, updatedAt: -1 });
 bookingSchema.index({ "emergency.isEmergency": 1, "emergency.priority": 1, status: 1, createdAt: -1 });
@@ -266,10 +337,6 @@ bookingSchema.plugin(encryptedFieldsPlugin, {
     "partnerArrivalEstimateLabel",
     "emergency.notes",
     "quoteCounterMessage",
-    "serviceWorkDetails.description",
-    "serviceWorkDetails.completedTasks.name",
-    "serviceWorkDetails.customWork",
-    "serviceWorkDetails.additionalNotes",
     "quoteHistory.message",
     "customerVerification.authPhone",
     "noResponseReport.reason",
@@ -281,6 +348,10 @@ bookingSchema.plugin(encryptedFieldsPlugin, {
     "partnerSnapshot.name",
     "partnerSnapshot.phone",
     "partnerSnapshot.fcmToken",
+    "partnerRequests.partnerSnapshot.name",
+    "partnerRequests.partnerSnapshot.phone",
+    "partnerRequests.rejectionReason",
+    "partnerRequests.failureTechnicalDetails",
     "laundryAssignment.staffName"
   ]
 });

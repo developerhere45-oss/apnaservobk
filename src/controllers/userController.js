@@ -2,13 +2,11 @@ const { z } = require("zod");
 const crypto = require("crypto");
 const User = require("../models/User");
 const SupportTicket = require("../models/SupportTicket");
-const JobProofPhoto = require("../models/JobProofPhoto");
 const { Booking } = require("../models/Booking");
 const { emitAdminEvent } = require("../sockets/bookingSocket");
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 const { sendWelcomeEmail } = require("../utils/welcomeEmail");
 const { admin, initFirebase } = require("../config/firebase");
-const { cloudinary, initCloudinary } = require("../config/cloudinary");
 
 const profileSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
@@ -72,20 +70,6 @@ function tokenPhoneVerified(req, phone) {
   return tokenPhone.length === 10 && profilePhone.length === 10 && tokenPhone === profilePhone;
 }
 
-function firebaseAuthProvider(auth = {}) {
-  const provider = String(auth.firebase?.sign_in_provider || "").trim().toLowerCase();
-  if (provider === "apple.com") return "apple";
-  if (provider === "phone") return "phone";
-  if (provider === "google.com") return "google";
-  if (provider === "password") return "password";
-  return provider ? "firebase" : "unknown";
-}
-
-function appleUserId(auth = {}) {
-  const identities = auth.firebase?.identities?.["apple.com"];
-  return Array.isArray(identities) && identities[0] ? String(identities[0]).trim() : "";
-}
-
 function supportCategory(message, requested) {
   if (requested) return requested.toLowerCase();
   const text = String(message || "").toLowerCase();
@@ -126,8 +110,6 @@ async function upsertProfile(req, res, next) {
     const existing = await User.findOne({ firebaseUid: req.auth.uid }).select("_id").lean();
     const update = {
       firebaseUid: req.auth.uid,
-      authProvider: firebaseAuthProvider(req.auth),
-      appleUserId: appleUserId(req.auth),
       bookingRiskStatus: verified ? "trusted" : "otp_required",
       lastLoginAt: now
     };
@@ -348,11 +330,18 @@ async function syncSupportTicket(req, res, next) {
       ticket.bookingCode = booking.bookingCode;
     }
     if (body.senderRole === "user" && body.aiSummary) ticket.aiSummary = body.aiSummary;
+    if (!duplicate && body.senderRole === "user" && ["resolved", "closed"].includes(ticket.status)) {
+      ticket.status = "reopened";
+      ticket.reopenedAt = now;
+      ticket.timeline.push({ event: "reopened", by: "user", note: "Customer sent a new message", at: now });
+    }
     ticket.lastUpdatedAt = now;
     await ticket.save();
 
     emitAdminEvent(isNew ? "support:ticket_created" : "support:ticket_updated", {
-      ticketId: ticket.ticketCode,
+      ticketId: ticket.publicId || ticket.ticketCode,
+      publicId: ticket.publicId || "",
+      correlationId: ticket.ticketCode,
       userId: String(user._id),
       userName: user.name,
       status: ticket.status,
@@ -365,6 +354,37 @@ async function syncSupportTicket(req, res, next) {
       supportTicketId: String(ticket._id),
       status: ticket.status,
       idempotent: Boolean(duplicate)
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function getSupportTicket(req, res, next) {
+  try {
+    const ticketCode = String(req.params.ticketId || "").trim();
+    const user = await User.findOne({ firebaseUid: req.auth.uid }).select("_id");
+    if (!user) return res.status(404).json({ message: "Customer profile not found" });
+
+    const ticket = await SupportTicket.findOne({ ticketCode, userId: user._id });
+    if (!ticket) return res.status(404).json({ message: "Support ticket not found" });
+
+    return res.json({
+      ticketId: ticket.ticketCode,
+      status: ticket.status,
+      messages: (ticket.conversation || []).map((entry) => ({
+        id: String(entry._id),
+        bookingId: "support",
+        bookingCode: ticket.bookingCode || "",
+        senderRole: entry.senderRole === "admin" ? "support" : entry.senderRole,
+        senderName: entry.senderRole === "admin"
+          ? "ApnaServo Support"
+          : (entry.senderName || (entry.senderRole === "user" ? "You" : "ApnaServo Support")),
+        message: entry.message || "",
+        clientMessageId: entry.clientMessageId || "",
+        deliveryStatus: "sent",
+        createdAtMillis: new Date(entry.createdAt || ticket.createdAt).getTime()
+      }))
     });
   } catch (error) {
     return next(error);
@@ -419,40 +439,14 @@ async function deleteAccount(req, res, next) {
 
     const userId = user._id;
     const deletedLabel = `Deleted customer ${String(userId).slice(-6)}`;
-    const proofPhotos = await JobProofPhoto.find({ userId }).select("cloudinaryPublicId storageProvider");
-    const cloudinaryIds = proofPhotos
-      .filter((photo) => photo.storageProvider === "cloudinary" && photo.cloudinaryPublicId)
-      .map((photo) => photo.cloudinaryPublicId);
-    if (cloudinaryIds.length) {
-      initCloudinary();
-      await Promise.all(cloudinaryIds.map((publicId) => cloudinary.uploader.destroy(publicId)));
-    }
     await Booking.updateMany(
       { userId },
       {
         $set: {
-          issue: "Deleted account service record",
           address: "Deleted account",
-          "addressDetails.houseFlat": "",
-          "addressDetails.building": "",
-          "addressDetails.floor": "",
-          "addressDetails.room": "",
-          "addressDetails.landmark": "",
           location: { type: "Point", coordinates: [0, 0] },
-          "locationChange.reason": "",
           "contact.primaryPhone": "",
           "contact.alternatePhone": "",
-          "emergency.notes": "",
-          "customerVerification.authPhone": "",
-          quoteCounterMessage: "",
-          quoteHistory: [],
-          "serviceWorkDetails.description": "",
-          "serviceWorkDetails.customWork": [],
-          "serviceWorkDetails.additionalNotes": "",
-          "noResponseReport.reason": "",
-          "noResponseReport.lat": 0,
-          "noResponseReport.lng": 0,
-          "noResponseReport.evidenceUrl": "",
           "userSnapshot.name": deletedLabel,
           "userSnapshot.phone": "",
           "userSnapshot.email": "",
@@ -471,15 +465,13 @@ async function deleteAccount(req, res, next) {
       await collection.deleteMany({ userId });
     }));
 
-    // Remove the application account first. If Firebase deletion temporarily fails,
-    // the authenticated retry follows the idempotent branch above and completes it.
-    await User.deleteOne({ _id: userId });
     initFirebase();
     try {
       await admin.auth().deleteUser(req.auth.uid);
     } catch (error) {
       if (error?.code !== "auth/user-not-found") throw error;
     }
+    await User.deleteOne({ _id: userId });
     emitAdminEvent("user:deleted", { userId: String(userId), deletedAt: new Date() });
     return res.json({ ok: true, deleted: true });
   } catch (error) {
@@ -492,6 +484,7 @@ module.exports = {
   me,
   saveFcmToken,
   syncSupportTicket,
+  getSupportTicket,
   requestDeletion,
   deleteAccount
 };

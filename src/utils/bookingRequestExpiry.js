@@ -2,7 +2,8 @@ const { Booking } = require("../models/Booking");
 const User = require("../models/User");
 const { reliableNotify } = require("./reliableNotify");
 const { activeDeviceTokens } = require("./notificationTokens");
-const { emitBookingStatusUpdate } = require("../sockets/bookingSocket");
+const { emitBookingStatusUpdate, emitAdminEvent } = require("../sockets/bookingSocket");
+const { expireOutstandingRequests } = require("./partnerRequestTracking");
 
 const SWEEP_INTERVAL_MS = 15 * 1000;
 const SWEEP_BATCH_SIZE = 100;
@@ -48,6 +49,23 @@ async function expireOne(candidateId, now) {
     { new: true }
   );
   if (!booking) return null;
+
+  const expiredRequests = expireOutstandingRequests(booking, { at: now });
+  if (expiredRequests.length) {
+    await booking.save();
+    for (const request of expiredRequests) {
+      emitAdminEvent("booking:partner_request_expired", {
+        bookingId: String(booking._id),
+        bookingCode: booking.bookingCode || "",
+        userId: String(booking.userId || ""),
+        partnerId: String(request.partnerId || ""),
+        partnerName: request.partnerSnapshot?.name || "Partner",
+        requestId: request.requestId || "",
+        status: "expired",
+        source: request.source || "automatic"
+      });
+    }
+  }
 
   emitBookingStatusUpdate(booking);
   try {

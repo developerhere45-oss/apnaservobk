@@ -31,6 +31,12 @@ const { getBookingLaunchConfig, ensureLaunchNotificationSchedule } = require("..
 const { getChecklist } = require("../utils/serviceChecklist");
 const cache = require("../config/cache");
 const {
+  addPartnerRequests,
+  markRequestResponse,
+  markRequestViewed,
+  recordNotificationResult
+} = require("../utils/partnerRequestTracking");
+const {
   emitNewBookingToPartners,
   emitBookingAccepted,
   emitBookingRejected,
@@ -50,7 +56,6 @@ const createBookingSchema = z.object({
   lat: z.coerce.number().min(-90).max(90).refine((value) => value !== 0, "Valid service latitude is required"),
   lng: z.coerce.number().min(-180).max(180).refine((value) => value !== 0, "Valid service longitude is required"),
   price: z.coerce.number().min(0).max(1000000).optional(),
-  slot: z.string().trim().max(120).optional(),
   userName: z.string().trim().max(120).optional(),
   userPhone: z.string().trim().max(20).optional(),
   primaryPhone: z.string().trim().max(20).optional(),
@@ -142,16 +147,8 @@ const quoteCounterSchema = z.object({
   message: z.string().max(250).optional()
 });
 
-const structuredWorkDetailsSchema = z.object({
-  workDescription: z.string().trim().min(3).max(300),
-  completedTasks: z.array(z.union([
-    z.string().trim().min(1).max(140),
-    z.object({ taskId: z.string().trim().min(1).max(160), name: z.string().trim().min(1).max(140) })
-  ])).min(1).max(30),
-  customWork: z.array(z.string().trim().min(1).max(140)).max(12).optional().default([]),
-  additionalNotes: z.string().trim().max(200).optional().default(""),
-  checklistVersion: z.coerce.number().int().min(1).max(100000).optional().default(1),
-  idempotencyKey: z.string().trim().min(8).max(120)
+const rejectBookingSchema = z.object({
+  reason: z.string().trim().max(240).optional().default("")
 });
 
 const chatMonitorSchema = z.object({
@@ -686,6 +683,40 @@ function emergencyPayload(body) {
   };
 }
 
+function partnerRequestEventPayload(booking, request) {
+  return {
+    bookingId: String(booking._id),
+    bookingCode: booking.bookingCode || "",
+    userId: String(booking.userId || ""),
+    partnerId: String(request.partnerId || ""),
+    partnerName: request.partnerSnapshot?.name || "Partner",
+    requestId: request.requestId || "",
+    status: request.status || "requested",
+    dispatchAttempt: Number(request.dispatchAttempt || 0),
+    dispatchStage: Number(request.dispatchStage || 0),
+    source: request.source || "automatic"
+  };
+}
+
+async function recordPartnerRequestDeliveryResults(bookingId, requests, results = []) {
+  const current = await Booking.findById(bookingId);
+  if (!current || !Array.isArray(requests) || requests.length === 0) return;
+  const changed = [];
+  for (let index = 0; index < requests.length; index += 1) {
+    const outcome = recordNotificationResult(current, requests[index].requestId, results[index] || {}, { at: new Date() });
+    if (outcome.changed && outcome.request) changed.push(outcome.request);
+  }
+  if (!changed.length) return;
+  await current.save();
+  for (const request of changed) {
+    const delivered = request.notification?.pushStatus === "sent";
+    emitAdminEvent(
+      delivered ? "booking:partner_request_delivered" : "booking:partner_request_failed",
+      partnerRequestEventPayload(current, request)
+    );
+  }
+}
+
 async function dispatchBookingToPartners(booking, category, lat, lng) {
   let match = { partners: [], radiusKm: 0, mode: "" };
   try {
@@ -702,6 +733,23 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
       bookingCode: booking.bookingCode,
       message: error.message
     });
+    await Booking.findByIdAndUpdate(booking._id, {
+      $push: {
+        statusTimeline: {
+          status: "partner_routing_failed",
+          at: new Date(),
+          by: "system",
+          note: "Eligible partner search failed before any request was sent"
+        }
+      }
+    });
+    emitAdminEvent("booking:partner_routing_failed", {
+      bookingId: String(booking._id),
+      bookingCode: booking.bookingCode,
+      userId: String(booking.userId || ""),
+      status: "failed",
+      failureReason: "Eligible partner search failed"
+    });
     emitNewBookingToPartners(booking, []);
     return match.partners;
   }
@@ -715,6 +763,16 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
   if (!booking.requestedPartners || booking.requestedPartners.length === 0) {
     const dispatchedAt = new Date();
     const requestExpiresAt = new Date(dispatchedAt.getTime() + PARTNER_REQUEST_TTL_MS);
+    const dispatchAttempt = Number(booking.dispatchAttempt || 0) + 1;
+    const tracking = { requestExpiresAt, partnerRequests: [], statusTimeline: [] };
+    const partnerRequests = addPartnerRequests(tracking, partners, {
+      match,
+      source: "automatic",
+      dispatchAttempt,
+      dispatchStage: dispatchAttempt,
+      sentAt: dispatchedAt,
+      actor: "system"
+    });
     const claimedBooking = await Booking.findOneAndUpdate(
       {
         _id: booking._id,
@@ -729,17 +787,23 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
           dispatchRadiusKm: match.radiusKm,
           dispatchMode: match.mode,
           dispatchedAt,
-          requestExpiresAt
+          requestExpiresAt,
+          partnerRequests: tracking.partnerRequests
         },
         $inc: { dispatchAttempt: 1 },
         $push: {
           statusTimeline: {
-            status: "sent_to_partner",
-            at: new Date(),
-            by: "system",
-            note: match.mode === "customer_location"
-              ? `Matched verified partners within ${match.radiusKm} km`
-              : "Matched verified partners using city fallback"
+            $each: [
+              {
+                status: "sent_to_partner",
+                at: dispatchedAt,
+                by: "system",
+                note: match.mode === "customer_location"
+                  ? `Matched verified partners within ${match.radiusKm} km`
+                  : "Matched verified partners using city fallback"
+              },
+              ...tracking.statusTimeline
+            ]
           }
         }
       },
@@ -783,13 +847,15 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
       smsBody: claimedBooking.emergency?.isEmergency
         ? `ApnaServo Emergency: ${claimedBooking.serviceName} near ${claimedBooking.city}. Open partner app now.`
         : ""
-    }).catch((error) => {
-      console.error("Partner booking push notification failed", {
-        bookingId: String(claimedBooking._id),
-        bookingCode: claimedBooking.bookingCode,
-        message: error.message
+    })
+      .then((delivery) => recordPartnerRequestDeliveryResults(claimedBooking._id, partnerRequests, delivery.results))
+      .catch((error) => {
+        console.error("Partner booking push notification failed", {
+          bookingId: String(claimedBooking._id),
+          bookingCode: claimedBooking.bookingCode,
+          message: error.message
+        });
       });
-    });
   }
 
   return partners;
@@ -1066,7 +1132,6 @@ async function createBooking(req, res, next) {
           updatedBy: "user"
         },
         price: body.price || 0,
-        slot: body.slot || "",
         status: "pending",
         requestExpiresAt: new Date(Date.now() + PARTNER_REQUEST_TTL_MS),
         emergency,
@@ -1336,6 +1401,11 @@ async function acceptBooking(req, res, next) {
       return res.status(409).json({ message: "Booking already accepted or unavailable" });
     }
 
+    const requestResponse = markRequestResponse(booking, partner._id, "accepted", { at: acceptedAt });
+    if (requestResponse.changed) {
+      await booking.save();
+      emitAdminEvent("booking:partner_request_accepted", partnerRequestEventPayload(booking, requestResponse.request));
+    }
     emitBookingAccepted(booking, partner);
 
     const user = await User.findById(booking.userId);
@@ -1357,6 +1427,7 @@ async function acceptBooking(req, res, next) {
 
 async function rejectBooking(req, res, next) {
   try {
+    const rejection = rejectBookingSchema.parse(req.body || {});
     const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
     if (!partner) return res.status(404).json({ message: "Partner profile not found" });
     const blockReason = partnerAcceptBlockReason(partner);
@@ -1382,6 +1453,13 @@ async function rejectBooking(req, res, next) {
     );
 
     if (booking) {
+      const requestResponse = markRequestResponse(booking, partner._id, "rejected", {
+        at: now,
+        reason: rejection.reason
+      });
+      if (requestResponse.changed) {
+        emitAdminEvent("booking:partner_request_rejected", partnerRequestEventPayload(booking, requestResponse.request));
+      }
       const requestedIds = (booking.requestedPartners || []).map((id) => String(id));
       const rejectedIds = new Set((booking.rejectedPartners || []).map((id) => String(id)));
       const allRequestedRejected = requestedIds.length > 0 && requestedIds.every((id) => rejectedIds.has(id));
@@ -1397,6 +1475,8 @@ async function rejectBooking(req, res, next) {
           findNearbyPartners.validCoordinates(coordinates[1], coordinates[0]) ? coordinates[1] : null,
           findNearbyPartners.validCoordinates(coordinates[1], coordinates[0]) ? coordinates[0] : null
         );
+      } else if (requestResponse.changed) {
+        await booking.save();
       }
       emitBookingRejected(booking, partner._id);
     }
@@ -1481,10 +1561,19 @@ async function updateStatus(req, res, next) {
     const user = await User.findOne({ firebaseUid: req.auth.uid });
     const query = bookingIdFilter(String(req.params.bookingId || ""));
     const finalAmount = Number(req.body?.finalAmount || 0);
-    let structuredWorkDetails = null;
-    if (nextStatus === "amount_pending" && Number(req.body?.structuredQuoteVersion || 0) >= 1) {
-      structuredWorkDetails = structuredWorkDetailsSchema.parse(req.body || {});
-    }
+    const structuredCompletedTasks = Array.isArray(req.body?.completedTasks)
+      ? req.body.completedTasks.map((task, index) => ({
+          taskId: String(typeof task === "object" && task ? task.taskId : `task_${index}`).trim().slice(0, 100),
+          name: String(typeof task === "object" && task ? task.name : task || "").trim().slice(0, 160)
+        })).filter((task) => task.name).slice(0, 30)
+      : [];
+    const completedTasks = [...new Set(structuredCompletedTasks.map((task) => task.name))];
+    const additionalWork = String(req.body?.workDescription || req.body?.additionalWork || "").trim().slice(0, 1000);
+    const partnerNotes = String(req.body?.additionalNotes || req.body?.partnerNotes || "").trim().slice(0, 1000);
+    const customWork = Array.isArray(req.body?.customWork)
+      ? [...new Set(req.body.customWork.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 20)
+      : [];
+    const checklistVersion = Math.max(1, Math.min(100000, Number(req.body?.checklistVersion || 1)));
     const now = new Date();
     let actorRole = "";
     if (partner) {
@@ -1547,6 +1636,9 @@ async function updateStatus(req, res, next) {
       if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
         return res.status(400).json({ message: "Final amount required" });
       }
+      if (completedTasks.length === 0) {
+        return res.status(400).json({ message: "Select at least one completed work item" });
+      }
     }
 
     const expiredQuote = await expireQuoteIfNeeded(currentBooking, { emit: true });
@@ -1569,9 +1661,6 @@ async function updateStatus(req, res, next) {
         const currentAmount = Number(currentBooking.finalAmount || currentBooking.quoteAmount || 0);
         if (Math.round(finalAmount) !== Math.round(currentAmount)) {
           return res.status(409).json({ message: "A quote is already pending customer approval" });
-        }
-        if (structuredWorkDetails && currentBooking.serviceWorkDetails?.idempotencyKey === structuredWorkDetails.idempotencyKey) {
-          return res.json({ booking: serializeBooking(currentBooking), idempotent: true });
         }
       }
       return res.json({ booking: serializeBooking(currentBooking), idempotent: true });
@@ -1643,26 +1732,21 @@ async function updateStatus(req, res, next) {
       update.$set.quoteCounterAt = null;
       update.$set.paymentStatus = "pending";
       update.$set.amountRequestedAt = now;
-      const legacyTasks = Array.isArray(req.body?.completedTasks) ? req.body.completedTasks : [];
-      const work = structuredWorkDetails || {
-        workDescription: String(req.body?.additionalWork || "").trim().slice(0, 300),
-        completedTasks: legacyTasks,
-        customWork: [],
-        additionalNotes: String(req.body?.partnerNotes || "").trim().slice(0, 200),
-        checklistVersion: 1,
-        idempotencyKey: `legacy-${currentBooking._id}-${Date.now()}`
+      update.$set.workCompletion = {
+        completedTasks: [...completedTasks, ...customWork],
+        additionalWork,
+        partnerNotes,
+        submittedBy: String(actingPartner?.name || currentBooking.partnerSnapshot?.name || "Service Partner"),
+        submittedAt: now
       };
       update.$set.serviceWorkDetails = {
-        description: work.workDescription,
-        completedTasks: work.completedTasks.map((task, index) => typeof task === "string"
-          ? { taskId: `legacy_${index + 1}`, name: task }
-          : { taskId: task.taskId, name: task.name }),
-        customWork: work.customWork,
-        additionalNotes: work.additionalNotes,
-        checklistVersion: work.checklistVersion,
-        submittedAt: now,
-        submittedBy: staffActor ? "laundry_staff" : "partner",
-        idempotencyKey: work.idempotencyKey
+        description: additionalWork,
+        completedTasks: structuredCompletedTasks,
+        customWork,
+        additionalNotes: partnerNotes,
+        checklistVersion,
+        submittedBy: String(actingPartner?.name || currentBooking.partnerSnapshot?.name || "Service Partner"),
+        submittedAt: now
       };
       update.$push.quoteHistory = {
         kind: "partner_quote",
@@ -2075,9 +2159,48 @@ async function getBooking(req, res, next) {
       if (!isAssignedPartner && !canSeeOpenRequest) {
         return res.status(403).json({ message: "Not allowed to access this booking" });
       }
+      if (canSeeOpenRequest) {
+        const viewResult = markRequestViewed(booking, partner._id, { source: "booking_opened" });
+        if (viewResult.changed) {
+          await booking.save();
+          emitAdminEvent("booking:partner_request_viewed", partnerRequestEventPayload(booking, viewResult.request));
+        }
+      }
       return res.json({ booking: protectCustomerPhoneForPartner(serializeBooking(booking), booking, partner) });
     }
     return res.status(403).json({ message: "Not allowed to access this booking" });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function recordBookingRequestViewed(req, res, next) {
+  try {
+    const partner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    if (!partner) return res.status(404).json({ message: "Partner profile not found" });
+    const booking = await Booking.findOne({
+      $and: [
+        bookingIdFilter(String(req.params.bookingId || "")),
+        partnerOpenBookingVisibility(partner, partnerCategoryVariants(partner))
+      ],
+      partnerId: null,
+      requestedPartners: partner._id,
+      status: { $in: pendingAssignmentStatuses() },
+      requestExpiresAt: { $gt: new Date() }
+    });
+    if (!booking) return res.status(404).json({ message: "Active booking request not found" });
+    const result = markRequestViewed(booking, partner._id, { source: "partner_app" });
+    if (result.changed) {
+      await booking.save();
+      emitAdminEvent("booking:partner_request_viewed", partnerRequestEventPayload(booking, result.request));
+    }
+    return res.json({
+      ok: true,
+      idempotent: !result.changed,
+      requestId: result.request?.requestId || "",
+      status: result.request?.status || "viewed",
+      viewedAt: result.request?.viewedAt || null
+    });
   } catch (error) {
     return next(error);
   }
@@ -2701,18 +2824,9 @@ async function getBookingLaunchStatus(req, res, next) {
   }
 }
 
-async function getServiceChecklist(req, res, next) {
-  try {
-    return res.json({ checklist: await getChecklist(req.params.serviceCategory) });
-  } catch (error) {
-    return next(error);
-  }
-}
-
 module.exports = {
   getBookingLaunchStatus,
   requestLaunchNotification,
-  getServiceChecklist,
   createBooking,
   listUserBookings,
   listPartnerBookings,
@@ -2729,6 +2843,7 @@ module.exports = {
   monitorBookingChat,
   reportCustomerNoResponse,
   getBooking,
+  recordBookingRequestViewed,
   createCallLog,
   updateBookingContacts,
   updateBookingLocation,

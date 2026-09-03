@@ -29,6 +29,7 @@ router.get("/service-checklists/:serviceCategory", bookingReadLimiter, controlle
 router.get("/user", bookingReadLimiter, controller.listUserBookings);
 router.get("/partner", bookingReadLimiter, controller.listPartnerBookings);
 router.get("/:bookingId", bookingReadLimiter, controller.getBooking);
+router.post("/:bookingId/request-viewed", bookingWriteLimiter, controller.recordBookingRequestViewed);
 router.get("/:bookingId/tracking", bookingReadLimiter, controller.getTracking);
 router.patch("/:bookingId/contact", bookingWriteLimiter, controller.updateBookingContacts);
 router.patch("/:bookingId/location", bookingWriteLimiter, controller.updateBookingLocation);

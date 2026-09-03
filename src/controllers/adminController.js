@@ -27,6 +27,13 @@ const { activeDeviceTokens, tokenHash } = require("../utils/notificationTokens")
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { serviceCategoryVariants, serviceLabel, partnerCanServeService } = require("../utils/serviceCategory");
 const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
+const {
+  addPartnerRequests,
+  cancelOutstandingRequests,
+  effectiveStatus,
+  recordNotificationResult,
+  secondsBetween
+} = require("../utils/partnerRequestTracking");
 const { partnerAssetUrl, verifyPartnerAssetToken } = require("../utils/partnerUploadAssets");
 const { sendPartnerApprovalWelcomeEmails } = require("../utils/welcomeEmail");
 const { decryptString } = require("../utils/fieldCrypto");
@@ -214,7 +221,86 @@ function bookingTimeline(booking, payments = [], messages = []) {
     .map((entry) => ({ ...entry, at: iso(entry.at) }));
 }
 
-function serializeBookingHistory(booking, payments = [], messages = []) {
+function partnerRequestSummary(requests = [], booking = {}) {
+  const latest = Array.isArray(requests) ? requests : [];
+  const count = (predicate) => latest.filter(predicate).length;
+  const accepted = latest.find((request) => String(request.status || "") === "accepted");
+  const uniquePartners = new Set(latest.map((request) => String(request.partnerId || "")).filter(Boolean));
+  return {
+    total: latest.length,
+    eligiblePartners: uniquePartners.size,
+    requestsSent: latest.length,
+    delivered: count((request) => Boolean(request.deliveredAt)),
+    viewed: count((request) => Boolean(request.viewedAt)),
+    accepted: count((request) => String(request.status || "") === "accepted"),
+    rejected: count((request) => String(request.status || "") === "rejected"),
+    expired: count((request) => String(request.status || "") === "expired"),
+    cancelled: count((request) => String(request.status || "") === "cancelled"),
+    failed: count((request) => String(request.status || "") === "failed"),
+    notResponded: count((request) => effectiveStatus(request) === "not_responded"),
+    assignedPartnerId: booking.partnerId ? String(booking.partnerId) : "",
+    assignedPartnerName: booking.partnerSnapshot?.name || accepted?.partnerSnapshot?.name || "",
+    assignedAt: booking.acceptedAt || accepted?.respondedAt || null,
+    assignmentMethod: booking.partnerId
+      ? (accepted ? "Partner accepted" : "Existing assignment")
+      : "Not assigned"
+  };
+}
+
+function serializePartnerRequest(request, availabilityById = new Map()) {
+  const partnerId = id(request.partnerId);
+  const availability = availabilityById.get(partnerId);
+  const sentAt = request.sentAt || request.createdAt || null;
+  const respondedAt = request.respondedAt || null;
+  const responseTimeSeconds = Number.isFinite(Number(request.responseTimeSeconds))
+    ? Number(request.responseTimeSeconds)
+    : secondsBetween(sentAt, respondedAt);
+  return {
+    requestId: request.requestId || "",
+    partnerId,
+    partnerPublicId: request.partnerPublicId || availability?.partnerCode || "",
+    partner: {
+      name: request.partnerSnapshot?.name || availability?.name || "Partner",
+      photoUrl: request.partnerSnapshot?.photoUrl || availability?.photoUrl || "",
+      phone: request.partnerSnapshot?.phone || availability?.phone || "",
+      serviceCategory: request.partnerSnapshot?.serviceCategory || availability?.serviceCategory || "",
+      rating: Number(request.partnerSnapshot?.rating || availability?.rating || 0),
+      totalJobs: Number(request.partnerSnapshot?.totalJobs || availability?.totalJobs || 0),
+      availability: availability
+        ? (availability.isOnline && availability.accountStatus === "active" && availability.isVerified ? "Online" : "Offline")
+        : (request.partnerSnapshot?.wasOnline ? "Availability unavailable" : "Offline")
+    },
+    routing: request.routing || {},
+    source: request.source || "automatic",
+    dispatchAttempt: Number(request.dispatchAttempt || 1),
+    dispatchStage: Number(request.dispatchStage || 1),
+    status: effectiveStatus(request),
+    rawStatus: request.status || "requested",
+    createdAt: iso(request.createdAt),
+    sentAt: iso(sentAt),
+    deliveredAt: iso(request.deliveredAt),
+    viewedAt: iso(request.viewedAt),
+    respondedAt: iso(respondedAt),
+    expiresAt: iso(request.expiresAt),
+    expiredAt: iso(request.expiredAt),
+    cancelledAt: iso(request.cancelledAt),
+    failedAt: iso(request.failedAt),
+    responseTimeSeconds,
+    rejectionReason: request.rejectionReason || "",
+    failureReason: request.failureReason || "",
+    failureTechnicalDetails: request.failureTechnicalDetails || request.notification?.technicalDetails || "",
+    expiryReason: request.expiryReason || "",
+    cancellationReason: request.cancellationReason || "",
+    notification: {
+      notificationId: request.notification?.notificationId || "",
+      pushStatus: request.notification?.pushStatus || "pending",
+      pushSuccessCount: Number(request.notification?.pushSuccessCount || 0),
+      pushFailureCount: Number(request.notification?.pushFailureCount || 0)
+    }
+  };
+}
+
+function serializeBookingHistory(booking, payments = [], messages = [], availabilityById = new Map()) {
   booking = decryptAdminRecord(booking);
   const completedAt = booking.completedAt || bookingTime(booking, ["completed"]);
   const finalServiceCost = money(booking.finalAmount);
@@ -246,6 +332,8 @@ function serializeBookingHistory(booking, payments = [], messages = []) {
     proposedServiceCost,
     estimatedServiceCost,
     paymentStatus: booking.paymentStatus || "",
+    partnerRequests: (booking.partnerRequests || []).map((request) => serializePartnerRequest(request, availabilityById)),
+    partnerRequestSummary: partnerRequestSummary(booking.partnerRequests || [], booking),
     timeline: bookingTimeline(booking, payments, messages)
   };
 }
@@ -2761,11 +2849,18 @@ async function bookingTimelineDetails(req, res, next) {
       ]
     });
     if (!booking) return res.status(404).json({ message: "Booking not found" });
-    const [payments, messages] = await Promise.all([
+    const requestPartnerIds = [...new Set((booking.partnerRequests || []).map((request) => objectId(request.partnerId)).filter(Boolean))];
+    const [payments, messages, partners] = await Promise.all([
       Payment.find({ bookingId: booking._id }).sort({ createdAt: 1 }),
-      BookingMessage.find({ bookingId: booking._id }).sort({ createdAt: 1 }).limit(200)
+      BookingMessage.find({ bookingId: booking._id }).sort({ createdAt: 1 }).limit(200),
+      requestPartnerIds.length
+        ? Partner.find({ _id: { $in: requestPartnerIds } })
+          .select("_id partnerCode name phone photoUrl selfieUrl serviceCategory rating totalJobs isOnline accountStatus isVerified")
+          .lean()
+        : []
     ]);
-    return res.json({ booking: serializeBookingHistory(booking, payments, messages) });
+    const availabilityById = new Map(partners.map((partner) => [String(partner._id), partner]));
+    return res.json({ booking: serializeBookingHistory(booking, payments, messages, availabilityById) });
   } catch (error) {
     return next(error);
   }
