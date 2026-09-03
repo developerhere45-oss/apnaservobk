@@ -142,6 +142,12 @@ function dispatchableBookingStatuses() {
   return ["confirmed", "pending"];
 }
 
+// Admin may initiate the first routing round for a confirmed/legacy booking,
+// or add eligible partners to an existing sent-to-partner round.
+function partnerRequestableStatuses() {
+  return ["confirmed", "pending", "sent_to_partner"];
+}
+
 function activeJobStatuses() {
   return ["accepted", "on_the_way", "arrived", "started", "amount_pending"];
 }
@@ -241,6 +247,7 @@ module.exports = {
   lifecycleLabel,
   lifecycleStatusForBooking,
   normalizeBookingStatusInput,
+  partnerRequestableStatuses,
   pendingAssignmentStatuses,
   transitionDecision
 };

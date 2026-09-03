@@ -26,7 +26,7 @@ const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens, tokenHash } = require("../utils/notificationTokens");
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { serviceCategoryVariants, serviceLabel, partnerCanServeService } = require("../utils/serviceCategory");
-const { pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
+const { partnerRequestableStatuses } = require("../utils/bookingLifecycle");
 const {
   addPartnerRequests,
   cancelOutstandingRequests,
@@ -969,7 +969,7 @@ async function smartAssignmentDashboard(req, res, next) {
 
     const pendingQuery = {
       partnerId: null,
-      status: { $in: pendingAssignmentStatuses() },
+      status: { $in: partnerRequestableStatuses() },
       ...serviceFilter,
       ...areaFilter,
       ...searchFilter
@@ -1171,7 +1171,7 @@ async function smartAssignBooking(req, res, next) {
     });
     if (!booking) return res.status(404).json({ message: "Booking not found" });
     if (booking.partnerId) return res.status(409).json({ message: "Booking already has an assigned partner" });
-    if (!pendingAssignmentStatuses().includes(String(booking.status || ""))) {
+    if (!partnerRequestableStatuses().includes(String(booking.status || ""))) {
       return res.status(409).json({ message: `Booking cannot be forwarded while status is ${booking.status}` });
     }
 
@@ -1204,7 +1204,7 @@ async function smartBulkAssignPending(req, res, next) {
     const area = String(req.body?.area || "").trim();
     const query = {
       partnerId: null,
-      status: { $in: pendingAssignmentStatuses() },
+      status: { $in: partnerRequestableStatuses() },
       ...(service ? { serviceCategory: { $in: serviceCategoryVariants(service) } } : {}),
       ...(area ? { city: regex(area) } : {})
     };
@@ -1833,7 +1833,7 @@ async function performAdminAction(req, res, next) {
       });
       if (!booking) return res.status(404).json({ message: "Booking not found" });
       if (booking.partnerId) return res.status(409).json({ message: "Booking already has an assigned partner" });
-      if (!pendingAssignmentStatuses().includes(String(booking.status || ""))) {
+      if (!partnerRequestableStatuses().includes(String(booking.status || ""))) {
         return res.status(409).json({ message: `Booking cannot be forwarded while status is ${booking.status}` });
       }
 
