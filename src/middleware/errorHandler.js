@@ -3,6 +3,11 @@ function notFound(req, res) {
   res.status(404).json({ message: `Route not found: ${req.method} ${route}` });
 }
 
+function redactedPath(req) {
+  return String(req.originalUrl || req.path || "")
+    .replace(/([?&](?:token|access_token|key)=)[^&]*/gi, "$1[REDACTED]");
+}
+
 function errorHandler(error, req, res, next) {
   if (res.headersSent) {
     return next(error);
@@ -40,7 +45,7 @@ function errorHandler(error, req, res, next) {
     console.error("request_failed", {
       requestId: payload.requestId,
       method: req.method,
-      path: req.originalUrl || req.path,
+      path: redactedPath(req),
       uidSuffix: String(req.auth?.uid || "").slice(-6),
       errorName: error?.name || "Error",
       errorCode: error?.code || "",

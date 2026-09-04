@@ -38,6 +38,14 @@ const { notFound, errorHandler } = require("./middleware/errorHandler");
 const app = express();
 const server = http.createServer(app);
 
+function redactedRequestUrl(req) {
+  return String(req.originalUrl || req.url || req.path || "")
+    .replace(/([?&](?:token|access_token|key)=)[^&]*/gi, "$1[REDACTED]");
+}
+
+morgan.token("safe-url", redactedRequestUrl);
+const productionAccessLogFormat = ':remote-addr - :remote-user [:date[clf]] ":method :safe-url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"';
+
 validateEnv();
 initFirebase();
 initCloudinary();
@@ -81,7 +89,7 @@ app.use((req, res, next) => {
   next();
 });
 app.use(rejectPlainSensitiveFields);
-app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
+app.use(morgan(process.env.NODE_ENV === "production" ? productionAccessLogFormat : "dev"));
 app.use(
   rateLimit({
     windowMs: 60 * 1000,

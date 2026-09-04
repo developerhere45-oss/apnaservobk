@@ -6,7 +6,7 @@ const { admin } = require("../src/config/firebase");
 async function run() {
   process.env.NODE_ENV = "production";
   process.env.FIREBASE_PROJECT_ID = "apnaservo-compat-audit";
-  process.env.FIREBASE_EXPIRED_TOKEN_GRACE_SECONDS = "86400";
+  process.env.FIREBASE_EXPIRED_TOKEN_GRACE_SECONDS = "300";
 
   const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
   const certificate = publicKey.export({ type: "spki", format: "pem" });
@@ -17,7 +17,7 @@ async function run() {
     iss: `https://securetoken.google.com/${process.env.FIREBASE_PROJECT_ID}`,
     auth_time: now - 7200,
     iat: now - 7200,
-    exp: now - 3600,
+    exp: now - 120,
     email_verified: true
   };
   const token = jwt.sign(payload, privateKey, { algorithm: "RS256", keyid: "audit-key" });
@@ -45,10 +45,10 @@ async function run() {
   const forged = jwt.sign(payload, forgedKey, { algorithm: "RS256", keyid: "audit-key" });
   await assert.rejects(() => verifyFirebaseIdToken(forged, true));
 
-  const tooOld = jwt.sign({ ...payload, exp: now - 90000 }, privateKey, { algorithm: "RS256", keyid: "audit-key" });
+  const tooOld = jwt.sign({ ...payload, exp: now - 301 }, privateKey, { algorithm: "RS256", keyid: "audit-key" });
   await assert.rejects(() => verifyFirebaseIdToken(tooOld, true));
 
-  console.log("PASS expired Firebase compatibility verifies signature, project and bounded grace");
+  console.log("PASS emergency expired-token compatibility verifies signature, project and five-minute maximum grace");
 }
 
 run().catch((error) => {

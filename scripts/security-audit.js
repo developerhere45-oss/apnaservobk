@@ -65,6 +65,44 @@ const checks = [
     name: "socket partner location updates are rate limited",
     file: "src/sockets/bookingSocket.js",
     pass: (text) => text.includes("allowSocketEvent") && text.includes("partner:location_update")
+  },
+  {
+    name: "notification pagination rejects non-integer and oversized input",
+    file: "src/controllers/notificationController.js",
+    pass: (text) => text.includes("Number.isInteger(requestedLimit)")
+      && text.includes("requestedLimit > 100")
+      && text.includes("requestedPage > 10000")
+  },
+  {
+    name: "notification identifiers are validated before database lookup",
+    file: "src/controllers/notificationController.js",
+    pass: (text) => text.includes("mongoose.isValidObjectId(req.params.notificationId)")
+  },
+  {
+    name: "public media identifiers are validated before database lookup",
+    file: "src/controllers/appControlController.js",
+    pass: (text) => text.includes("mongoose.isValidObjectId(req.params.assetId)")
+  },
+  {
+    name: "production access logs redact signed asset credentials",
+    file: "src/server.js",
+    pass: (text) => text.includes("safe-url") && text.includes("[REDACTED]")
+  },
+  {
+    name: "server error logs redact query-string credentials",
+    file: "src/middleware/errorHandler.js",
+    pass: (text) => text.includes("redactedPath(req)") && text.includes("[REDACTED]")
+  },
+  {
+    name: "production deployment rejects expired Firebase tokens",
+    file: "render.yaml",
+    pass: (text) => /FIREBASE_EXPIRED_TOKEN_GRACE_SECONDS\s*\r?\n\s*value:\s*["']0["']/.test(text)
+  },
+  {
+    name: "expired-token emergency grace is disabled by default and tightly bounded",
+    file: "src/utils/firebaseTokenVerifier.js",
+    pass: (text) => text.includes("DEFAULT_GRACE_SECONDS = 0")
+      && text.includes("MAX_GRACE_SECONDS = 5 * 60")
   }
 ];
 

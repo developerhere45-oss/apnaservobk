@@ -1,6 +1,7 @@
 const InAppNotification = require("../models/InAppNotification");
 const User = require("../models/User");
 const Partner = require("../models/Partner");
+const mongoose = require("mongoose");
 const { normalizeDeviceToken, removeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 
 function serializeNotification(notification) {
@@ -55,8 +56,14 @@ async function listNotifications(req, res, next) {
     if (!query) {
       return res.json({ notifications: [], unreadCount: 0 });
     }
-    const limit = Math.min(Number(req.query.limit || 50), 100);
-    const page = Math.max(Number(req.query.page || 1), 1);
+    const requestedLimit = Number(req.query.limit ?? 50);
+    const requestedPage = Number(req.query.page ?? 1);
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 100
+      || !Number.isInteger(requestedPage) || requestedPage < 1 || requestedPage > 10000) {
+      return res.status(400).json({ message: "page must be 1-10000 and limit must be 1-100" });
+    }
+    const limit = requestedLimit;
+    const page = requestedPage;
     const notifications = await InAppNotification.find(query).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit);
     const unreadCount = await InAppNotification.countDocuments({ ...query, readAt: null });
     const total = await InAppNotification.countDocuments(query);
@@ -74,6 +81,9 @@ async function listNotifications(req, res, next) {
 
 async function markNotificationRead(req, res, next) {
   try {
+    if (!mongoose.isValidObjectId(req.params.notificationId)) {
+      return res.status(404).json({ message: "Notification not found" });
+    }
     const query = await ownerQuery(req);
     if (!query) {
       return res.status(404).json({ message: "Notification not found" });

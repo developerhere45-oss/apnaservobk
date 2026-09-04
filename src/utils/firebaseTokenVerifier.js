@@ -2,8 +2,10 @@ const jwt = require("jsonwebtoken");
 const { admin } = require("../config/firebase");
 
 const FIREBASE_CERT_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
-const DEFAULT_GRACE_SECONDS = 24 * 60 * 60;
-const MAX_GRACE_SECONDS = 7 * 24 * 60 * 60;
+const DEFAULT_GRACE_SECONDS = 0;
+// Emergency-only rollout escape hatch. Current Android and iOS clients refresh
+// Firebase credentials, so production should keep this at zero.
+const MAX_GRACE_SECONDS = 5 * 60;
 
 let certificateCache = { certificates: null, expiresAt: 0 };
 

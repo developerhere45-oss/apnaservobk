@@ -5,6 +5,7 @@ const Service = require("../models/Service");
 const Partner = require("../models/Partner");
 const FeatureRegistry = require("../models/FeatureRegistry");
 const AppControlMediaAsset = require("../models/AppControlMediaAsset");
+const mongoose = require("mongoose");
 const { cloudinary } = require("../config/cloudinary");
 const { Readable } = require("stream");
 const { emitAdminEvent } = require("../sockets/bookingSocket");
@@ -620,6 +621,9 @@ async function uploadMedia(req, res, next) {
 }
 async function mediaAsset(req, res, next) {
   try {
+    if (!mongoose.isValidObjectId(req.params.assetId)) {
+      return res.status(404).json({ message: "Media asset not found" });
+    }
     const asset = await AppControlMediaAsset.findById(
       req.params.assetId,
     ).lean();
