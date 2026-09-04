@@ -25,6 +25,10 @@ const conversationMessageSchema = new mongoose.Schema(
     senderName: { type: String, trim: true, default: "" },
     message: { type: String, trim: true, default: "" },
     attachments: { type: [attachmentSchema], default: [] },
+    adminUnreadCount: { type: Number, min: 0, default: 0, index: true },
+    userUnreadCount: { type: Number, min: 0, default: 0 },
+    adminLastReadAt: { type: Date, default: null },
+    userLastReadAt: { type: Date, default: null },
     createdAt: { type: Date, default: Date.now }
   },
   { _id: true }

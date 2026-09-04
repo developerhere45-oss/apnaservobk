@@ -340,6 +340,8 @@ function serializeBookingHistory(booking, payments = [], messages = [], availabi
 
 function serializeSupportTicket(ticket) {
   ticket = decryptAdminRecord(ticket);
+  const conversation = ticket.conversation || [];
+  const lastMessage = conversation.length ? conversation[conversation.length - 1] : null;
   const publicTicketId = ticket.publicId || (/^(ios-|local-)/i.test(ticket.ticketCode || "") ? "" : ticket.ticketCode) || "";
   const publicBookingCode = /^(ios-|local-)/i.test(ticket.bookingCode || "") ? "" : (ticket.bookingCode || "");
   return {
@@ -358,9 +360,11 @@ function serializeSupportTicket(ticket) {
     source: ticket.source || "ai_support",
     createdDateTime: iso(ticket.createdAt),
     lastUpdated: iso(ticket.lastUpdatedAt || ticket.updatedAt),
+    lastMessage: lastMessage?.message || ticket.complaint || "",
+    lastMessageAt: iso(lastMessage?.createdAt || ticket.lastUpdatedAt || ticket.updatedAt),
     complaint: ticket.complaint || "",
     aiSummary: ticket.aiSummary || "",
-    conversationHistory: (ticket.conversation || []).map((entry) => ({
+    conversationHistory: conversation.map((entry) => ({
       id: id(entry._id),
       senderRole: entry.senderRole || "",
       senderName: entry.senderName || "",
@@ -391,7 +395,9 @@ function serializeSupportTicket(ticket) {
     })),
     attachments: ticket.attachments || [],
     assignedTo: ticket.assignedTo || "",
-    escalatedTo: ticket.escalatedTo || ""
+    escalatedTo: ticket.escalatedTo || "",
+    unreadCount: Number(ticket.adminUnreadCount || 0),
+    userUnreadCount: Number(ticket.userUnreadCount || 0)
   };
 }
 
@@ -3077,6 +3083,9 @@ async function supportTicketDetails(req, res, next) {
   try {
     const ticket = await findTicket(req.params.ticketId);
     if (!ticket) return res.status(404).json({ message: "Support ticket not found" });
+    ticket.adminUnreadCount = 0;
+    ticket.adminLastReadAt = new Date();
+    await ticket.save();
     const booking = ticket.bookingId
       ? await Booking.findById(ticket.bookingId).select("serviceCategory serviceName city address partnerSnapshot bookingCode")
       : null;
@@ -3148,6 +3157,7 @@ async function updateSupportTicket(req, res, next) {
       ticket.adminReplies.push(reply);
       ticket.conversation.push(reply);
       ticket.timeline.push({ event: "admin_replied", by: actor, note: adminReply.slice(0, 180), at: now });
+      ticket.userUnreadCount = Number(ticket.userUnreadCount || 0) + 1;
     }
     if (body.resolutionNotes !== undefined) {
       ticket.resolutionNotes = String(body.resolutionNotes || "").trim().slice(0, 3000);
@@ -3156,19 +3166,28 @@ async function updateSupportTicket(req, res, next) {
     await ticket.save();
     if (adminReply && ticket.userId) {
       const user = await User.findById(ticket.userId);
-      await reliableNotify({
-        recipients: [userNotificationRecipient(user)].filter(Boolean),
-        title: `Reply from ${ticket.assignedTo}`,
-        body: adminReply.slice(0, 180),
-        category: "support_reply",
-        priority: "high",
-        data: {
-          type: "support:reply",
-          actionType: "OPEN_SUPPORT",
-          targetApp: "USER",
-          ticketId: ticket.publicId || ticket.ticketCode
-        }
-      });
+      try {
+        await reliableNotify({
+          recipients: [userNotificationRecipient(user)].filter(Boolean),
+          title: `Reply from ${ticket.assignedTo}`,
+          body: adminReply.slice(0, 180),
+          category: "support_reply",
+          priority: "high",
+          data: {
+            type: "support:reply",
+            actionType: "OPEN_SUPPORT",
+            targetApp: "USER",
+            ticketId: ticket.publicId || ticket.ticketCode
+          }
+        });
+      } catch (notificationError) {
+        console.error("support_reply_notification_failed", {
+          requestId: req.requestId || "",
+          ticketId: ticket.publicId || ticket.ticketCode,
+          userId: String(ticket.userId),
+          message: notificationError?.message || "Unknown notification error"
+        });
+      }
     }
     emitAdminEvent("support:ticket_updated", {
       ticketId: ticket.ticketCode,

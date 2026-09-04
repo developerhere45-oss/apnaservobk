@@ -334,6 +334,7 @@ async function syncSupportTicket(req, res, next) {
         note: body.message.slice(0, 180),
         at: now
       });
+      if (body.senderRole === "user") ticket.adminUnreadCount = Number(ticket.adminUnreadCount || 0) + 1;
     }
     if (attachment && !ticket.attachments.some((entry) => entry.url === attachment.url)) {
       ticket.attachments.push(attachment);
@@ -385,6 +386,11 @@ async function getSupportTicket(req, res, next) {
     });
     if (!ticket) return res.status(404).json({ message: "Support ticket not found" });
 
+    const now = new Date();
+    ticket.userUnreadCount = 0;
+    ticket.userLastReadAt = now;
+    await ticket.save();
+
     return res.json({
       ticketId: ticket.publicId || ticket.ticketCode,
       status: ticket.status,
@@ -400,7 +406,7 @@ async function getSupportTicket(req, res, next) {
           : (entry.senderName || (entry.senderRole === "user" ? "You" : "ApnaServo Support")),
         message: entry.message || "",
         clientMessageId: entry.clientMessageId || "",
-        deliveryStatus: "sent",
+        deliveryStatus: ["admin", "support"].includes(entry.senderRole) ? "read" : "sent",
         createdAtMillis: new Date(entry.createdAt || ticket.createdAt).getTime()
       }))
     });
