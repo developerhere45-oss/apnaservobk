@@ -22,6 +22,7 @@
     "audit:service-mapping": "node scripts/all-service-booking-mapping-audit.js",
     "audit:partner-version-compatibility": "node scripts/partner-version-compatibility-audit.js",
     "audit:firebase-token-compatibility": "node scripts/firebase-expired-token-compatibility-audit.js",
+    "audit:chat-payment-invoice": "node scripts/chat-payment-invoice-audit.js",
     "db:audit": "node scripts/db-audit.js",
     "db:audit:schema": "node scripts/db-audit.js --schema-only",
     "db:migrate": "node scripts/db-migrate-fixes.js",

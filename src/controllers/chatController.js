@@ -131,19 +131,22 @@ async function listMessages(req, res, next) {
       }
     }
     const limit = query.limit || 80;
-    const messages = await BookingMessage.find(filter)
-      .sort({ createdAt: -1 })
-      .limit(limit);
-
     const otherRole = context.actor.role === "user" ? "partner" : "user";
+    const deliveredAt = new Date();
     await BookingMessage.updateMany(
       {
         bookingId: context.booking._id,
         senderRole: otherRole,
         deliveryStatus: { $in: ["queued", "sent"] }
       },
-      { $set: { deliveryStatus: "delivered", deliveredAt: new Date() } }
+      { $set: { deliveryStatus: "delivered", deliveredAt } }
     );
+
+    // Read after acknowledging delivery so the recipient and the next sender
+    // refresh both receive the authoritative status, not a stale "sent" value.
+    const messages = await BookingMessage.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit);
 
     return res.json({
       messages: messages.reverse().map(serializeMessage),
@@ -229,23 +232,37 @@ async function sendMessage(req, res, next) {
 
     if (!duplicate) {
       const recipient = recipientFor(context.actor, context.booking, context.user, context.partner);
-      await reliableNotify({
-        recipients: [recipient],
-        title: `Message from ${context.actor.name}`,
-        body: `${context.booking.bookingCode}: ${body.message.length > 65 ? `${body.message.slice(0, 62)}...` : body.message}`,
-        type: "booking_chat",
-        category: "chat",
-        priority: "normal",
-        data: {
-          type: "booking:chat_message",
+      // The message is durably stored before notification delivery. Push/in-app
+      // outages must never turn a successful chat write into an HTTP 500, since
+      // that makes clients retry an already-persisted message and show "failed".
+      try {
+        await reliableNotify({
+          recipients: [recipient],
+          title: `Message from ${context.actor.name}`,
+          body: `${context.booking.bookingCode}: ${body.message.length > 65 ? `${body.message.slice(0, 62)}...` : body.message}`,
+          type: "booking_chat",
+          category: "chat",
+          priority: "normal",
+          data: {
+            type: "booking:chat_message",
+            bookingId: String(context.booking._id),
+            bookingCode: context.booking.bookingCode,
+            messageId: String(message._id),
+            senderRole: context.actor.role,
+            senderName: context.actor.name
+          },
+          smsBody: `ApnaServo: New chat message for booking ${context.booking.bookingCode}. Open the app to reply.`
+        });
+      } catch (notificationError) {
+        console.error("booking_chat_notification_failed", {
+          requestId: req.requestId || "",
           bookingId: String(context.booking._id),
-          bookingCode: context.booking.bookingCode,
           messageId: String(message._id),
-          senderRole: context.actor.role,
-          senderName: context.actor.name
-        },
-        smsBody: `ApnaServo: New chat message for booking ${context.booking.bookingCode}. Open the app to reply.`
-      });
+          recipientRole: recipient.role,
+          errorName: notificationError?.name || "Error",
+          message: notificationError?.message || "Unknown notification error"
+        });
+      }
     }
 
     return res.status(duplicate ? 200 : 201).json({

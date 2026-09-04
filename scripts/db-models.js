@@ -8,6 +8,7 @@ module.exports = {
   CustomerNoResponseReport: require("../src/models/CustomerNoResponseReport"),
   FraudAlert: require("../src/models/FraudAlert"),
   InAppNotification: require("../src/models/InAppNotification"),
+  Invoice: require("../src/models/Invoice"),
   JobProofPhoto: require("../src/models/JobProofPhoto"),
   LocationLog: require("../src/models/LocationLog"),
   OtpChallenge: require("../src/models/OtpChallenge"),

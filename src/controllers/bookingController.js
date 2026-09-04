@@ -12,6 +12,8 @@ const CustomerNoResponseReport = require("../models/CustomerNoResponseReport");
 const TechnicianSos = require("../models/TechnicianSos");
 const JobProofPhoto = require("../models/JobProofPhoto");
 const RevisitRequest = require("../models/RevisitRequest");
+const Payment = require("../models/Payment");
+const { ensurePaidInvoice } = require("../services/invoiceService");
 const { cloudinary } = require("../config/cloudinary");
 const { normalizeServiceCategory, serviceCategoryVariants, serviceLabel, companySingleServiceCategory } = require("../utils/serviceCategory");
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
@@ -266,7 +268,9 @@ const acceptBookingSchema = z.object({
 
 const QUOTE_EXPIRY_MS = 24 * 60 * 60 * 1000;
 const PARTNER_STATUS_UPDATES = ["on_the_way", "arrived", "started", "amount_pending", "completed", "cancelled"];
-const CUSTOMER_STATUS_UPDATES = ["cancelled", "completed", "disputed"];
+// A customer may submit a direct-payment claim through /payment-submitted,
+// but only the assigned partner (or a verified gateway callback) can mark it paid.
+const CUSTOMER_STATUS_UPDATES = ["cancelled", "disputed"];
 
 function normalizeStaffPhone(value) {
   const digits = String(value || "").replace(/\D/g, "");
@@ -1856,6 +1860,31 @@ async function updateStatus(req, res, next) {
 
     if (nextStatus === "completed" && booking.partnerId) {
       await creditCompletedBookingOnce(booking);
+      const paidAmount = Number(booking.finalAmount || booking.quoteAmount || 0);
+      const payment = await Payment.findOneAndUpdate(
+        { bookingId: booking._id, paymentMethod: "direct" },
+        {
+          $setOnInsert: {
+            bookingId: booking._id,
+            userId: booking.userId,
+            partnerId: booking.partnerId,
+            serviceAmount: paidAmount,
+            additionalCharges: 0,
+            discount: 0,
+            tax: 0,
+            amount: paidAmount,
+            currency: "INR",
+            paymentMethod: "direct"
+          },
+          $set: { status: "paid", paidAt: now, verifiedAt: now }
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      const [invoiceUser, invoicePartner] = await Promise.all([
+        User.findById(booking.userId),
+        Partner.findById(booking.partnerId)
+      ]);
+      await ensurePaidInvoice({ booking, payment, user: invoiceUser, partner: invoicePartner });
     }
 
     emitBookingStatusUpdate(booking);

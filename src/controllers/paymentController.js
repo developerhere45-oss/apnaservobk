@@ -7,6 +7,8 @@ const razorpayClient = require("../config/razorpay");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { activeDeviceTokens } = require("../utils/notificationTokens");
 const { emitAdminEvent, serializeBooking } = require("../sockets/bookingSocket");
+const Partner = require("../models/Partner");
+const { ensurePaidInvoice } = require("../services/invoiceService");
 
 const objectIdSchema = z.string().regex(/^[a-f0-9]{24}$/i);
 const createOrderSchema = z.object({
@@ -42,6 +44,15 @@ function secureEqualHex(left, right) {
   return crypto.timingSafeEqual(Buffer.from(leftText, "hex"), Buffer.from(rightText, "hex"));
 }
 
+function referenceHash(value) {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
+}
+
+function authoritativeAmount(booking) {
+  const value = Number(booking.finalAmount || booking.quoteAmount || booking.price || 0);
+  return Number.isFinite(value) ? Math.round(value * 100) / 100 : 0;
+}
+
 async function createOrder(req, res, next) {
   try {
     const body = createOrderSchema.parse(req.body || {});
@@ -56,8 +67,31 @@ async function createOrder(req, res, next) {
       return res.status(404).json({ message: "Booking not found" });
     }
 
+    const finalAmount = authoritativeAmount(booking);
+    if (finalAmount <= 0) {
+      return res.status(409).json({ message: "Final payable amount is not available" });
+    }
+
+    const reusablePayment = await Payment.findOne({
+      bookingId: booking._id,
+      userId: user._id,
+      amount: finalAmount,
+      status: { $in: ["created", "processing"] }
+    }).sort({ createdAt: -1 });
+    if (reusablePayment?.razorpayOrderId) {
+      return res.json({
+        order: {
+          id: reusablePayment.razorpayOrderId,
+          amount: Math.round(reusablePayment.amount * 100),
+          currency: reusablePayment.currency,
+          receipt: booking.bookingCode
+        },
+        idempotent: true
+      });
+    }
+
     const order = await client.orders.create({
-      amount: Math.max(booking.price || 0, 1) * 100,
+      amount: Math.round(finalAmount * 100),
       currency: "INR",
       receipt: booking.bookingCode,
       notes: {
@@ -70,9 +104,11 @@ async function createOrder(req, res, next) {
       bookingId: booking._id,
       userId: booking.userId,
       partnerId: booking.partnerId,
-      amount: booking.price,
+      serviceAmount: finalAmount,
+      amount: finalAmount,
       status: "created",
-      razorpayOrderId: order.id
+      razorpayOrderId: order.id,
+      razorpayOrderIdHash: referenceHash(order.id)
     });
     emitAdminEvent("payment:created", {
       ...serializeBooking(booking),
@@ -107,6 +143,10 @@ async function verifyPayment(req, res, next) {
       return res.status(400).json({ message: "Payment order mismatch" });
     }
 
+    if (payment.amount !== authoritativeAmount(booking)) {
+      return res.status(409).json({ message: "Booking amount changed. Create a new payment order." });
+    }
+
     const expected = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET || "")
       .update(`${razorpayOrderId}|${razorpayPaymentId}`)
@@ -125,8 +165,13 @@ async function verifyPayment(req, res, next) {
 
     payment.status = "paid";
     payment.razorpayPaymentId = razorpayPaymentId;
+    payment.razorpayPaymentIdHash = referenceHash(razorpayPaymentId);
     payment.razorpaySignature = razorpaySignature;
+    payment.paidAt = new Date();
+    payment.verifiedAt = payment.paidAt;
     await payment.save();
+    const partner = booking.partnerId ? await Partner.findById(booking.partnerId) : null;
+    const invoice = await ensurePaidInvoice({ booking, payment, user, partner });
     emitAdminEvent("payment:confirmed", {
       ...serializeBooking(booking),
       paymentId: String(payment._id),
@@ -136,17 +181,26 @@ async function verifyPayment(req, res, next) {
       razorpayPaymentId: payment.razorpayPaymentId
     });
 
-    await reliableNotify({
-      recipients: [userRecipient(user)],
-      title: "Payment Confirmed",
-      body: "Your ApnaServo payment has been confirmed.",
-      category: "payment",
-      priority: "high",
-      data: { type: "payment:confirmed", bookingId, bookingCode: booking?.bookingCode || "" },
-      smsBody: `ApnaServo: Payment confirmed for booking ${booking?.bookingCode || bookingId}.`
-    });
+    try {
+      await reliableNotify({
+        recipients: [userRecipient(user)],
+        title: "Payment Confirmed",
+        body: "Your ApnaServo payment has been confirmed.",
+        category: "payment",
+        priority: "high",
+        data: { type: "payment:confirmed", bookingId, bookingCode: booking?.bookingCode || "" },
+        smsBody: `ApnaServo: Payment confirmed for booking ${booking?.bookingCode || bookingId}.`
+      });
+    } catch (notificationError) {
+      console.error("payment_confirmation_notification_failed", {
+        requestId: req.requestId || "",
+        bookingId,
+        paymentId: String(payment._id),
+        message: notificationError?.message || "Unknown notification error"
+      });
+    }
 
-    return res.json({ ok: true, booking, payment });
+    return res.json({ ok: true, booking, payment, invoice });
   } catch (error) {
     return next(error);
   }

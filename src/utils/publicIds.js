@@ -8,7 +8,8 @@ const FORMATS = Object.freeze({
   partnerComplaint: { prefix: "ASCP", width: 5 },
   payment: { prefix: "ASPAY", width: 5 },
   userDevice: { prefix: "ASDU", width: 5 },
-  partnerDevice: { prefix: "ASDP", width: 5 }
+  partnerDevice: { prefix: "ASDP", width: 5 },
+  invoice: { prefix: "INV-AS", width: 6 }
 });
 
 async function nextPublicId(kind) {
