@@ -8,6 +8,7 @@ const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificati
 const { sendWelcomeEmail } = require("../utils/welcomeEmail");
 const { admin, initFirebase } = require("../config/firebase");
 const { nextPublicId } = require("../utils/publicIds");
+const { supportBotReply } = require("../utils/supportBot");
 
 const profileSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
@@ -47,7 +48,9 @@ const supportTicketSyncSchema = z.object({
   aiSummary: z.string().trim().max(3000).optional(),
   attachmentUrl: z.string().trim().max(2000).optional(),
   attachmentName: z.string().trim().max(255).optional(),
-  attachmentMimeType: z.string().trim().max(120).optional()
+  attachmentMimeType: z.string().trim().max(120).optional(),
+  platform: z.enum(["android", "ios"]).default("android"),
+  serverBot: z.boolean().default(false)
 });
 
 function normalizePhone(value) {
@@ -349,6 +352,26 @@ async function syncSupportTicket(req, res, next) {
       ticket.reopenedAt = now;
       ticket.timeline.push({ event: "reopened", by: "user", note: "Customer sent a new message", at: now });
     }
+    let bot = null;
+    // Android's released client already owns its bot turn. Only clients that
+    // explicitly opt into the server bot receive an automatic reply, avoiding
+    // duplicate Android messages while iOS migrates to backend-driven replies.
+    if (!duplicate && body.senderRole === "user" && body.serverBot) {
+      bot = await supportBotReply(body.message, body.platform);
+      if (bot.enabled) {
+        ticket.conversation.push({
+          clientMessageId: `bot:${body.clientMessageId || crypto.randomUUID()}`,
+          senderRole: "ai",
+          senderName: "ApnaServo Support Assistant",
+          message: bot.reply,
+          attachments: [],
+          createdAt: new Date(now.getTime() + 1)
+        });
+        ticket.timeline.push({ event: "ai_message", by: "ai_support", note: `${bot.intent}: ${bot.reply.slice(0, 140)}`, at: now });
+        ticket.userUnreadCount = Number(ticket.userUnreadCount || 0) + 1;
+        ticket.aiSummary = `AI classified the latest customer message as ${bot.intent}. Human support can review the full conversation.`;
+      }
+    }
     ticket.lastUpdatedAt = now;
     await ticket.save();
 
@@ -367,7 +390,10 @@ async function syncSupportTicket(req, res, next) {
       ticketId: ticket.publicId || ticket.ticketCode,
       supportTicketId: String(ticket._id),
       status: ticket.status,
-      idempotent: Boolean(duplicate)
+      idempotent: Boolean(duplicate),
+      botReply: bot?.enabled ? bot.reply : "",
+      botIntent: bot?.enabled ? bot.intent : "",
+      typingDelayMs: bot?.enabled ? bot.typingDelayMs : 0
     });
   } catch (error) {
     return next(error);

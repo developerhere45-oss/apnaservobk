@@ -19,6 +19,7 @@ const DEFAULT_CONFIG = Object.freeze({
   home: { sections: [] },
   forms: {},
   booking: { enabled: true, maxActiveBookings: 10, minimumNoticeMinutes: 0, cancellationEnabled: true },
+  support: { enabled: true, welcomeMessage: "Namaste! How can I help you today?", fallbackReply: "Thank you for explaining the issue. I’ve created a support ticket and shared your message with our team. Please send your booking ID and any relevant details so we can assist you faster.", typingDelayMs: 1400, intents: [] },
   partnerHome: { sections: [] },
   navigation: [],
   laundry: { sections: [], dashboardCards: [], services: [], items: [], pickupWorkflow: [], deliveryWorkflow: [], settings: { pickupEnabled: true, deliveryEnabled: true, staffEnabled: true } },
@@ -97,6 +98,17 @@ function normalizeConfig(value) {
     })).filter((field) => field.id && field.label && field.visible).sort((a, b) => a.order - b.order)
   }]));
   output.booking = { enabled: source.booking?.enabled !== false, maxActiveBookings: boundedNumber(source.booking?.maxActiveBookings, 10, 1, 100), minimumNoticeMinutes: boundedNumber(source.booking?.minimumNoticeMinutes, 0, 0, 10080), cancellationEnabled: source.booking?.cancellationEnabled !== false };
+  output.support = {
+    enabled: source.support?.enabled !== false,
+    welcomeMessage: cleanText(source.support?.welcomeMessage, 500) || DEFAULT_CONFIG.support.welcomeMessage,
+    fallbackReply: cleanText(source.support?.fallbackReply, 1000) || DEFAULT_CONFIG.support.fallbackReply,
+    typingDelayMs: boundedNumber(source.support?.typingDelayMs, 1400, 600, 5000),
+    intents: (Array.isArray(source.support?.intents) ? source.support.intents : []).slice(0, 50).map((intent, index) => ({
+      id: cleanText(intent?.id, 60) || `intent_${index + 1}`,
+      keywords: (Array.isArray(intent?.keywords) ? intent.keywords : []).slice(0, 40).map((keyword) => cleanText(keyword, 80)).filter(Boolean),
+      reply: cleanText(intent?.reply, 1000)
+    })).filter((intent) => intent.keywords.length && intent.reply)
+  };
   const partnerSectionTypes = new Set(["online", "stats", "recent_requests", "quick_actions", "active_jobs", "earnings", "banner", "imageBanner", "text", "card", "announcement", "promotion", "emptyState", "staffList", "orderList"]);
   const normalizePartnerSections = (items) => (Array.isArray(items) ? items : []).slice(0, 40).map((item, index) => ({
     id: cleanText(item?.id, 60), type: partnerSectionTypes.has(item?.type) ? item.type : "card", enabled: item?.enabled !== false,
