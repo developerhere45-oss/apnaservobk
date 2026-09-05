@@ -441,6 +441,46 @@ async function getSupportTicket(req, res, next) {
   }
 }
 
+async function getLatestSupportTicket(req, res, next) {
+  try {
+    const user = await User.findOne({ firebaseUid: req.auth.uid }).select("_id");
+    if (!user) return res.status(404).json({ message: "Customer profile not found" });
+
+    const ticket = await SupportTicket.findOne({ userId: user._id })
+      .sort({ lastUpdatedAt: -1, createdAt: -1 });
+    if (!ticket) return res.json({ ticket: null });
+
+    const now = new Date();
+    ticket.userUnreadCount = 0;
+    ticket.userLastReadAt = now;
+    await ticket.save();
+
+    return res.json({
+      ticket: {
+        ticketId: ticket.publicId || ticket.ticketCode,
+        status: ticket.status,
+        assignedTo: ticket.assignedTo || "",
+        bookingCode: ticket.bookingCode || "",
+        messages: (ticket.conversation || []).map((entry) => ({
+          id: String(entry._id),
+          bookingId: "support",
+          bookingCode: ticket.bookingCode || "",
+          senderRole: entry.senderRole === "admin" ? "support" : entry.senderRole,
+          senderName: entry.senderRole === "admin"
+            ? "ApnaServo Support"
+            : (entry.senderName || (entry.senderRole === "user" ? "You" : "ApnaServo Support")),
+          message: entry.message || "",
+          clientMessageId: entry.clientMessageId || "",
+          deliveryStatus: ["admin", "support"].includes(entry.senderRole) ? "read" : "sent",
+          createdAtMillis: new Date(entry.createdAt || ticket.createdAt).getTime()
+        }))
+      }
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function requestDeletion(req, res, next) {
   try {
     const body = deletionRequestSchema.parse(req.body || {});
@@ -534,6 +574,7 @@ module.exports = {
   me,
   saveFcmToken,
   syncSupportTicket,
+  getLatestSupportTicket,
   getSupportTicket,
   requestDeletion,
   deleteAccount
