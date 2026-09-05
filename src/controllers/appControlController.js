@@ -334,14 +334,7 @@ function validKind(req) {
 }
 
 function mergedCustomerServices(databaseServices) {
-  const catalog = [
-    {
-      serviceCategory: "commercial",
-      name: "Commercial Services",
-      description: "Independently control office, shop, hotel and warehouse service enquiries in the iOS customer app."
-    },
-    ...serviceCatalog()
-  ];
+  const catalog = serviceCatalog();
   const recordsByCategory = new Map(
     databaseServices.map((service) => [
       normalizeServiceCategory(service.serviceCategory || service.name),

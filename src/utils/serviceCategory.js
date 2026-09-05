@@ -1,4 +1,5 @@
 const SERVICE_ALIASES = {
+  commercial: ["commercial", "commercial_services", "commercial services", "business services", "office services"],
   ac: ["ac", "ac_repair", "ac repair", "ac_service", "ac service", "air conditioner"],
   plumbing: ["plumbing", "plumber", "pipe", "tap"],
   electrician: ["electrician", "electric", "electrical"],
@@ -17,6 +18,7 @@ const SERVICE_ALIASES = {
 // kept here (rather than invented in the admin UI) so App Control still works
 // before the optional Service Mongo collection has been populated.
 const SERVICE_CATALOG = [
+  ["commercial", "Commercial Services", "Independently control office, shop, hotel and warehouse service enquiries in the iOS customer app."],
   ["ac", "AC Repair & Service", "AC inspection, cleaning, gas refilling, performance check, and repair replacement."],
   ["electrician", "Electrician", "Switchboard, wiring, fan, MCB, socket, inverter, and urgent electrical repair."],
   ["plumbing", "Plumber", "Tap, sink, flush tank, blocked drain, water motor, leakage, and pipe repair."],
@@ -88,6 +90,7 @@ function serviceCategoryVariants(value) {
 function serviceLabel(value) {
   const key = normalizeServiceCategory(value);
   const labels = {
+    commercial: "Commercial Services",
     ac: "AC Repair & Service",
     plumbing: "Plumber Service",
     electrician: "Electrician",
