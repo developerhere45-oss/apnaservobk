@@ -54,6 +54,12 @@ const profileWriteLimiter = limiter({
   message: "Too many profile updates. Please wait and try again."
 });
 
+const userActivityLimiter = limiter({
+  windowMs: 60 * 1000,
+  limit: 60,
+  message: "Too many activity events. Please wait and try again."
+});
+
 const fcmTokenLimiter = limiter({
   windowMs: 60 * 1000,
   limit: 20,
@@ -95,5 +101,6 @@ module.exports = {
   loginLimiter,
   paymentLimiter,
   profileWriteLimiter,
+  userActivityLimiter,
   verificationLimiter
 };

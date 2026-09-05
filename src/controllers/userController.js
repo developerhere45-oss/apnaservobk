@@ -53,6 +53,15 @@ const supportTicketSyncSchema = z.object({
   serverBot: z.boolean().default(false)
 });
 
+const userActivitySchema = z.object({
+  event: z.enum(["service_clicked", "screen_view"]),
+  platform: z.enum(["android", "ios"]),
+  screen: z.string().trim().max(80).optional().default(""),
+  serviceId: z.string().trim().max(120).optional().default(""),
+  serviceName: z.string().trim().max(180).optional().default(""),
+  category: z.string().trim().max(120).optional().default("")
+});
+
 function normalizePhone(value) {
   return String(value || "").replace(/\D/g, "").slice(-10);
 }
@@ -441,6 +450,34 @@ async function getSupportTicket(req, res, next) {
   }
 }
 
+async function recordUserActivity(req, res, next) {
+  try {
+    const body = userActivitySchema.parse(req.body || {});
+    const user = await User.findOne({ firebaseUid: req.auth.uid }).select("_id name phone");
+    if (!user) return res.status(404).json({ message: "Customer profile not found" });
+    if (body.event === "service_clicked" && !body.serviceId && !body.serviceName) {
+      return res.status(400).json({ message: "Service is required for a service click" });
+    }
+
+    emitAdminEvent(`user:${body.event}`, {
+      userId: String(user._id),
+      userName: user.name || "Customer",
+      phone: user.phone || "",
+      actorRole: "user",
+      actorName: user.name || "Customer",
+      source: `${body.platform}_user_app`,
+      platform: body.platform,
+      screen: body.screen,
+      serviceId: body.serviceId,
+      serviceName: body.serviceName,
+      serviceCategory: body.category
+    });
+    return res.status(202).json({ ok: true });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function getLatestSupportTicket(req, res, next) {
   try {
     const user = await User.findOne({ firebaseUid: req.auth.uid }).select("_id");
@@ -573,6 +610,7 @@ module.exports = {
   upsertProfile,
   me,
   saveFcmToken,
+  recordUserActivity,
   syncSupportTicket,
   getLatestSupportTicket,
   getSupportTicket,

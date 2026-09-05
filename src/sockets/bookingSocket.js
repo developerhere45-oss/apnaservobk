@@ -782,6 +782,8 @@ function eventTitle(eventName, payload) {
   const titles = {
     "user:registered": "New user registered",
     "user:updated": "User account updated",
+    "user:service_clicked": "Customer opened a service",
+    "user:screen_view": "Customer app activity",
     "booking:new_request": "New booking created",
     "booking:accepted": "Partner assigned",
     "booking:rejected": "Partner rejected booking",
@@ -866,7 +868,13 @@ function eventDetail(eventName, payload) {
     ].filter(Boolean).join(" - ");
   }
   if (eventName.startsWith("user:")) {
-    return [userName || payload.phone || payload.userId || "User", payload.email || ""].filter(Boolean).join(" - ");
+    return [
+      userName || payload.phone || payload.userId || "User",
+      payload.serviceName || payload.serviceCategory || "",
+      payload.screen ? `Screen ${payload.screen}` : "",
+      payload.platform ? String(payload.platform).toUpperCase() : "",
+      payload.email || ""
+    ].filter(Boolean).join(" - ");
   }
   return status || "Live backend event received";
 }

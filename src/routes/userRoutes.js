@@ -1,12 +1,13 @@
 const router = require("express").Router();
 const { verifyFirebaseToken } = require("../middleware/authMiddleware");
-const { fcmTokenLimiter, profileWriteLimiter } = require("../middleware/securityRateLimits");
+const { fcmTokenLimiter, profileWriteLimiter, userActivityLimiter } = require("../middleware/securityRateLimits");
 const controller = require("../controllers/userController");
 
 router.use(verifyFirebaseToken);
 router.post("/profile", profileWriteLimiter, controller.upsertProfile);
 router.get("/me", controller.me);
 router.post("/fcm-token", fcmTokenLimiter, controller.saveFcmToken);
+router.post("/activity", userActivityLimiter, controller.recordUserActivity);
 router.post("/support-tickets/sync", profileWriteLimiter, controller.syncSupportTicket);
 router.get("/support-tickets/latest", controller.getLatestSupportTicket);
 router.get("/support-tickets/:ticketId", controller.getSupportTicket);
