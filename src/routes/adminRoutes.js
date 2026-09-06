@@ -48,6 +48,7 @@ router.get("/discounts", discounts.listDiscountRules);
 router.post("/discounts", discounts.createDiscountRule);
 router.patch("/discounts/:ruleId", discounts.updateDiscountRule);
 router.delete("/discounts/:ruleId", discounts.deleteDiscountRule);
+router.post("/discounts/booking", discounts.applyBookingDiscount);
 router.get("/control-center", appControl.overview);
 router.post("/control-center/media/upload", mediaUpload.single("image"), validateUploadedImage(["image/jpeg", "image/png", "image/webp"]), appControl.uploadMedia);
 router.patch("/control-center/draft", appControl.saveDraft);

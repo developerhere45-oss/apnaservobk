@@ -138,6 +138,12 @@ const bookingSchema = new mongoose.Schema(
       amount: { type: Number, default: 0 },
       appliedAt: { type: Date, default: null }
     },
+    adminDiscount: {
+      amount: { type: Number, default: 0 },
+      reason: { type: String, default: "" },
+      appliedBy: { type: String, default: "" },
+      appliedAt: { type: Date, default: null }
+    },
     workCompletion: {
       completedTasks: [{ type: String, trim: true, maxlength: 160 }],
       additionalWork: { type: String, trim: true, maxlength: 1000, default: "" },

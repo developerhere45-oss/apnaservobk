@@ -4,6 +4,13 @@ const { Booking } = require("../models/Booking");
 async function bestDiscountForBooking(booking, grossAmount, now = new Date()) {
   const amount = Math.max(0, Math.round(Number(grossAmount || 0)));
   if (!booking || amount <= 0) return { amount: 0, rule: null };
+  const manualAmount = Math.max(0, Math.round(Number(booking.adminDiscount?.amount || 0)));
+  if (manualAmount > 0) {
+    return {
+      amount: Math.min(Math.max(0, amount - 1), manualAmount),
+      rule: { _id: null, name: booking.adminDiscount?.reason || "Admin booking discount", discountType: "fixed", value: manualAmount }
+    };
+  }
   const priorBookings = await Booking.countDocuments({
     userId: booking.userId,
     _id: { $ne: booking._id },

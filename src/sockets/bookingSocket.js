@@ -245,6 +245,7 @@ function serializeBooking(booking) {
     grossAmount: doc.grossAmount || doc.finalAmount || 0,
     discount: doc.discount || {},
     discountAmount: Number(doc.discount?.amount || 0),
+    adminDiscount: doc.adminDiscount || {},
     workCompletion: doc.workCompletion || {},
     completedTasks: Array.isArray(doc.workCompletion?.completedTasks) ? doc.workCompletion.completedTasks : [],
     additionalWork: doc.workCompletion?.additionalWork || "",
