@@ -46,6 +46,7 @@ router.use(verifyAdminSecret);
 const discounts = require("../controllers/discountController");
 router.get("/discounts", discounts.listDiscountRules);
 router.post("/discounts", discounts.createDiscountRule);
+router.patch("/discounts/:ruleId/status", discounts.setDiscountRuleStatus);
 router.patch("/discounts/:ruleId", discounts.updateDiscountRule);
 router.delete("/discounts/:ruleId", discounts.deleteDiscountRule);
 router.post("/discounts/booking", discounts.applyBookingDiscount);

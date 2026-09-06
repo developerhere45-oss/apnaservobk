@@ -65,6 +65,15 @@ async function deleteDiscountRule(req, res, next) {
   try { const rule = await DiscountRule.findByIdAndDelete(req.params.ruleId); if (!rule) return res.status(404).json({ message: "Discount rule not found" }); return res.json({ ok: true }); } catch (error) { return next(error); }
 }
 
+async function setDiscountRuleStatus(req, res, next) {
+  try {
+    if (typeof req.body?.active !== "boolean") return res.status(400).json({ message: "Discount status must be true or false" });
+    const rule = await DiscountRule.findByIdAndUpdate(req.params.ruleId, { $set: { active: req.body.active } }, { new: true });
+    if (!rule) return res.status(404).json({ message: "Discount rule not found" });
+    return res.json({ rule: serializeDiscountRule(rule) });
+  } catch (error) { return next(error); }
+}
+
 function bookingIdFilter(reference) {
   const raw = String(reference || "").trim();
   const upper = raw.toUpperCase();
@@ -133,4 +142,4 @@ async function applyBookingDiscount(req, res, next) {
   } catch (error) { return next(error); }
 }
 
-module.exports = { listDiscountRules, createDiscountRule, updateDiscountRule, deleteDiscountRule, applyBookingDiscount };
+module.exports = { listDiscountRules, createDiscountRule, updateDiscountRule, deleteDiscountRule, setDiscountRuleStatus, applyBookingDiscount };
