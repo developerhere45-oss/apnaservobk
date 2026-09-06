@@ -111,12 +111,16 @@ async function applyBookingDiscount(req, res, next) {
     };
 
     const grossAmount = Math.round(Number(booking.grossAmount || booking.finalAmount || booking.quoteAmount || booking.price || 0));
-    const appliesNow = booking.status === "amount_pending" && booking.quoteStatus === "pending" && grossAmount > 0;
+    // Older app versions created amount-pending bookings without quoteStatus.
+    // Treat those as an active payable quote too, so admin discounts take
+    // effect immediately instead of waiting for the partner to quote again.
+    const appliesNow = booking.status === "amount_pending" && grossAmount > 0;
     if (appliesNow) {
       const effectiveAmount = Math.min(Math.max(0, grossAmount - 1), requestedAmount);
       booking.grossAmount = grossAmount;
       booking.finalAmount = grossAmount - effectiveAmount;
       booking.quoteAmount = grossAmount - effectiveAmount;
+      booking.quoteStatus = "pending";
       booking.discount = {
         ruleId: null,
         name: reason || "Admin booking discount",
