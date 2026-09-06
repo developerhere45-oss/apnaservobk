@@ -119,8 +119,18 @@ async function createInAppRecords(notification, recipients, targetApp) {
   let insertedCount = 0;
   for (const batch of chunk(docs, INSERT_BATCH_SIZE)) {
     if (batch.length) {
-      const inserted = await InAppNotification.insertMany(batch, { ordered: false });
-      insertedCount += inserted.length;
+      await InAppNotification.bulkWrite(batch.map((doc) => ({
+        updateOne: {
+          filter: {
+            adminNotificationId: notification._id,
+            recipientRole: doc.recipientRole,
+            ...(doc.userId ? { userId: doc.userId } : { partnerId: doc.partnerId })
+          },
+          update: { $setOnInsert: doc },
+          upsert: true
+        }
+      })), { ordered: false });
+      insertedCount += batch.length;
     }
   }
   return insertedCount;
@@ -184,6 +194,11 @@ async function sendFcm(notification, recipients, targetApp) {
           sound: "default",
           ...(imageUrl ? { imageUrl } : {})
         }
+      },
+      apns: {
+        headers: { "apns-priority": "10" },
+        payload: { aps: { sound: "default", ...(imageUrl ? { "mutable-content": 1 } : {}) } },
+        ...(imageUrl ? { fcmOptions: { imageUrl } } : {})
       }
     });
     successCount += Number(response.successCount || 0);
@@ -226,8 +241,8 @@ async function deliverAdminNotification(notificationOrId) {
   const delivery = await sendFcm(notification, recipients, targetApp);
 
   notification.recipientCount = recipients.length;
-  notification.successCount = inAppCount;
-  notification.failureCount = Math.max(recipients.length - inAppCount, 0);
+  notification.successCount = delivery.successCount;
+  notification.failureCount = Math.max(recipients.length - delivery.successCount, delivery.failureCount);
   notification.invalidTokenCount = delivery.invalidTokens.length;
   notification.errorMessages = delivery.errors;
   notification.metadata = {
@@ -237,13 +252,11 @@ async function deliverAdminNotification(notificationOrId) {
     pushFailureCount: delivery.failureCount
   };
   notification.sentAt = new Date();
-  notification.status = recipients.length < 1
+  notification.status = recipients.length < 1 || delivery.successCount < 1
     ? "failed"
-    : inAppCount > 0 && inAppCount < recipients.length
+    : delivery.failureCount > 0 || delivery.successCount < recipients.length
       ? "partially_sent"
-      : inAppCount > 0
-        ? "sent"
-        : "failed";
+      : "sent";
   await notification.save();
 
   emitAdminEvent("notification:sent", {
