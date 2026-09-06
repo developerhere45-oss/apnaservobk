@@ -26,6 +26,7 @@ const {
 } = require("../utils/bookingLifecycle");
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { reliableNotify } = require("../utils/reliableNotify");
+const { bestDiscountForBooking } = require("../utils/bookingDiscount");
 const { activeDeviceTokens } = require("../utils/notificationTokens");
 const { validateServiceArea } = require("../utils/serviceArea");
 const { getPublishedConfig, isScheduleActive, bookingAvailability } = require("../utils/appControl");
@@ -1702,7 +1703,7 @@ async function updateStatus(req, res, next) {
 
     if (decision.idempotent) {
       if (nextStatus === "amount_pending") {
-        const currentAmount = Number(currentBooking.finalAmount || currentBooking.quoteAmount || 0);
+        const currentAmount = Number(currentBooking.grossAmount || currentBooking.finalAmount || currentBooking.quoteAmount || 0);
         if (Math.round(finalAmount) !== Math.round(currentAmount)) {
           return res.status(409).json({ message: "A quote is already pending customer approval" });
         }
@@ -1764,7 +1765,11 @@ async function updateStatus(req, res, next) {
     };
     if (nextStatus === "amount_pending") {
       const quoteExpiresAt = quoteExpiresAtFrom(now);
-      const roundedFinalAmount = Math.round(finalAmount);
+      const grossAmount = Math.round(finalAmount);
+      const applied = await bestDiscountForBooking(currentBooking, grossAmount, now);
+      const roundedFinalAmount = grossAmount - applied.amount;
+      update.$set.grossAmount = grossAmount;
+      update.$set.discount = { ruleId: applied.rule?._id || null, name: applied.rule?.name || "", type: applied.rule?.discountType || "", value: applied.rule?.value || 0, amount: applied.amount, appliedAt: now };
       update.$set.finalAmount = roundedFinalAmount;
       update.$set.quoteAmount = roundedFinalAmount;
       update.$set.quoteStatus = "pending";
@@ -1868,9 +1873,9 @@ async function updateStatus(req, res, next) {
             bookingId: booking._id,
             userId: booking.userId,
             partnerId: booking.partnerId,
-            serviceAmount: paidAmount,
+            serviceAmount: paidAmount + Number(booking.discount?.amount || 0),
             additionalCharges: 0,
-            discount: 0,
+            discount: Number(booking.discount?.amount || 0),
             tax: 0,
             amount: paidAmount,
             currency: "INR",

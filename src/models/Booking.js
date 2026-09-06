@@ -129,6 +129,15 @@ const bookingSchema = new mongoose.Schema(
     },
     price: { type: Number, default: 0 },
     finalAmount: { type: Number, default: 0 },
+    grossAmount: { type: Number, default: 0 },
+    discount: {
+      ruleId: { type: mongoose.Schema.Types.ObjectId, ref: "DiscountRule", default: null },
+      name: { type: String, default: "" },
+      type: { type: String, default: "" },
+      value: { type: Number, default: 0 },
+      amount: { type: Number, default: 0 },
+      appliedAt: { type: Date, default: null }
+    },
     workCompletion: {
       completedTasks: [{ type: String, trim: true, maxlength: 160 }],
       additionalWork: { type: String, trim: true, maxlength: 1000, default: "" },
