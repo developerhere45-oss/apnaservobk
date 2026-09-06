@@ -6,14 +6,19 @@ const { emitBookingStatusUpdate, emitAdminEvent, serializeBooking } = require(".
 const id = value => value ? String(value) : "";
 const money = value => Number(value || 0);
 const iso = value => value ? new Date(value).toISOString() : "";
-function serializeDiscountRule(rule) {
+function serializeDiscountRule(rule, usage = {}) {
   return {
     id: id(rule._id), name: rule.name, serviceCategory: rule.serviceCategory,
     targetUserId: id(rule.targetUserId),
     audience: rule.audience, discountType: rule.discountType, value: money(rule.value),
     maxDiscount: money(rule.maxDiscount), minimumAmount: money(rule.minimumAmount),
     active: rule.active !== false, startsAt: iso(rule.startsAt), endsAt: iso(rule.endsAt),
-    createdAt: iso(rule.createdAt), updatedAt: iso(rule.updatedAt)
+    createdAt: iso(rule.createdAt), updatedAt: iso(rule.updatedAt),
+    usage: {
+      users: Number(usage.users || 0),
+      bookings: Number(usage.bookings || 0),
+      totalDiscount: money(usage.totalDiscount)
+    }
   };
 }
 
@@ -46,7 +51,23 @@ async function discountRuleInput(body) {
 }
 
 async function listDiscountRules(req, res, next) {
-  try { const rules = await DiscountRule.find().sort({ createdAt: -1 }); return res.json({ rules: rules.map(serializeDiscountRule) }); } catch (error) { return next(error); }
+  try {
+    const [rules, usageRows] = await Promise.all([
+      DiscountRule.find().sort({ createdAt: -1 }),
+      Booking.aggregate([
+        { $match: { "discount.ruleId": { $ne: null }, "discount.amount": { $gt: 0 } } },
+        { $group: {
+          _id: "$discount.ruleId",
+          userIds: { $addToSet: "$userId" },
+          bookings: { $sum: 1 },
+          totalDiscount: { $sum: "$discount.amount" }
+        } },
+        { $project: { users: { $size: "$userIds" }, bookings: 1, totalDiscount: 1 } }
+      ])
+    ]);
+    const usageByRule = new Map(usageRows.map(row => [id(row._id), row]));
+    return res.json({ rules: rules.map(rule => serializeDiscountRule(rule, usageByRule.get(id(rule._id)))) });
+  } catch (error) { return next(error); }
 }
 
 async function createDiscountRule(req, res, next) {
