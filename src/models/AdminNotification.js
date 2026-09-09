@@ -22,6 +22,12 @@ const adminNotificationSchema = new mongoose.Schema(
     },
     targetUserIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "User", index: true }],
     targetPartnerIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Partner", index: true }],
+    deliveryPlatform: {
+      type: String,
+      enum: ["both", "android", "ios"],
+      default: "both",
+      index: true
+    },
     actionType: {
       type: String,
       enum: ["NONE", "OPEN_HOME", "OPEN_NOTIFICATIONS", "OPEN_SERVICE", "OPEN_BOOKING", "OPEN_OFFERS", "OPEN_PARTNER_HOME", "OPEN_PARTNER_BOOKING"],

@@ -35,6 +35,18 @@ function targetAppFor(notification) {
   return notification.targetType === "ALL_PARTNERS" || notification.targetType === "SPECIFIC_PARTNER" ? "PARTNER" : "USER";
 }
 
+function deliveryPlatformFor(notification) {
+  const platform = String(notification.deliveryPlatform || "both").toLowerCase();
+  return platform === "android" || platform === "ios" ? platform : "both";
+}
+
+function tokensForPlatform(owner, role, platform) {
+  const tokens = activeDeviceTokens(owner, role);
+  return platform === "both"
+    ? tokens
+    : tokens.filter((device) => String(device.platform || "android").toLowerCase() === platform);
+}
+
 function dataPayload(notification, targetApp) {
   return cleanData({
     type: "ADMIN_NOTIFICATION",
@@ -59,6 +71,10 @@ function pushImageUrl(value) {
 }
 
 async function resolveRecipients(notification) {
+  const platform = deliveryPlatformFor(notification);
+  const withMatchingDevice = (records, role) => records
+    .filter((owner) => tokensForPlatform(owner, role, platform).length > 0)
+    .map((owner) => ({ role, owner }));
   if (notification.targetType === "LAUNCH_SUBSCRIBERS") {
     const users = await User.find({
       accountStatus: { $nin: ["blocked", "deleted"] },
@@ -67,33 +83,33 @@ async function resolveRecipients(notification) {
     })
       .select("_id firebaseUid name phone email fcmToken deviceTokens accountStatus")
       .sort({ createdAt: -1 });
-    return users.map((user) => ({ role: "user", owner: user }));
+    return withMatchingDevice(users, "user");
   }
   if (notification.targetType === "ALL_USERS") {
     const users = await User.find({ accountStatus: { $nin: ["blocked", "deleted"] } })
       .select("_id firebaseUid name phone email fcmToken deviceTokens accountStatus")
       .sort({ createdAt: -1 });
-    return users.map((user) => ({ role: "user", owner: user }));
+    return withMatchingDevice(users, "user");
   }
   if (notification.targetType === "ALL_PARTNERS") {
     const partners = await Partner.find({ accountStatus: { $nin: ["deleted"] }, trustStatus: { $ne: "suspended" } })
       .select("_id firebaseUid name phone email fcmToken deviceTokens accountStatus trustStatus")
       .sort({ createdAt: -1 });
-    return partners.map((partner) => ({ role: "partner", owner: partner }));
+    return withMatchingDevice(partners, "partner");
   }
   if (notification.targetType === "SPECIFIC_USER") {
     const ids = (notification.targetUserIds || []).map(objectId).filter(Boolean);
     const users = ids.length
       ? await User.find({ _id: { $in: ids } }).select("_id firebaseUid name phone email fcmToken deviceTokens accountStatus")
       : [];
-    return users.map((user) => ({ role: "user", owner: user }));
+    return withMatchingDevice(users, "user");
   }
   if (notification.targetType === "SPECIFIC_PARTNER") {
     const ids = (notification.targetPartnerIds || []).map(objectId).filter(Boolean);
     const partners = ids.length
       ? await Partner.find({ _id: { $in: ids } }).select("_id firebaseUid name phone email fcmToken deviceTokens accountStatus trustStatus")
       : [];
-    return partners.map((partner) => ({ role: "partner", owner: partner }));
+    return withMatchingDevice(partners, "partner");
   }
   return [];
 }
@@ -160,8 +176,9 @@ async function deactivateInvalidTokens(invalidTokens) {
 async function sendFcm(notification, recipients, targetApp) {
   const tokenEntries = [];
   const seen = new Set();
+  const deliveryPlatform = deliveryPlatformFor(notification);
   for (const recipient of recipients) {
-    for (const device of activeDeviceTokens(recipient.owner, recipient.role)) {
+    for (const device of tokensForPlatform(recipient.owner, recipient.role, deliveryPlatform)) {
       if (!device.token || seen.has(device.token)) continue;
       seen.add(device.token);
       tokenEntries.push(device);
@@ -263,6 +280,7 @@ async function deliverAdminNotification(notificationOrId) {
     notificationId: String(notification._id),
     title: notification.title,
     targetType: notification.targetType,
+    deliveryPlatform: deliveryPlatformFor(notification),
     status: notification.status,
     recipientCount: notification.recipientCount,
     successCount: notification.successCount,
@@ -276,5 +294,6 @@ async function deliverAdminNotification(notificationOrId) {
 module.exports = {
   deliverAdminNotification,
   resolveRecipients,
-  targetAppFor
+  targetAppFor,
+  deliveryPlatformFor
 };

@@ -18,6 +18,7 @@ const notificationPayloadSchema = z.object({
   message: z.string().trim().min(1).max(500),
   imageUrl: z.string().trim().max(2500).optional().or(z.literal("")),
   targetType: z.enum(targetTypes),
+  deliveryPlatform: z.enum(["both", "android", "ios"]).default("both"),
   targetUserIds: z.array(z.string().trim().min(1)).max(50).optional(),
   targetPartnerIds: z.array(z.string().trim().min(1)).max(50).optional(),
   recipientId: z.string().trim().max(80).optional(),
@@ -35,6 +36,7 @@ function serialize(notification) {
     message: notification.message,
     imageUrl: notification.imageUrl || "",
     targetType: notification.targetType,
+    deliveryPlatform: notification.deliveryPlatform || "both",
     targetUserIds: (notification.targetUserIds || []).map(String),
     targetPartnerIds: (notification.targetPartnerIds || []).map(String),
     actionType: notification.actionType,
@@ -207,6 +209,7 @@ async function createNotification(body, req, status) {
       message: body.message,
       imageUrl,
       targetType: body.targetType,
+      deliveryPlatform: body.deliveryPlatform || "both",
       targetUserIds: ids.targetUserIds,
       targetPartnerIds: ids.targetPartnerIds,
       actionType: body.actionType || "NONE",
@@ -343,6 +346,7 @@ async function resend(req, res, next) {
       message: source.message,
       imageUrl: source.imageUrl,
       targetType: source.targetType,
+      deliveryPlatform: source.deliveryPlatform || "both",
       targetUserIds: source.targetUserIds,
       targetPartnerIds: source.targetPartnerIds,
       actionType: source.actionType,
@@ -366,7 +370,10 @@ async function searchRecipients(req, res, next) {
     const limit = Math.min(Number(req.query.limit || 12), 30);
 
     if (countOnly && ["ALL_USERS", "ALL_PARTNERS"].includes(targetType)) {
-      const fake = new AdminNotification({ targetType, title: "count", message: "count" });
+      const deliveryPlatform = ["android", "ios"].includes(String(req.query.deliveryPlatform || "").toLowerCase())
+        ? String(req.query.deliveryPlatform).toLowerCase()
+        : "both";
+      const fake = new AdminNotification({ targetType, deliveryPlatform, title: "count", message: "count" });
       const recipients = await resolveRecipients(fake);
       return res.json({ count: recipients.length, results: [] });
     }
