@@ -97,7 +97,7 @@ const bookingSchema = new mongoose.Schema(
       landmark: { type: String, trim: true, default: "" }
     },
     city: { type: String, default: "Guwahati", index: true },
-    location: { type: pointSchema, default: () => ({ type: "Point", coordinates: [91.7362, 26.1445] }) },
+    location: { type: pointSchema, default: () => ({ type: "Point", coordinates: [0, 0] }) },
     locationVersion: { type: Number, default: 1, min: 1 },
     locationUpdatedAt: { type: Date, default: Date.now },
     locationUpdatedBy: { type: String, enum: ["user", "admin", "system"], default: "user" },

@@ -113,11 +113,19 @@ function normalizeAccountStatus(value) {
   return status.replace(/_/g, " ");
 }
 
+const LEGACY_PLACEHOLDER_LAT = 26.1445;
+const LEGACY_PLACEHOLDER_LNG = 91.7362;
+
 function coordinates(location) {
   const list = location?.coordinates || [];
+  const lng = Number(list[0] || 0);
+  const lat = Number(list[1] || 0);
+  const isLegacyPlaceholder = Math.abs(lat - LEGACY_PLACEHOLDER_LAT) <= 0.0002
+    && Math.abs(lng - LEGACY_PLACEHOLDER_LNG) <= 0.0002;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || isLegacyPlaceholder) return { lng: 0, lat: 0 };
   return {
-    lng: Number(list[0] || 0),
-    lat: Number(list[1] || 0)
+    lng,
+    lat
   };
 }
 
@@ -911,11 +919,7 @@ async function activeJobCountByPartner(partnerIds) {
 }
 
 function bookingCoordinates(booking) {
-  const coordinatesList = booking.location?.coordinates || [];
-  return {
-    lng: Number(coordinatesList[0] || 91.7362),
-    lat: Number(coordinatesList[1] || 26.1445)
-  };
+  return coordinates(booking.location);
 }
 
 async function availablePartnersForBooking(booking, { partnerIds = [], onlineOnly = false, limit = 30 } = {}) {

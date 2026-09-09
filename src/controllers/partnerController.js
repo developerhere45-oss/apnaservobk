@@ -799,7 +799,9 @@ async function upsertProfile(req, res, next) {
       update.faceLivenessStatus = "failed";
     }
     if (body.selfieVerified === false) update.selfieVerified = false;
-    if (Number.isFinite(body.lat) && Number.isFinite(body.lng)) {
+    const hasUsableLocation = findNearbyPartners.validCoordinates(body.lat, body.lng)
+      && !(Math.abs(body.lat - 26.1445) <= 0.0002 && Math.abs(body.lng - 91.7362) <= 0.0002);
+    if (hasUsableLocation) {
       update.location = { type: "Point", coordinates: [body.lng, body.lat] };
     }
     if (emailPartner && existingPartner && String(emailPartner._id) !== String(existingPartner._id)) {

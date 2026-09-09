@@ -932,10 +932,7 @@ async function getOrCreateUser(req, body) {
       address: body.address || "",
       bookingRiskStatus: verified ? "trusted" : "otp_required",
       lastLoginAt: now,
-      location: {
-        type: "Point",
-        coordinates: [Number(body.lng || 91.7362), Number(body.lat || 26.1445)]
-      }
+      location: { type: "Point", coordinates: [Number(body.lng), Number(body.lat)] }
     },
     $setOnInsert: {
       registrationHistory: [{
@@ -1090,8 +1087,8 @@ async function createBooking(req, res, next) {
       return res.status(403).json({ message: "Phone OTP verification required before booking" });
     }
     const hasCustomerLocation = findNearbyPartners.validCoordinates(body.lat, body.lng);
-    const lat = hasCustomerLocation ? Number(body.lat) : 26.1445;
-    const lng = hasCustomerLocation ? Number(body.lng) : 91.7362;
+    const lat = hasCustomerLocation ? Number(body.lat) : 0;
+    const lng = hasCustomerLocation ? Number(body.lng) : 0;
     const dispatchLat = hasCustomerLocation ? lat : null;
     const dispatchLng = hasCustomerLocation ? lng : null;
     const requestedBookingId = String(body.bookingId || "").trim().toUpperCase();

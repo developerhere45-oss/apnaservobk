@@ -153,7 +153,10 @@ async function upsertProfile(req, res, next) {
       update.phoneVerified = false;
       update.phoneVerifiedAt = null;
     }
-    if (Number.isFinite(body.lat) && Number.isFinite(body.lng)) {
+    const hasUsableLocation = Number.isFinite(body.lat) && Number.isFinite(body.lng)
+      && !(body.lat === 0 && body.lng === 0)
+      && !(Math.abs(body.lat - 26.1445) <= 0.0002 && Math.abs(body.lng - 91.7362) <= 0.0002);
+    if (hasUsableLocation) {
       update.location = { type: "Point", coordinates: [body.lng, body.lat] };
     }
     if (body.savedAddresses) {
