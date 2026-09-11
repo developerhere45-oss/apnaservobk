@@ -132,7 +132,12 @@ async function upsertProfile(req, res, next) {
       lastLoginAt: now
     };
 
-    if (!existing?.name && (body.name || req.auth.name)) update.name = body.name || req.auth.name;
+    const existingName = String(existing?.name || "").trim();
+    const requestedName = String(body.name || req.auth.name || "").trim();
+    const hasPlaceholderName = !existingName || /^(apnaservo\s+)?customer$/i.test(existingName);
+    if (hasPlaceholderName && requestedName && !/^(apnaservo\s+)?customer$/i.test(requestedName)) {
+      update.name = requestedName;
+    }
     if (!existing?.phone && phone) {
       update.phone = phone;
       if (normalizedPhone.length === 10) update.phoneHash = identityHash(normalizedPhone);
