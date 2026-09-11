@@ -19,6 +19,7 @@
     "audit:booking-launch": "node scripts/booking-launch-audit.js",
     "audit:laundry-workflow": "node scripts/laundry-workflow-audit.js",
     "audit:cleaning-routing": "node scripts/cleaning-booking-routing-audit.js",
+    "audit:cleaning-company": "node scripts/cleaning-company-workflow-audit.js",
     "audit:service-mapping": "node scripts/all-service-booking-mapping-audit.js",
     "audit:partner-version-compatibility": "node scripts/partner-version-compatibility-audit.js",
     "audit:firebase-token-compatibility": "node scripts/firebase-expired-token-compatibility-audit.js",

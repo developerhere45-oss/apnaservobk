@@ -35,7 +35,9 @@ const profileSchema = z.object({
   serviceArea: z.string().trim().max(200).optional(),
   workingAreas: z.union([z.string().trim().max(500), z.array(z.string().trim().max(120)).max(30)]).optional(),
   languagesKnown: z.union([z.string().trim().max(300), z.array(z.string().trim().max(60)).max(20)]).optional(),
-  businessType: z.enum(["laundry"]).optional(),
+  // `cleaning` is accepted from newer clients. It is persisted in the legacy
+  // company container as `laundry` until all released Partner builds migrate.
+  businessType: z.enum(["laundry", "cleaning"]).optional(),
   laundryBusiness: z.object({
     shopName: z.string().trim().max(120).optional().or(z.literal("")),
     shopLicenseNumber: z.string().trim().max(100).optional().or(z.literal("")),
@@ -657,7 +659,8 @@ async function upsertProfile(req, res, next) {
     if (categories.length !== 1) {
       return res.status(400).json({ message: "Choose exactly one service category for this profile" });
     }
-    const isLaundryRegistration = body.businessType === "laundry";
+    const isCleaningRegistration = body.businessType === "cleaning" || categories[0] === "cleaning";
+    const isLaundryRegistration = body.businessType === "laundry" || isCleaningRegistration;
     if (isLaundryRegistration && !body.laundryBusiness) {
       return res.status(400).json({ message: "Complete company and staff details are required" });
     }
@@ -751,7 +754,7 @@ async function upsertProfile(req, res, next) {
           version: body.termsVersion || "2026-07-25",
           acceptedAt: targetPartner?.termsConsent?.acceptedAt || new Date(),
           clientAcceptedAt: body.termsAcceptedAt ? new Date(body.termsAcceptedAt) : new Date(),
-          registrationFlow: body.termsRegistrationFlow || (isLaundryRegistration ? "laundry_owner_registration" : "partner_registration"),
+          registrationFlow: body.termsRegistrationFlow || (isCleaningRegistration ? "cleaning_owner_registration" : (isLaundryRegistration ? "laundry_owner_registration" : "partner_registration")),
           serviceCategory: normalizeServiceCategory(body.termsServiceCategory || categories[0]),
           documentKey: body.termsDocumentKey || "partner_terms",
           sourceApp: body.termsSourceApp || "partner_ios",
@@ -1632,6 +1635,97 @@ async function assignLaundryStaff(req, res, next) {
   }
 }
 
+async function assignCleaningTeam(req, res, next) {
+  try {
+    let owner = await Partner.findOne({ firebaseUid: req.auth.uid });
+    if (!owner || owner.businessType !== "laundry" || owner.businessVerificationStatus !== "approved") {
+      return res.status(403).json({ message: "Approved cleaning company owner access required" });
+    }
+    owner = await enforceCompanyServiceIsolation(owner);
+    if (!partnerDispatchCategories(owner).includes("cleaning")) {
+      return res.status(403).json({ message: "Cleaning company access required" });
+    }
+
+    const sequences = [...new Set((Array.isArray(req.body?.staffSequences) ? req.body.staffSequences : [])
+      .map(Number).filter((value) => Number.isInteger(value) && value > 0))].slice(0, 20);
+    if (!sequences.length) return res.status(400).json({ message: "Select at least one cleaning staff member" });
+    const members = owner.laundryBusiness?.staffMembers || [];
+    const team = sequences.map((sequence) => members.find((member) => Number(member.sequence) === sequence));
+    if (team.some((staff) => !staff || staff.verificationStatus !== "verified")) {
+      return res.status(404).json({ message: "Every selected cleaning staff member must be verified" });
+    }
+
+    const booking = await Booking.findOne(bookingIdentityFilter(req.params.bookingId));
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    if (normalizeServiceCategory(booking.serviceCategory) !== "cleaning") {
+      return res.status(403).json({ message: "This is not a cleaning booking" });
+    }
+    const ownerId = String(owner._id);
+    const currentPartnerId = String(booking.partnerId || "");
+    const wasSentToOwner = (booking.requestedPartners || []).some((partnerId) => String(partnerId) === ownerId);
+    if (currentPartnerId && currentPartnerId !== ownerId) {
+      return res.status(403).json({ message: "This booking belongs to another company" });
+    }
+    if (!currentPartnerId && !wasSentToOwner) {
+      return res.status(403).json({ message: "This booking was not sent to your cleaning company" });
+    }
+    if (["completed", "cancelled", "canceled"].includes(booking.status)) {
+      return res.status(409).json({ message: "Completed or cancelled bookings cannot be assigned" });
+    }
+
+    const now = new Date();
+    const acceptedDuringAssignment = !currentPartnerId;
+    if (acceptedDuringAssignment) {
+      booking.partnerId = owner._id;
+      booking.status = "accepted";
+      booking.acceptedAt = now;
+      booking.statusTimeline.push({ status: "accepted", at: now, by: "cleaning_owner", note: "Cleaning company accepted booking while assigning team" });
+    }
+    booking.cleaningTeam = team.map((staff) => ({
+      staffSequence: Number(staff.sequence),
+      staffName: staff.name || "Cleaning Staff",
+      staffPhone: normalizePhone(staff.phone),
+      staffPhoneHash: staff.phoneHash || identityHash(normalizePhone(staff.phone)),
+      staffEmailHash: staff.emailHash || identityHash(normalizeEmail(staff.email)),
+      staffFirebaseUid: staff.firebaseUid || "",
+      assignedAt: now
+    }));
+    booking.statusTimeline.push({
+      status: booking.status,
+      at: now,
+      by: "cleaning_owner",
+      note: `Cleaning team assigned: ${booking.cleaningTeam.map((staff) => staff.staffName).join(", ")}`
+    });
+    await booking.save();
+    if (acceptedDuringAssignment) emitBookingAccepted(booking, owner);
+    emitAdminEvent("booking:cleaning_team_assigned", {
+      bookingId: String(booking._id), bookingCode: booking.bookingCode,
+      partnerId: ownerId, partnerName: owner.name, serviceCategory: "cleaning",
+      staffCount: booking.cleaningTeam.length,
+      staffNames: booking.cleaningTeam.map((staff) => staff.staffName), status: booking.status
+    });
+
+    const recipients = team.filter((staff) => staff.fcmToken).map((staff) => ({
+      role: "partner", partnerId: owner._id, firebaseUid: staff.firebaseUid || "", token: staff.fcmToken, phone: staff.phone
+    }));
+    if (recipients.length) {
+      await reliableNotify({
+        recipients, title: "Cleaning Job Assigned",
+        body: `${owner.laundryBusiness?.shopName || owner.name} assigned booking ${booking.bookingCode} to your team.`,
+        category: "cleaning_team_assignment", priority: "high",
+        data: { type: "cleaning:team_assignment", targetApp: "partner", actionType: "OPEN_BOOKING", bookingId: String(booking._id), bookingCode: booking.bookingCode }
+      });
+    }
+    return res.json({
+      ok: true,
+      booking: serializeBooking(booking),
+      team: team.map((staff) => staffPublicProfile(owner, staff))
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function updateStaffBookingStatus(req, res, next) {
   try {
     const { partner, staff, contextChanged } = await findStaffContext(req);
@@ -1933,6 +2027,7 @@ module.exports = {
   uploadLaundryStaffPhoto,
   uploadLaundryStaffIdentity,
   assignLaundryStaff,
+  assignCleaningTeam,
   updateStaffBookingStatus,
   updateLocation,
   statement

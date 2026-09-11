@@ -308,6 +308,12 @@ function serializeBooking(booking) {
     partnerRating: Number(doc.partnerSnapshot?.rating || 0),
     partnerRatingCount: Number(doc.partnerSnapshot?.ratingCount || 0),
     laundryAssignment: doc.laundryAssignment || {},
+    cleaningTeam: Array.isArray(doc.cleaningTeam) ? doc.cleaningTeam.map((staff) => ({
+      staffSequence: Number(staff.staffSequence || 0),
+      staffName: staff.staffName || "",
+      assignedAt: staff.assignedAt || null,
+      assignedAtMillis: millis(staff.assignedAt)
+    })) : [],
     serviceContactName: hasAssignedLaundryStaff ? assignedStaffName : (doc.partnerSnapshot?.name || ""),
     serviceContactPhone: hasAssignedLaundryStaff ? assignedStaffPhone : (doc.partnerSnapshot?.phone || ""),
     serviceContactRole: hasAssignedLaundryStaff ? "laundry_staff" : "partner_owner",
@@ -790,6 +796,7 @@ function eventTitle(eventName, payload) {
     "user:service_clicked": "Customer opened a service",
     "user:screen_view": "Customer app activity",
     "booking:new_request": "New booking created",
+    "booking:cleaning_team_assigned": "Cleaning team assigned",
     "booking:accepted": "Partner assigned",
     "booking:rejected": "Partner rejected booking",
     "booking:quote_sent": "Partner sent final amount",

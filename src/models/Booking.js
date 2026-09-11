@@ -258,6 +258,15 @@ const bookingSchema = new mongoose.Schema(
       startedAt: { type: Date, default: null },
       completedAt: { type: Date, default: null }
     },
+    cleaningTeam: [{
+      staffSequence: { type: Number, required: true, min: 1 },
+      staffName: { type: String, trim: true, default: "" },
+      staffPhone: { type: String, trim: true, default: "" },
+      staffPhoneHash: { type: String, trim: true, default: "" },
+      staffEmailHash: { type: String, trim: true, default: "" },
+      staffFirebaseUid: { type: String, trim: true, default: "" },
+      assignedAt: { type: Date, default: Date.now }
+    }],
     pickupAssignment: {
       ownerPartnerId: { type: mongoose.Schema.Types.ObjectId, ref: "Partner", default: null },
       staffSequence: { type: Number, default: 0 },
@@ -371,7 +380,9 @@ bookingSchema.plugin(encryptedFieldsPlugin, {
     "partnerRequests.partnerSnapshot.phone",
     "partnerRequests.rejectionReason",
     "partnerRequests.failureTechnicalDetails",
-    "laundryAssignment.staffName"
+    "laundryAssignment.staffName",
+    "cleaningTeam.staffName",
+    "cleaningTeam.staffPhone"
   ]
 });
 

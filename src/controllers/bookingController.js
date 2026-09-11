@@ -1653,7 +1653,7 @@ async function updateStatus(req, res, next) {
       return res.status(404).json({ message: "Booking not found" });
     }
 
-    if (partner?.businessType === "laundry") {
+    if (partner?.businessType === "laundry" && partnerDispatchCategories(partner).includes("laundry")) {
       return res.status(403).json({ message: "Laundry owners can accept and assign orders only. The assigned staff member updates live status." });
     }
     if (staffActor) {
