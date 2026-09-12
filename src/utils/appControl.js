@@ -227,14 +227,16 @@ async function getPublicAppControlConfig(audience = "users", app = "customer", p
   if (target === "customer") {
     activeAnnouncements.unshift({
       id: "system-inspection-pricing",
-      title: "Pricing will be displayed after inspection",
-      message: "Final cost depends on the issue and materials required. Transparent pricing with no hidden charges.",
+      title: "Price after inspection",
+      message: "Final price depends on the issue and materials. No hidden charges.",
       imageUrl: "",
       ctaText: "Transparent Pricing",
       ctaAction: "No hidden charges",
       serviceCategory: "",
       placement: "home_top",
       priority: 1,
+      dismissible: false,
+      compact: true,
       bannerStyle: {},
     });
   }
