@@ -226,7 +226,9 @@ async function getPublicAppControlConfig(audience = "users", app = "customer", p
   const activeAnnouncements = active(announcements);
   if (target === "customer") {
     activeAnnouncements.unshift({
-      id: "system-inspection-pricing",
+      // Version the identifier so clients that locally dismissed the earlier
+      // announcement receive this permanent compact revision again.
+      id: "system-inspection-pricing-v2",
       title: "Price after inspection",
       message: "Final price depends on the issue and materials. No hidden charges.",
       imageUrl: "",
