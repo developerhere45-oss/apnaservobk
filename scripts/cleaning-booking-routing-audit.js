@@ -24,14 +24,14 @@ async function run() {
     });
 
     assert.equal(result.partners.length, 1, "cleaning company must receive a nearby cleaning booking");
-    assert.ok(Array.isArray(capturedFilter.$or), "routing must distinguish mobile heartbeat from fixed companies");
-    assert.ok(
-      capturedFilter.$or.some((entry) => entry.businessType === "laundry"),
-      "verified fixed-location company must not require a five-minute mobile heartbeat"
-    );
+    assert.equal(capturedFilter.isOnline, true, "only explicitly online partners may receive a booking");
+    assert.equal(capturedFilter.accountStatus, "active", "inactive partner accounts must be excluded");
+    assert.equal(capturedFilter.isVerified, true, "unverified partners must be excluded");
+    assert.equal(capturedFilter.kycStatus, "verified", "KYC must be verified before dispatch");
+    assert.equal(capturedFilter.trustStatus, "trusted", "untrusted partners must be excluded");
     assert.deepEqual(
       capturedFilter.serviceCategory.$in.sort(),
-      ["cleaning", "cleaning_services"].sort(),
+      ["cleaning", "cleaning_services", "home_cleaning"].sort(),
       "cleaning routing must remain isolated from laundry and other services"
     );
     console.log("Cleaning booking routing audit passed");
