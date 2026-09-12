@@ -224,6 +224,20 @@ async function getPublicAppControlConfig(audience = "users", app = "customer", p
   const banners = target === "partner" ? [] : await AppControlItem.find({ ...appFilter, kind: "banner", status: "published", audience: { $in: ["all", audience] } }).sort({ priority: 1, createdAt: -1 }).limit(50).lean();
   const active = (items) => items.filter((item) => isScheduleActive(item, now)).map((item) => ({ id: String(item._id), title: item.title, message: item.message, imageUrl: item.imageUrl, ctaText: item.ctaText, ctaAction: item.ctaAction, serviceCategory: item.serviceCategory, placement: item.placement, priority: item.priority, bannerStyle: item.bannerStyle || {} }));
   const activeAnnouncements = active(announcements);
+  if (target === "customer") {
+    activeAnnouncements.unshift({
+      id: "system-inspection-pricing",
+      title: "Pricing will be displayed after inspection",
+      message: "Final cost depends on the issue and materials required. Transparent pricing with no hidden charges.",
+      imageUrl: "",
+      ctaText: "",
+      ctaAction: "",
+      serviceCategory: "",
+      placement: "home_top",
+      priority: 1,
+      bannerStyle: {},
+    });
+  }
   const hoursAvailability = target === "customer" ? bookingAvailability(state.config, null, new Date(now)) : { allowed: true };
   if (hoursAvailability.code === "OUTSIDE_BOOKING_HOURS") {
     activeAnnouncements.unshift({
