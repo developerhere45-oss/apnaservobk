@@ -18,7 +18,7 @@ const DEFAULT_CONFIG = Object.freeze({
   },
   home: { sections: [] },
   forms: {},
-  booking: { enabled: true, maxActiveBookings: 10, minimumNoticeMinutes: 0, cancellationEnabled: true },
+  booking: { enabled: true, maxActiveBookings: 10, minimumNoticeMinutes: 0, cancellationEnabled: true, operatingHours: { enabled: true, timezone: "Asia/Kolkata", opensAtHour: 7, closesAtHour: 20, closedMessage: "We are available from 7:00 AM to 8:00 PM." } },
   support: { enabled: true, welcomeMessage: "Namaste! How can I help you today?", fallbackReply: "Thank you for explaining the issue. I’ve created a support ticket and shared your message with our team. Please send your booking ID and any relevant details so we can assist you faster.", typingDelayMs: 1400, intents: [] },
   partnerHome: { sections: [] },
   navigation: [],
@@ -97,7 +97,22 @@ function normalizeConfig(value) {
       validation: { minLength: boundedNumber(field?.validation?.minLength, 0, 0, 10000), maxLength: boundedNumber(field?.validation?.maxLength, 1000, 1, 10000), minValue: boundedNumber(field?.validation?.minValue, 0, -100000000, 100000000), maxValue: boundedNumber(field?.validation?.maxValue, 100000000, -100000000, 100000000), regex: cleanText(field?.validation?.regex, 300) }
     })).filter((field) => field.id && field.label && field.visible).sort((a, b) => a.order - b.order)
   }]));
-  output.booking = { enabled: source.booking?.enabled !== false, maxActiveBookings: boundedNumber(source.booking?.maxActiveBookings, 10, 1, 100), minimumNoticeMinutes: boundedNumber(source.booking?.minimumNoticeMinutes, 0, 0, 10080), cancellationEnabled: source.booking?.cancellationEnabled !== false };
+  const requestedHours = source.booking?.operatingHours || {};
+  const requestedOpen = Math.trunc(boundedNumber(requestedHours.opensAtHour, 7, 0, 23));
+  const requestedClose = Math.trunc(boundedNumber(requestedHours.closesAtHour, 20, 1, 24));
+  output.booking = {
+    enabled: source.booking?.enabled !== false,
+    maxActiveBookings: boundedNumber(source.booking?.maxActiveBookings, 10, 1, 100),
+    minimumNoticeMinutes: boundedNumber(source.booking?.minimumNoticeMinutes, 0, 0, 10080),
+    cancellationEnabled: source.booking?.cancellationEnabled !== false,
+    operatingHours: {
+      enabled: requestedHours.enabled !== false,
+      timezone: "Asia/Kolkata",
+      opensAtHour: requestedOpen < requestedClose ? requestedOpen : 7,
+      closesAtHour: requestedOpen < requestedClose ? requestedClose : 20,
+      closedMessage: cleanText(requestedHours.closedMessage, 200) || "We are available from 7:00 AM to 8:00 PM.",
+    },
+  };
   output.support = {
     enabled: source.support?.enabled !== false,
     welcomeMessage: cleanText(source.support?.welcomeMessage, 500) || DEFAULT_CONFIG.support.welcomeMessage,
@@ -166,7 +181,13 @@ async function getPublishedConfig({ force = false, app = "customer", platform = 
   return value;
 }
 
-function bookingAvailability(config) {
+function hourInTimezone(date, timezone) {
+  const hour = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", hourCycle: "h23", timeZone: timezone })
+    .formatToParts(date).find((part) => part.type === "hour")?.value;
+  return Number(hour);
+}
+
+function bookingAvailability(config, _body, now = new Date()) {
   if (config?.booking?.enabled === false) {
     return { allowed: false, httpStatus: 503, code: "NEW_BOOKINGS_DISABLED", message: "New bookings are temporarily paused. Existing bookings remain available." };
   }
@@ -176,6 +197,15 @@ function bookingAvailability(config) {
   }
   if (mode === "HIGH_DEMAND") {
     return { allowed: false, httpStatus: 503, code: "APP_HIGH_DEMAND", message: "We are currently receiving a high number of service requests. Please try again after some time." };
+  }
+  const hours = config?.booking?.operatingHours;
+  if (hours?.enabled !== false) {
+    const opensAtHour = Number(hours?.opensAtHour ?? 7);
+    const closesAtHour = Number(hours?.closesAtHour ?? 20);
+    const currentHour = hourInTimezone(now, hours?.timezone || "Asia/Kolkata");
+    if (!Number.isFinite(currentHour) || currentHour < opensAtHour || currentHour >= closesAtHour) {
+      return { allowed: false, httpStatus: 409, code: "OUTSIDE_BOOKING_HOURS", message: hours?.closedMessage || "We are available from 7:00 AM to 8:00 PM." };
+    }
   }
   return { allowed: true };
 }
