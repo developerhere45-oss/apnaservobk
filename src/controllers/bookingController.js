@@ -32,6 +32,7 @@ const { validateServiceArea } = require("../utils/serviceArea");
 const { getPublishedConfig, isScheduleActive, bookingAvailability } = require("../utils/appControl");
 const { getBookingLaunchConfig, ensureLaunchNotificationSchedule } = require("../utils/bookingLaunchConfig");
 const { getChecklist } = require("../utils/serviceChecklist");
+const { isPlaceholderCustomerName, firstRealCustomerName } = require("../utils/customerIdentity");
 const cache = require("../config/cache");
 const {
   addPartnerRequests,
@@ -60,6 +61,8 @@ const createBookingSchema = z.object({
   lng: z.coerce.number().min(-180).max(180).refine((value) => value !== 0, "Valid service longitude is required"),
   price: z.coerce.number().min(0).max(1000000).optional(),
   userName: z.string().trim().max(120).optional(),
+  name: z.string().trim().max(120).optional(),
+  fullName: z.string().trim().max(120).optional(),
   userPhone: z.string().trim().max(20).optional(),
   primaryPhone: z.string().trim().max(20).optional(),
   alternatePhone: z.string().trim().max(20).optional(),
@@ -913,7 +916,7 @@ async function recoverRecentUndispatchedBookings(partner, categories) {
 
 async function getOrCreateUser(req, body) {
   const existing = await User.findOne({ firebaseUid: req.auth.uid })
-    .select("_id phone phoneVerified phoneVerifiedAt")
+    .select("_id name phone phoneVerified phoneVerifiedAt")
     .lean();
   const phone = body.userPhone || req.auth.phone_number || existing?.phone || "";
   const normalizedPhone = normalizePhone(phone);
@@ -921,9 +924,9 @@ async function getOrCreateUser(req, body) {
   const verified = firebasePhoneVerified(req, phone)
     || Boolean(existing?.phoneVerified && normalizePhone(existing.phone) === normalizedPhone);
   const now = new Date();
+  const requestedName = firstRealCustomerName(body.userName, body.name, body.fullName, req.auth.name);
   const update = {
     $set: {
-      name: body.userName || req.auth.name || "ApnaServo Customer",
       phone,
       phoneHash: normalizedPhone.length === 10 ? identityHash(normalizedPhone) : "",
       email,
@@ -944,6 +947,12 @@ async function getOrCreateUser(req, body) {
       }]
     }
   };
+  if (requestedName && isPlaceholderCustomerName(existing?.name)) {
+    update.$set.name = requestedName;
+  }
+  if (!existing && !update.$set.name) {
+    update.$set.name = "ApnaServo Customer";
+  }
   if (verified) {
     update.$set.phoneVerified = true;
     update.$set.phoneVerifiedAt = new Date();
@@ -1169,7 +1178,7 @@ async function createBooking(req, res, next) {
         formSchemaVersion: Number(config.forms?.[category]?.version || 0),
         appConfigVersion: Number(publishedControl.version || 0),
         userSnapshot: {
-          name: body.userName || user.name,
+          name: firstRealCustomerName(body.userName, body.name, body.fullName, user.name) || user.name,
           phone: primaryPhone,
           email: user.email,
           fcmToken: user.fcmToken
@@ -2288,7 +2297,7 @@ async function requestLaunchNotification(req, res, next) {
           launchNotificationFor: new Date(launch.bookingLaunchAt)
         },
         $setOnInsert: {
-          name: req.auth.name || "ApnaServo Customer",
+          name: firstRealCustomerName(req.auth.name) || "ApnaServo Customer",
           email: req.auth.email || ""
         }
       },

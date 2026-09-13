@@ -9,9 +9,12 @@ const { sendWelcomeEmail } = require("../utils/welcomeEmail");
 const { admin, initFirebase } = require("../config/firebase");
 const { nextPublicId } = require("../utils/publicIds");
 const { supportBotReply } = require("../utils/supportBot");
+const { isPlaceholderCustomerName, firstRealCustomerName } = require("../utils/customerIdentity");
 
 const profileSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
+  fullName: z.string().trim().min(1).max(120).optional(),
+  displayName: z.string().trim().min(1).max(120).optional(),
   phone: z.string().trim().max(20).optional(),
   email: z.string().trim().email().max(180).optional().or(z.literal("")),
   profilePhotoUrl: z.string().trim().max(1200).optional(),
@@ -133,9 +136,8 @@ async function upsertProfile(req, res, next) {
     };
 
     const existingName = String(existing?.name || "").trim();
-    const requestedName = String(body.name || req.auth.name || "").trim();
-    const hasPlaceholderName = !existingName || /^(apnaservo\s+)?customer$/i.test(existingName);
-    if (hasPlaceholderName && requestedName && !/^(apnaservo\s+)?customer$/i.test(requestedName)) {
+    const requestedName = firstRealCustomerName(body.name, body.fullName, body.displayName, req.auth.name);
+    if (isPlaceholderCustomerName(existingName) && requestedName) {
       update.name = requestedName;
     }
     if (!existing?.phone && phone) {
@@ -270,7 +272,7 @@ async function saveFcmToken(req, res, next) {
       {
         $setOnInsert: {
           firebaseUid: req.auth.uid,
-          name: req.auth.name || "ApnaServo Customer",
+          name: firstRealCustomerName(req.body?.name, req.body?.fullName, req.body?.displayName, req.auth.name) || "ApnaServo Customer",
           phone: insertPhone,
           phoneHash: insertPhoneHash,
           email: insertEmail,
@@ -541,7 +543,7 @@ async function requestDeletion(req, res, next) {
          },
         $setOnInsert: {
           firebaseUid: req.auth.uid,
-          name: req.auth.name || "ApnaServo Customer",
+          name: firstRealCustomerName(req.auth.name) || "ApnaServo Customer",
           phone: req.auth.phone_number || "",
           email: req.auth.email || "",
           city: "Guwahati"
