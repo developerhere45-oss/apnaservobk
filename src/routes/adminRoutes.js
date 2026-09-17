@@ -85,6 +85,7 @@ router.get("/service-work/checklists", serviceChecklists.list);
 router.put("/service-work/checklists/:serviceCategory", serviceChecklists.save);
 router.get("/service-work/reports", serviceChecklists.reports);
 router.get("/activity", controller.listAdminActivity);
+router.get("/service-interest", controller.serviceInterestAnalytics);
 router.get("/settings/booking-launch", controller.bookingLaunchSettings);
 router.patch("/settings/booking-launch", controller.updateBookingLaunchSettings);
 router.post("/actions", controller.performAdminAction);

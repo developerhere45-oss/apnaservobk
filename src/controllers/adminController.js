@@ -1445,6 +1445,98 @@ async function listAdminActivity(req, res, next) {
   }
 }
 
+// Customer apps that support service analytics send `user:service_clicked`.
+// This endpoint is deliberately derived from the immutable activity ledger so
+// an admin can see real interest even for services that are unavailable,
+// preparing, or high demand and therefore never become bookings.
+async function serviceInterestAnalytics(req, res, next) {
+  try {
+    const requestedDays = Number(req.query.days || 30);
+    const days = Number.isFinite(requestedDays) ? Math.min(90, Math.max(1, Math.trunc(requestedDays))) : 30;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const serviceQuery = String(req.query.service || "").trim().toLowerCase();
+    const serviceSearch = regex(serviceQuery);
+    const platform = String(req.query.platform || "all").trim().toLowerCase();
+    const match = { eventName: "user:service_clicked", createdAt: { $gte: since } };
+    if (platform === "android" || platform === "ios") match["payload.platform"] = platform;
+
+    const rows = await AdminActivity.aggregate([
+      { $match: match },
+      { $project: {
+        createdAt: 1,
+        userId: 1,
+        actorName: 1,
+        source: 1,
+        serviceId: { $toLower: { $ifNull: ["$payload.serviceId", ""] } },
+        serviceName: { $ifNull: ["$payload.serviceName", ""] },
+        serviceCategory: { $ifNull: ["$payload.serviceCategory", ""] },
+        platform: { $ifNull: ["$payload.platform", "unknown"] },
+      } },
+      { $match: serviceSearch ? { $or: [
+        { serviceId: serviceSearch },
+        { serviceName: serviceSearch },
+        { serviceCategory: serviceSearch },
+      ] } : {} },
+      { $group: {
+        _id: { serviceId: "$serviceId", serviceName: "$serviceName", serviceCategory: "$serviceCategory" },
+        totalClicks: { $sum: 1 },
+        uniqueUsers: { $addToSet: "$userId" },
+        iosClicks: { $sum: { $cond: [{ $eq: ["$platform", "ios"] }, 1, 0] } },
+        androidClicks: { $sum: { $cond: [{ $eq: ["$platform", "android"] }, 1, 0] } },
+        lastClickedAt: { $max: "$createdAt" },
+      } },
+      { $project: {
+        _id: 0,
+        serviceId: "$_id.serviceId",
+        serviceName: "$_id.serviceName",
+        serviceCategory: "$_id.serviceCategory",
+        totalClicks: 1,
+        uniqueUsers: { $size: "$uniqueUsers" },
+        iosClicks: 1,
+        androidClicks: 1,
+        lastClickedAt: 1,
+      } },
+      { $sort: { totalClicks: -1, lastClickedAt: -1 } },
+      { $limit: 100 },
+    ]);
+
+    const recent = await AdminActivity.find(match)
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+    const visibleRecent = recent.filter((entry) => {
+      const payload = entry.payload || {};
+      if (!serviceQuery) return true;
+      return [payload.serviceId, payload.serviceName, payload.serviceCategory]
+        .some((value) => String(value || "").toLowerCase().includes(serviceQuery));
+    }).map((entry) => {
+      const payload = entry.payload || {};
+      return {
+        id: id(entry._id),
+        userId: id(entry.userId),
+        userName: entry.actorName || payload.userName || "Customer",
+        serviceId: payload.serviceId || "",
+        serviceName: payload.serviceName || "",
+        serviceCategory: payload.serviceCategory || "",
+        platform: payload.platform || "unknown",
+        screen: payload.screen || "",
+        clickedAt: iso(entry.createdAt),
+      };
+    });
+    const totals = rows.reduce((sum, row) => sum + Number(row.totalClicks || 0), 0);
+    return res.json({
+      generatedAt: new Date().toISOString(),
+      days,
+      since: since.toISOString(),
+      totalClicks: totals,
+      services: rows.map((row) => ({ ...row, lastClickedAt: iso(row.lastClickedAt) })),
+      recentClicks: visibleRecent,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function createPartner(req, res, next) {
   let createdFirebaseUid = "";
   try {
@@ -3305,6 +3397,7 @@ module.exports = {
   updateBookingLaunchSettings,
   dashboard,
   listAdminActivity,
+  serviceInterestAnalytics,
   createPartner,
   listResourceRows,
   performAdminAction,
