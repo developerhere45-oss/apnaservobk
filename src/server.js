@@ -27,7 +27,8 @@ const otpRoutes = require("./routes/otpRoutes");
 const publicInfoRoutes = require("./routes/publicInfoRoutes");
 const { initBookingSocket } = require("./sockets/bookingSocket");
 const { startNotificationScheduler } = require("./utils/notificationScheduler");
-const { restoreLegacyTimedOutRequests } = require("./utils/bookingRequestExpiry");
+const { startPartnerRequestExpiryScheduler } = require("./utils/bookingRequestExpiry");
+const { emitAdminEvent, emitPartnerEvent } = require("./sockets/bookingSocket");
 const cache = require("./config/cache");
 const { cdnFriendlyHeaders } = require("./middleware/cdnHeaders");
 const { requireHttpsInProduction } = require("./middleware/httpsOnly");
@@ -173,7 +174,26 @@ function startKeepAlive() {
 
 async function start() {
   await connectDb();
-  await restoreLegacyTimedOutRequests();
+  startPartnerRequestExpiryScheduler({
+    onExpired: async ({ booking, expiredRequests }) => {
+      const payload = {
+        bookingId: String(booking._id),
+        bookingCode: booking.bookingCode || "",
+        serviceCategory: booking.serviceCategory || "",
+        status: "expired",
+        reason: "No partner accepted before the request deadline"
+      };
+      emitAdminEvent("booking:partner_request_expired", payload);
+      for (const request of expiredRequests) {
+        emitPartnerEvent(request.partnerId, "booking:unavailable", {
+          ...payload,
+          requestId: request.requestId || "",
+          removeFromQueue: true,
+          unavailableReason: "request_expired"
+        });
+      }
+    }
+  });
   startNotificationScheduler();
   startKeepAlive();
   const port = Number(process.env.PORT || 5000);

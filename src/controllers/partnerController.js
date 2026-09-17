@@ -15,6 +15,7 @@ const { validateDocumentUpload } = require("../utils/documentValidation");
 const { dispatchableBookingStatuses, pendingAssignmentStatuses } = require("../utils/bookingLifecycle");
 const { reliableNotify } = require("../utils/reliableNotify");
 const { addPartnerRequests } = require("../utils/partnerRequestTracking");
+const { partnerRequestExpiresAt } = require("../utils/bookingRequestExpiry");
 const { emitAdminEvent, emitNewBookingToPartners, emitBookingAccepted, emitLaundryStaffAssignment, serializeBooking } = require("../sockets/bookingSocket");
 const { normalizeDeviceToken, upsertDeviceToken } = require("../utils/notificationTokens");
 const { partnerAssetUrl } = require("../utils/partnerUploadAssets");
@@ -303,7 +304,7 @@ async function dispatchPendingBookingsToPartner(partner) {
         status: { $in: dispatchableBookingStatuses() }
       },
       (() => {
-        const requestExpiresAt = null;
+        const requestExpiresAt = partnerRequestExpiresAt(now);
         const tracking = { requestExpiresAt, partnerRequests: [], statusTimeline: [] };
         addPartnerRequests(tracking, [partner], {
           match,

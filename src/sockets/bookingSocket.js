@@ -12,6 +12,7 @@ const { dispatchableBookingStatuses, lifecycleLabel, lifecycleStatusForBooking }
 const findNearbyPartners = require("../utils/findNearbyPartners");
 const { verifyFirebaseIdToken } = require("../utils/firebaseTokenVerifier");
 const { addPartnerRequests, markRequestViewed } = require("../utils/partnerRequestTracking");
+const { partnerRequestExpiresAt } = require("../utils/bookingRequestExpiry");
 
 let io;
 
@@ -123,7 +124,7 @@ async function dispatchPendingBookingsToSocketPartner(partner) {
       continue;
     }
     const now = new Date();
-    const requestExpiresAt = null;
+    const requestExpiresAt = partnerRequestExpiresAt(now);
     const tracking = { requestExpiresAt, partnerRequests: [], statusTimeline: [] };
     addPartnerRequests(tracking, match.partners, {
       match,

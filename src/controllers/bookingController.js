@@ -29,6 +29,7 @@ const { reliableNotify } = require("../utils/reliableNotify");
 const { bestDiscountForBooking } = require("../utils/bookingDiscount");
 const { activeDeviceTokens } = require("../utils/notificationTokens");
 const { validateServiceArea } = require("../utils/serviceArea");
+const { expireDuePartnerRequests, partnerRequestExpiresAt } = require("../utils/bookingRequestExpiry");
 const { getPublishedConfig, isScheduleActive, bookingAvailability } = require("../utils/appControl");
 const { getBookingLaunchConfig, ensureLaunchNotificationSchedule } = require("../utils/bookingLaunchConfig");
 const { getChecklist } = require("../utils/serviceChecklist");
@@ -623,7 +624,8 @@ function partnerOpenBookingVisibility(partner, categories) {
     rejectedPartners: { $ne: partner._id },
     status: { $in: pendingAssignmentStatuses() },
     serviceCategory: { $in: categories },
-    requestedPartners: partner._id
+    requestedPartners: partner._id,
+    requestExpiresAt: { $gt: new Date() }
   };
 }
 
@@ -769,7 +771,7 @@ async function dispatchBookingToPartners(booking, category, lat, lng) {
 
   if (!booking.requestedPartners || booking.requestedPartners.length === 0) {
     const dispatchedAt = new Date();
-    const requestExpiresAt = null;
+    const requestExpiresAt = partnerRequestExpiresAt(dispatchedAt);
     const dispatchAttempt = Number(booking.dispatchAttempt || 0) + 1;
     const tracking = { requestExpiresAt, partnerRequests: [], statusTimeline: [] };
     const partnerRequests = addPartnerRequests(tracking, partners, {
@@ -1271,6 +1273,7 @@ async function listPartnerBookings(req, res, next) {
   try {
     partner = await Partner.findOne({ firebaseUid: req.auth.uid });
     if (!partner) return res.json({ bookings: [] });
+    await expireDuePartnerRequests();
     responseCacheKey = `partner:bookings:${partner._id}`;
 
     const categories = partnerCategoryVariants(partner);

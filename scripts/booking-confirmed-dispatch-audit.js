@@ -7,6 +7,7 @@ const Partner = require("../src/models/Partner");
 const findNearbyPartners = require("../src/utils/findNearbyPartners");
 const { addPartnerRequests, recordNotificationResult } = require("../src/utils/partnerRequestTracking");
 const { dispatchableBookingStatuses } = require("../src/utils/bookingLifecycle");
+const { expireDuePartnerRequests, partnerRequestExpiresAt } = require("../src/utils/bookingRequestExpiry");
 
 function partner(uid, overrides = {}) {
   return {
@@ -54,12 +55,13 @@ async function main() {
       address: "Production audit address, Guwahati",
       location: { type: "Point", coordinates: [91.7362, 26.1445] },
       status: "confirmed",
-      requestExpiresAt: null,
+      requestExpiresAt: partnerRequestExpiresAt(),
       statusTimeline: [{ status: "confirmed", at: new Date(), by: "system" }]
     });
 
     const sentAt = new Date();
-    const tracking = { requestExpiresAt: null, partnerRequests: [], statusTimeline: [] };
+    const requestExpiresAt = partnerRequestExpiresAt(sentAt);
+    const tracking = { requestExpiresAt, partnerRequests: [], statusTimeline: [] };
     const requests = addPartnerRequests(tracking, match.partners, {
       match,
       dispatchAttempt: 1,
@@ -81,7 +83,7 @@ async function main() {
           dispatchMode: match.mode,
           dispatchRadiusKm: match.radiusKm,
           dispatchedAt: sentAt,
-          requestExpiresAt: null
+          requestExpiresAt
         },
         $push: { statusTimeline: { $each: tracking.statusTimeline } }
       },
@@ -91,7 +93,7 @@ async function main() {
     assert.equal(dispatched.status, "sent_to_partner");
     assert.equal(dispatched.requestedPartners.length, 2);
     assert.equal(dispatched.partnerRequests.length, 2);
-    assert.equal(dispatched.requestExpiresAt, null, "partner request must not expire based on time of day or elapsed time");
+    assert.ok(dispatched.requestExpiresAt instanceof Date, "partner request must have a server-side expiry deadline");
 
     const duplicate = await Booking.findOneAndUpdate(
       { _id: booking._id, requestedPartners: { $size: 0 }, status: { $in: dispatchableBookingStatuses() } },
@@ -114,6 +116,13 @@ async function main() {
     });
     assert.ok(visibleAfterRestart, "FCM failure must not remove the durable partner dashboard request");
 
+    const expired = await expireDuePartnerRequests(new Date(dispatched.requestExpiresAt.getTime() + 1));
+    assert.equal(expired.length, 1, "unaccepted requests must expire at the server-side deadline");
+    const expiredBooking = await Booking.findById(dispatched._id);
+    assert.equal(expiredBooking.status, "expired");
+    assert.equal(expiredBooking.requestedPartners.length, 0);
+    assert.ok(expiredBooking.partnerRequests.every((request) => ["expired", "failed"].includes(request.status)));
+
     await Partner.updateMany({}, { $set: { isOnline: false } });
     const noEligible = await findNearbyPartners.withMetadata({ serviceCategory: "ac", city: "Guwahati", lat: 26.1445, lng: 91.7362 });
     assert.equal(noEligible.partners.length, 0, "no-eligible-partner case must return an empty match without corrupting booking state");
@@ -121,7 +130,8 @@ async function main() {
     console.log("PASS confirmed booking dispatches atomically to multiple eligible partners");
     console.log("PASS wrong-service and invalid partners are excluded");
     console.log("PASS missing/failed FCM preserves the durable dashboard request");
-    console.log("PASS duplicate dispatch is idempotent and app restart can recover the request");
+    console.log("PASS duplicate dispatch is idempotent and app restart can recover only a live request");
+    console.log("PASS unaccepted requests expire server-side and leave the partner queue");
     console.log("PASS no eligible partner returns safely");
   } finally {
     await mongoose.disconnect();

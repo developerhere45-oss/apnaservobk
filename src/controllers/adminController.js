@@ -39,6 +39,7 @@ const { sendPartnerApprovalWelcomeEmails } = require("../utils/welcomeEmail");
 const { decryptString } = require("../utils/fieldCrypto");
 const { initFirebase } = require("../config/firebase");
 const { normalizeServiceCategory } = require("../utils/serviceCategory");
+const { partnerRequestExpiresAt } = require("../utils/bookingRequestExpiry");
 
 function normalizePartnerPhone(value) {
   const valueDigits = String(value || "").replace(/\D/g, "");
@@ -1051,7 +1052,7 @@ async function forwardBookingToPartners({ booking, partners, reason = "Admin man
   booking.status = "sent_to_partner";
   const dispatchedAt = new Date();
   booking.dispatchedAt = dispatchedAt;
-  booking.requestExpiresAt = null;
+  booking.requestExpiresAt = partnerRequestExpiresAt(dispatchedAt);
   const dispatchAttempt = Number(booking.dispatchAttempt || 0) + 1;
   const coordinates = bookingCoordinates(booking);
   const distancesMeters = {};
