@@ -1017,7 +1017,7 @@ async function createBooking(req, res, next) {
         message: "We couldn't verify the exact service location. Please select the service address again."
       });
     }
-    const serviceArea = validateServiceArea(body.lat, body.lng);
+    const serviceArea = validateServiceArea(body.lat, body.lng, { address: body.address });
     if (!serviceArea.allowed) {
       return res.status(422).json({
         code: serviceArea.code,
@@ -2353,7 +2353,7 @@ async function updateBookingContacts(req, res, next) {
 async function updateBookingLocation(req, res, next) {
   try {
     const body = bookingLocationSchema.parse(req.body || {});
-    const serviceArea = validateServiceArea(body.lat, body.lng);
+    const serviceArea = validateServiceArea(body.lat, body.lng, { address: body.address });
     if (!serviceArea.allowed) {
       return res.status(422).json({
         code: serviceArea.code,
