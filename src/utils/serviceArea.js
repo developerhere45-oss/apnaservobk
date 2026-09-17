@@ -1,6 +1,10 @@
 const DEFAULT_CENTER_LAT = 26.1445;
 const DEFAULT_CENTER_LNG = 91.7362;
 const DEFAULT_RADIUS_KM = 35;
+const NORTH_GUWAHATI_MIN_LAT = 26.17;
+const NORTH_GUWAHATI_CENTER_LAT = 26.20;
+const NORTH_GUWAHATI_CENTER_LNG = 91.70;
+const NORTH_GUWAHATI_RADIUS_KM = 16;
 
 function finiteEnv(name, fallback) {
   const value = Number(process.env[name]);
@@ -14,7 +18,17 @@ function serviceAreaConfig() {
     enabled: String(process.env.GUWAHATI_SERVICE_AREA_ENABLED || "true").toLowerCase() !== "false",
     centerLat: finiteEnv("GUWAHATI_SERVICE_AREA_CENTER_LAT", DEFAULT_CENTER_LAT),
     centerLng: finiteEnv("GUWAHATI_SERVICE_AREA_CENTER_LNG", DEFAULT_CENTER_LNG),
-    radiusKm: Math.max(1, finiteEnv("GUWAHATI_SERVICE_AREA_RADIUS_KM", DEFAULT_RADIUS_KM))
+    radiusKm: Math.max(1, finiteEnv("GUWAHATI_SERVICE_AREA_RADIUS_KM", DEFAULT_RADIUS_KM)),
+    // North Guwahati is deliberately unavailable until operations enable it.
+    // The latitude guard prevents this local exclusion from affecting central
+    // or south Guwahati even though the two areas are geographically close.
+    northGuwahati: {
+      enabled: String(process.env.NORTH_GUWAHATI_SERVICE_ENABLED || "false").toLowerCase() === "true",
+      minLat: finiteEnv("NORTH_GUWAHATI_MIN_LAT", NORTH_GUWAHATI_MIN_LAT),
+      centerLat: finiteEnv("NORTH_GUWAHATI_CENTER_LAT", NORTH_GUWAHATI_CENTER_LAT),
+      centerLng: finiteEnv("NORTH_GUWAHATI_CENTER_LNG", NORTH_GUWAHATI_CENTER_LNG),
+      radiusKm: Math.max(1, finiteEnv("NORTH_GUWAHATI_RADIUS_KM", NORTH_GUWAHATI_RADIUS_KM))
+    }
   };
 }
 
@@ -38,6 +52,11 @@ function validateServiceArea(lat, lng) {
     return { allowed: false, code: "SERVICE_AREA_LOCATION_REQUIRED", reason: "invalid_coordinates", config };
   }
   if (!config.enabled) return { allowed: false, code: "SERVICE_AREA_UNAVAILABLE", reason: "area_disabled", config };
+  const north = config.northGuwahati;
+  const northDistanceKm = distanceKm(latitude, longitude, north.centerLat, north.centerLng);
+  if (!north.enabled && latitude >= north.minLat && northDistanceKm <= north.radiusKm) {
+    return { allowed: false, code: "NORTH_GUWAHATI_UNAVAILABLE", reason: "north_guwahati_unavailable", distanceKm: northDistanceKm, config };
+  }
   const distance = distanceKm(latitude, longitude, config.centerLat, config.centerLng);
   return {
     allowed: distance <= config.radiusKm,

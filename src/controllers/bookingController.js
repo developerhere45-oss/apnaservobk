@@ -1023,7 +1023,9 @@ async function createBooking(req, res, next) {
         code: serviceArea.code,
         message: serviceArea.code === "SERVICE_AREA_LOCATION_REQUIRED"
           ? "We couldn't verify the service location. Please select the location again."
-          : "ApnaServo is currently available only in Guwahati. We'll be available in your area soon."
+          : serviceArea.code === "NORTH_GUWAHATI_UNAVAILABLE"
+            ? "ApnaServo is not available in North Guwahati yet. We'll be available in your area soon."
+            : "ApnaServo is currently available only in Guwahati. We'll be available in your area soon."
       });
     }
     const submittedPrimaryPhone = normalizeCustomerPhone(body.primaryPhone || body.userPhone);
@@ -2357,7 +2359,9 @@ async function updateBookingLocation(req, res, next) {
         code: serviceArea.code,
         message: serviceArea.code === "SERVICE_AREA_LOCATION_REQUIRED"
           ? "We couldn't verify the service location. Please select the location again."
-          : "ApnaServo is currently available only in Guwahati. We'll be available in your area soon."
+          : serviceArea.code === "NORTH_GUWAHATI_UNAVAILABLE"
+            ? "ApnaServo is not available in North Guwahati yet. We'll be available in your area soon."
+            : "ApnaServo is currently available only in Guwahati. We'll be available in your area soon."
       });
     }
     const user = await User.findOne({ firebaseUid: req.auth.uid });
