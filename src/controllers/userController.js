@@ -469,7 +469,7 @@ async function recordUserActivity(req, res, next) {
       return res.status(400).json({ message: "Service is required for a service click" });
     }
 
-    emitAdminEvent(`user:${body.event}`, {
+    const recorded = await emitAdminEvent(`user:${body.event}`, {
       userId: String(user._id),
       userName: user.name || "Customer",
       phone: user.phone || "",
@@ -482,6 +482,7 @@ async function recordUserActivity(req, res, next) {
       serviceName: body.serviceName,
       serviceCategory: body.category
     });
+    if (!recorded) return res.status(503).json({ message: "Activity tracking is temporarily unavailable. Please retry." });
     return res.status(202).json({ ok: true });
   } catch (error) {
     return next(error);

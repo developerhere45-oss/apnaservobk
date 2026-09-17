@@ -914,24 +914,30 @@ async function recordAdminActivity(eventName, payload) {
 }
 
 function emitAdminEvent(eventName, payload = {}) {
-  if (!eventName) return;
+  if (!eventName) return Promise.resolve(false);
   const eventPayload = {
     ...payload,
     eventName,
     emittedAt: new Date().toISOString()
   };
-  recordAdminActivity(eventName, eventPayload).catch((error) => {
-    console.error("Failed to record admin activity", {
-      eventName,
-      message: error.message
-    });
-  });
-  if (io) {
+  const publish = () => {
+    if (!io) return;
     io.to("admin").emit(eventName, eventPayload);
     if (eventName === "app_control:published") {
       io.to(eventPayload.app === "partner" ? "app:partner" : "app:user").emit(eventName, eventPayload);
     }
-  }
+  };
+  const recorded = recordAdminActivity(eventName, eventPayload).then(() => {
+    publish();
+    return true;
+  }).catch((error) => {
+    console.error("Failed to record admin activity", {
+      eventName,
+      message: error.message
+    });
+    return false;
+  });
+  return recorded;
 }
 
 function emitPartnerEvent(partnerId, eventName, payload = {}) {

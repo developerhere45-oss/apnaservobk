@@ -25,6 +25,7 @@ const adminActivitySchema = new mongoose.Schema(
 adminActivitySchema.index({ createdAt: -1 });
 adminActivitySchema.index({ category: 1, createdAt: -1 });
 adminActivitySchema.index({ eventName: 1, createdAt: -1 });
+adminActivitySchema.index({ eventName: 1, "payload.platform": 1, createdAt: -1 });
 adminActivitySchema.index({ bookingId: 1, createdAt: -1 });
 adminActivitySchema.index({ userId: 1, createdAt: -1 });
 adminActivitySchema.index({ partnerId: 1, createdAt: -1 });

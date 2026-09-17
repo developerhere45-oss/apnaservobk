@@ -1459,6 +1459,13 @@ async function serviceInterestAnalytics(req, res, next) {
     const platform = String(req.query.platform || "all").trim().toLowerCase();
     const match = { eventName: "user:service_clicked", createdAt: { $gte: since } };
     if (platform === "android" || platform === "ios") match["payload.platform"] = platform;
+    if (serviceSearch) {
+      match.$or = [
+        { "payload.serviceId": serviceSearch },
+        { "payload.serviceName": serviceSearch },
+        { "payload.serviceCategory": serviceSearch },
+      ];
+    }
 
     const rows = await AdminActivity.aggregate([
       { $match: match },
@@ -1472,11 +1479,6 @@ async function serviceInterestAnalytics(req, res, next) {
         serviceCategory: { $ifNull: ["$payload.serviceCategory", ""] },
         platform: { $ifNull: ["$payload.platform", "unknown"] },
       } },
-      { $match: serviceSearch ? { $or: [
-        { serviceId: serviceSearch },
-        { serviceName: serviceSearch },
-        { serviceCategory: serviceSearch },
-      ] } : {} },
       { $group: {
         _id: { serviceId: "$serviceId", serviceName: "$serviceName", serviceCategory: "$serviceCategory" },
         totalClicks: { $sum: 1 },
@@ -1504,12 +1506,7 @@ async function serviceInterestAnalytics(req, res, next) {
       .sort({ createdAt: -1 })
       .limit(100)
       .lean();
-    const visibleRecent = recent.filter((entry) => {
-      const payload = entry.payload || {};
-      if (!serviceQuery) return true;
-      return [payload.serviceId, payload.serviceName, payload.serviceCategory]
-        .some((value) => String(value || "").toLowerCase().includes(serviceQuery));
-    }).map((entry) => {
+    const visibleRecent = recent.map((entry) => {
       const payload = entry.payload || {};
       return {
         id: id(entry._id),
@@ -1524,6 +1521,7 @@ async function serviceInterestAnalytics(req, res, next) {
       };
     });
     const totals = rows.reduce((sum, row) => sum + Number(row.totalClicks || 0), 0);
+    res.set("Cache-Control", "no-store, max-age=0, must-revalidate");
     return res.json({
       generatedAt: new Date().toISOString(),
       days,

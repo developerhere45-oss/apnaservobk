@@ -33,6 +33,13 @@ async function connectDb() {
     { unique: true, sparse: true, name: "bookingId_1" }
   );
 
+  // Service-interest analytics is read on every Admin dashboard refresh. This
+  // additive index is created explicitly because production disables autoIndex.
+  await mongoose.connection.collection("adminactivities").createIndex(
+    { eventName: 1, "payload.platform": 1, createdAt: -1 },
+    { name: "eventName_1_payload.platform_1_createdAt_-1" }
+  );
+
   if (process.env.MONGODB_SYNC_INDEXES === "true") {
     await mongoose.syncIndexes();
     console.log("MongoDB indexes synced");
