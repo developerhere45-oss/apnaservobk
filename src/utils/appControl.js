@@ -69,6 +69,15 @@ function normalizeConfig(value) {
   const allowedSections = new Set(["hero", "announcements", "quick_services", "commercial", "popular_services", "more_services", "feature_strip", "online", "stats", "recent_requests"]);
   output.ui = { homeTitle: cleanText(source.ui?.homeTitle, 80), homeSubtitle: cleanText(source.ui?.homeSubtitle, 160), primaryColor: /^#[0-9a-fA-F]{6}$/.test(primaryColor) ? primaryColor : "#f32368", hiddenSections: [...new Set(Array.isArray(source.ui?.hiddenSections) ? source.ui.hiddenSections.map((item) => cleanText(item, 40)).filter((item) => allowedSections.has(item)) : [])].slice(0, 12) };
   const defaults = output.theme;
+  const orderedSections = ["quick_services", "commercial", "popular_services", "more_services", "feature_strip"];
+  output.ui.sectionOrder = [...new Set([...(Array.isArray(source.ui?.sectionOrder) ? source.ui.sectionOrder : []).filter(id => orderedSections.includes(id)), ...orderedSections])];
+  if (source.ui?.sectionSpacing != null) output.ui.sectionSpacing = boundedNumber(source.ui.sectionSpacing, 18, 0, 32);
+  output.ui.headerNotices = (Array.isArray(source.ui?.headerNotices) ? source.ui.headerNotices : []).slice(0, 5).map((item, index) => ({
+    id: cleanText(item?.id, 60) || `header_${index}`, enabled: item?.enabled !== false,
+    title: cleanText(item?.title, 100), message: cleanText(item?.message, 400),
+    backgroundColor: color(item?.backgroundColor, "#fff8f9"), textColor: color(item?.textColor, "#7e0012"),
+    fontSize: boundedNumber(item?.fontSize, 13, 11, 20), padding: boundedNumber(item?.padding, 12, 8, 24)
+  })).filter(item => item.title || item.message);
   output.theme = {
     primaryColor: color(source.theme?.primaryColor || source.ui?.primaryColor, defaults.primaryColor),
     secondaryColor: color(source.theme?.secondaryColor, defaults.secondaryColor), accentColor: color(source.theme?.accentColor, defaults.accentColor),
