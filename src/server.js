@@ -129,6 +129,59 @@ app.get("/ready", (req, res) => {
   });
 });
 
+const weatherCache = new Map();
+app.get("/api/weather/current", async (req, res, next) => {
+  try {
+    const latitude = Number(req.query.lat);
+    const longitude = Number(req.query.lng);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
+      || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+      return res.status(400).json({ ok: false, code: "INVALID_COORDINATES", message: "Valid lat and lng are required." });
+    }
+    const cacheKey = `${latitude.toFixed(2)}:${longitude.toFixed(2)}`;
+    const cached = weatherCache.get(cacheKey);
+    if (cached && Date.now() - cached.savedAt < 10 * 60 * 1000) {
+      return res.set("Cache-Control", "public, max-age=300").json(cached.payload);
+    }
+    const params = new URLSearchParams({
+      latitude: latitude.toFixed(5),
+      longitude: longitude.toFixed(5),
+      current: "weather_code,is_day,precipitation,rain,showers,cloud_cover",
+      timezone: "auto",
+      forecast_days: "1"
+    });
+    const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(7000)
+    });
+    if (!response.ok) {
+      const error = new Error(`Weather provider returned ${response.status}`);
+      error.status = 502;
+      throw error;
+    }
+    const provider = await response.json();
+    const current = provider && provider.current;
+    if (!current || !Number.isFinite(Number(current.weather_code))) {
+      const error = new Error("Weather provider returned an invalid response");
+      error.status = 502;
+      throw error;
+    }
+    const payload = {
+      ok: true,
+      source: "open-meteo",
+      latitude,
+      longitude,
+      fetchedAt: new Date().toISOString(),
+      current
+    };
+    weatherCache.set(cacheKey, { savedAt: Date.now(), payload });
+    if (weatherCache.size > 250) weatherCache.delete(weatherCache.keys().next().value);
+    return res.set("Cache-Control", "public, max-age=300").json(payload);
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.get("/api/app-control/config", publicConfig);
 app.use(publicInfoRoutes);
 
