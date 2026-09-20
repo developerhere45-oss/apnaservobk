@@ -243,21 +243,6 @@ async function getPublicAppControlConfig(audience = "users", app = "customer", p
       bannerStyle: {},
     });
   }
-  const hoursAvailability = target === "customer" ? bookingAvailability(state.config, null, new Date(now)) : { allowed: true };
-  if (hoursAvailability.code === "OUTSIDE_BOOKING_HOURS") {
-    activeAnnouncements.unshift({
-      id: "system-booking-hours",
-      title: "Booking hours",
-      message: hoursAvailability.message,
-      imageUrl: "",
-      ctaText: "",
-      ctaAction: "",
-      serviceCategory: "",
-      placement: "home_top",
-      priority: 0,
-      bannerStyle: {},
-    });
-  }
   return {
     ...state,
     app: target,
