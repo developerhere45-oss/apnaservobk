@@ -140,8 +140,8 @@ app.get("/api/weather/current", async (req, res, next) => {
     }
     const cacheKey = `${latitude.toFixed(2)}:${longitude.toFixed(2)}`;
     const cached = weatherCache.get(cacheKey);
-    if (cached && Date.now() - cached.savedAt < 10 * 60 * 1000) {
-      return res.set("Cache-Control", "public, max-age=300").json(cached.payload);
+    if (cached && Date.now() - cached.savedAt < 60 * 1000) {
+      return res.set("Cache-Control", "no-store").json(cached.payload);
     }
     const params = new URLSearchParams({
       latitude: latitude.toFixed(5),
@@ -176,7 +176,7 @@ app.get("/api/weather/current", async (req, res, next) => {
     };
     weatherCache.set(cacheKey, { savedAt: Date.now(), payload });
     if (weatherCache.size > 250) weatherCache.delete(weatherCache.keys().next().value);
-    return res.set("Cache-Control", "public, max-age=300").json(payload);
+    return res.set("Cache-Control", "no-store").json(payload);
   } catch (error) {
     return next(error);
   }
