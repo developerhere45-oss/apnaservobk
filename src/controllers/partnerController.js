@@ -662,15 +662,40 @@ async function upsertProfile(req, res, next) {
     }
     const isCleaningRegistration = body.businessType === "cleaning" || categories[0] === "cleaning";
     const isLaundryRegistration = body.businessType === "laundry" || isCleaningRegistration;
-    if (isLaundryRegistration && !body.laundryBusiness) {
-      return res.status(400).json({ message: "Complete company and staff details are required" });
+    const existingPartner = await Partner.findOne({ firebaseUid: req.auth.uid })
+      .select("_id phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken businessType businessVerificationStatus laundryBusiness termsConsent termsAcceptanceHistory")
+      .lean();
+    // OTP verification can reach this endpoint before an older Partner build
+    // submits its company/staff step. Preserve an existing company when present;
+    // otherwise create a pending, offline application from verified owner data.
+    // It remains admin-review-only and cannot receive bookings until approved.
+    const legacyCompanyPayload = isLaundryRegistration && !body.laundryBusiness;
+    const laundryBusiness = isLaundryRegistration
+      ? (body.laundryBusiness || existingPartner?.laundryBusiness || {
+          shopName: `${body.name || req.auth.name || "Service"} Company`,
+          shopLicenseNumber: "Not provided",
+          shopLocation: body.serviceArea || body.residentialAddress || body.city || "Guwahati, Assam",
+          ownerName: body.name || req.auth.name || "Company Owner",
+          ownerPhone: phone,
+          staffMembers: []
+        })
+      : null;
+    const laundryStaffMembers = Array.isArray(laundryBusiness?.staffMembers)
+      ? laundryBusiness.staffMembers
+      : [];
+    if (legacyCompanyPayload) {
+      console.warn("[partner.profile] normalized legacy company registration", {
+        uid: String(req.auth.uid || ""),
+        serviceCategory: categories[0],
+        reusedExistingCompany: Boolean(existingPartner?.laundryBusiness)
+      });
     }
-    if (isLaundryRegistration && body.laundryBusiness.staffMembers.some((staff) => !normalizePhone(staff.phone))) {
+    if (isLaundryRegistration && laundryStaffMembers.some((staff) => !normalizePhone(staff.phone))) {
       return res.status(400).json({ message: "Every laundry staff member requires a valid phone number" });
     }
-    const ownerPhone = isLaundryRegistration ? normalizePhone(body.laundryBusiness.ownerPhone || phone) : "";
+    const ownerPhone = isLaundryRegistration ? normalizePhone(laundryBusiness.ownerPhone || phone) : "";
     const normalizedLaundryStaff = isLaundryRegistration
-      ? body.laundryBusiness.staffMembers.map((staff) => {
+      ? laundryStaffMembers.map((staff) => {
           const staffPhone = normalizePhone(staff.phone);
           return {
             ...staff,
@@ -704,9 +729,6 @@ async function upsertProfile(req, res, next) {
     }
     const phoneHash = identityHash(phone);
     const emailHash = identityHash(email);
-    const existingPartner = await Partner.findOne({ firebaseUid: req.auth.uid })
-      .select("_id phoneHash emailHash faceVerified selfieVerified aadhaarStatus kycStatus isVerified trustStatus fcmToken businessType businessVerificationStatus laundryBusiness termsConsent termsAcceptanceHistory")
-      .lean();
     if (!existingPartner && body.termsAccepted !== true) {
       return res.status(400).json({ message: "Partner Terms, Privacy Policy, and Service Agreement acceptance is required" });
     }
@@ -767,11 +789,11 @@ async function upsertProfile(req, res, next) {
         businessType: "laundry",
         businessVerificationStatus: adminApproved ? "approved" : "pending_review",
         laundryBusiness: {
-          ...body.laundryBusiness,
-          shopName: body.laundryBusiness.shopName || `${body.name || req.auth.name || "Service"} Company`,
-          shopLicenseNumber: body.laundryBusiness.shopLicenseNumber || "Not provided",
-          shopLocation: body.laundryBusiness.shopLocation || body.serviceArea || "Guwahati, Assam",
-          ownerName: body.laundryBusiness.ownerName || body.name || req.auth.name || "Company Owner",
+          ...laundryBusiness,
+          shopName: laundryBusiness.shopName || `${body.name || req.auth.name || "Service"} Company`,
+          shopLicenseNumber: laundryBusiness.shopLicenseNumber || "Not provided",
+          shopLocation: laundryBusiness.shopLocation || body.serviceArea || "Guwahati, Assam",
+          ownerName: laundryBusiness.ownerName || body.name || req.auth.name || "Company Owner",
           ownerPhone,
           staffMembers: normalizedLaundryStaff.map((staff) => {
             const previous = (targetPartner?.laundryBusiness?.staffMembers || []).find((entry) =>
