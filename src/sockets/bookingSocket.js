@@ -497,10 +497,15 @@ function initBookingSocket(httpServer) {
   const pingTimeout = Math.max(Number(process.env.SOCKET_PING_TIMEOUT_MS || 120000), 45000);
   io = require("socket.io")(httpServer, {
     cors: {
-      origin: allowedCorsOrigins().includes("*") && process.env.NODE_ENV !== "production"
-        ? "*"
-        : allowedCorsOrigins(),
-      methods: ["GET", "POST", "PATCH"]
+      // The admin dashboard receives a short-lived HMAC signed token from its
+      // server before it can join the admin room. Socket CORS is therefore not
+      // the authorization boundary. Reflecting the origin here keeps polling
+      // and WebSocket upgrades working after a primary/backup backend switch,
+      // including when the admin runs on a new Render/custom domain. REST APIs
+      // remain on the strict CLIENT_ORIGIN allow-list in server.js.
+      origin: (_origin, callback) => callback(null, true),
+      methods: ["GET", "POST", "PATCH"],
+      credentials: false
     },
     transports: ["websocket", "polling"],
     allowEIO3: true,
