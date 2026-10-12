@@ -40,6 +40,12 @@ const { decryptString } = require("../utils/fieldCrypto");
 const { initFirebase } = require("../config/firebase");
 const { normalizeServiceCategory } = require("../utils/serviceCategory");
 const { partnerRequestExpiresAt } = require("../utils/bookingRequestExpiry");
+const { cleanCustomerName, isPlaceholderCustomerName } = require("../utils/customerIdentity");
+
+function customerNameForAdmin(value) {
+  const name = cleanCustomerName(value);
+  return isPlaceholderCustomerName(name) ? "Name pending" : name;
+}
 
 function normalizePartnerPhone(value) {
   const valueDigits = String(value || "").replace(/\D/g, "");
@@ -1705,7 +1711,7 @@ async function listResourceRows(req, res, next) {
         return {
           id: user.publicId || userId,
           userId: user.publicId || "",
-          fullName: user.name,
+          fullName: customerNameForAdmin(user.name),
           mobileNumber: user.phone,
           email: user.email,
           profilePhoto: user.profilePhotoUrl || "",
@@ -2547,7 +2553,7 @@ async function usersControlCenter(req, res, next) {
         return {
           id: user.publicId || userId,
           userId: user.publicId || "",
-          fullName: user.name || "",
+          fullName: customerNameForAdmin(user.name),
           mobileNumber: user.phone || "",
           email: user.email || "",
           profilePhoto: user.profilePhotoUrl || "",
@@ -2618,7 +2624,7 @@ async function userProfile(req, res, next) {
       user: {
         id: id(user._id),
         userId: user.publicId || "",
-        fullName: user.name || "",
+        fullName: customerNameForAdmin(user.name),
         mobileNumber: user.phone || "",
         email: user.email || "",
         profilePhoto: user.profilePhotoUrl || "",

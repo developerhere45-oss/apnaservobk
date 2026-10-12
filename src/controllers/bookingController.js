@@ -953,7 +953,7 @@ async function getOrCreateUser(req, body) {
     update.$set.name = requestedName;
   }
   if (!existing && !update.$set.name) {
-    update.$set.name = "ApnaServo Customer";
+    update.$set.name = "";
   }
   if (verified) {
     update.$set.phoneVerified = true;
@@ -2302,7 +2302,7 @@ async function requestLaunchNotification(req, res, next) {
           launchNotificationFor: new Date(launch.bookingLaunchAt)
         },
         $setOnInsert: {
-          name: firstRealCustomerName(req.auth.name) || "ApnaServo Customer",
+          name: firstRealCustomerName(req.auth.name),
           email: req.auth.email || ""
         }
       },

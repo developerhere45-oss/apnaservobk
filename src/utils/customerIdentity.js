@@ -8,6 +8,10 @@ function cleanCustomerName(value) {
 function isPlaceholderCustomerName(value) {
   const name = cleanCustomerName(value);
   return !name
+    // A real customer name must include at least one letter. This rejects
+    // malformed values such as "_&" that old app builds could accidentally
+    // send while assembling the registration payload.
+    || !/\p{L}/u.test(name)
     || /^(?:apnaservo\s+)?customer(?:\s+\d{1,12})?$/i.test(name)
     || /^guest(?:\s+\d{1,12})?$/i.test(name);
 }

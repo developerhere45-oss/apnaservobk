@@ -72,7 +72,10 @@ const userSchema = new mongoose.Schema(
     firebaseUid: { type: String, required: true, unique: true, index: true },
     authProvider: { type: String, enum: ["phone", "apple", "google", "password", "firebase", "unknown"], default: "unknown", index: true },
     appleUserId: { type: String, trim: true, default: "", index: true },
-    name: { type: String, trim: true, default: "ApnaServo Customer" },
+    // A system-generated label must never be mistaken for a customer-entered
+    // name in the admin panel. The profile sync fills this as soon as a real
+    // name is supplied by the authenticated customer.
+    name: { type: String, trim: true, default: "" },
     phone: { type: String, trim: true, default: "" },
     phoneHash: { type: String, trim: true, default: "", index: true },
     email: { type: String, trim: true, lowercase: true, default: "" },

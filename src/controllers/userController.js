@@ -272,7 +272,7 @@ async function saveFcmToken(req, res, next) {
       {
         $setOnInsert: {
           firebaseUid: req.auth.uid,
-          name: firstRealCustomerName(req.body?.name, req.body?.fullName, req.body?.displayName, req.auth.name) || "ApnaServo Customer",
+          name: firstRealCustomerName(req.body?.name, req.body?.fullName, req.body?.displayName, req.auth.name),
           phone: insertPhone,
           phoneHash: insertPhoneHash,
           email: insertEmail,
@@ -544,7 +544,7 @@ async function requestDeletion(req, res, next) {
          },
         $setOnInsert: {
           firebaseUid: req.auth.uid,
-          name: firstRealCustomerName(req.auth.name) || "ApnaServo Customer",
+          name: firstRealCustomerName(req.auth.name),
           phone: req.auth.phone_number || "",
           email: req.auth.email || "",
           city: "Guwahati"

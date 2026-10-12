@@ -13,6 +13,7 @@ const findNearbyPartners = require("../utils/findNearbyPartners");
 const { verifyFirebaseIdToken } = require("../utils/firebaseTokenVerifier");
 const { addPartnerRequests, markRequestViewed } = require("../utils/partnerRequestTracking");
 const { partnerRequestExpiresAt } = require("../utils/bookingRequestExpiry");
+const { firstRealCustomerName } = require("../utils/customerIdentity");
 
 let io;
 
@@ -473,7 +474,7 @@ async function identifySocket(socket, next) {
         {
           $setOnInsert: {
             firebaseUid: decoded.uid,
-            name: decoded.name || "ApnaServo Customer",
+            name: firstRealCustomerName(decoded.name),
             phone: decoded.phone_number || "",
             email: normalizeEmail(decoded.email || "")
           }
