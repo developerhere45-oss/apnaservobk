@@ -60,6 +60,14 @@ const userActivityLimiter = limiter({
   message: "Too many activity events. Please wait and try again."
 });
 
+// An accepted request can incur a real telephony charge, so this protects the
+// provider and the database in addition to the longer per-user cooldown.
+const assistanceCallLimiter = limiter({
+  windowMs: 60 * 60 * 1000,
+  limit: 3,
+  message: "Too many assistance-call requests. Please try again later."
+});
+
 const fcmTokenLimiter = limiter({
   windowMs: 60 * 1000,
   limit: 20,
@@ -92,6 +100,7 @@ const verificationLimiter = limiter({
 
 module.exports = {
   adminNotificationLimiter,
+  assistanceCallLimiter,
   bookingCreateLimiter,
   bookingReadLimiter,
   bookingWriteLimiter,

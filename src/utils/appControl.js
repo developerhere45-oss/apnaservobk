@@ -25,6 +25,8 @@ const DEFAULT_CONFIG = Object.freeze({
   laundry: { sections: [], dashboardCards: [], services: [], items: [], pickupWorkflow: [], deliveryWorkflow: [], settings: { pickupEnabled: true, deliveryEnabled: true, staffEnabled: true } },
   features: {},
   services: {},
+  // Circular zones are controlled and published by an admin. City strings are labels only.
+  serviceAreas: [{ id: "guwahati", name: "Guwahati, Assam", enabled: true, centerLat: 26.1445, centerLng: 91.7362, radiusKm: 35 }],
   // Empty URLs mean use the signed application's bundled artwork. This makes
   // an offline launch safe and lets a failed remote image load fall back cleanly.
   media: { hero: { imageUrl: "", slides: {} }, services: {} }
@@ -159,6 +161,17 @@ function normalizeConfig(value) {
   };
   output.features = Object.fromEntries(Object.entries(source.features && typeof source.features === "object" ? source.features : {}).slice(0, 100).map(([key, item]) => [cleanText(key, 80), { enabled: Boolean(item?.enabled), audience: ["all", "users", "partners", "logged_in"].includes(item?.audience) ? item.audience : "all", startsAt: validDate(item?.startsAt), endsAt: validDate(item?.endsAt), description: cleanText(item?.description, 300) }]));
   output.services = Object.fromEntries(Object.entries(source.services && typeof source.services === "object" ? source.services : {}).slice(0, 300).map(([key, item]) => [cleanText(key, 80), { status: ["AVAILABLE", "PREPARING", "HIGH_DEMAND", "TEMPORARILY_UNAVAILABLE", "DISABLED"].includes(String(item?.status || "").toUpperCase()) ? String(item.status).toUpperCase() : "AVAILABLE", message: cleanText(item?.message, 300), startsAt: validDate(item?.startsAt), endsAt: validDate(item?.endsAt) }]));
+  const seenAreaIds = new Set();
+  output.serviceAreas = (Array.isArray(source.serviceAreas) ? source.serviceAreas : DEFAULT_CONFIG.serviceAreas)
+    .slice(0, 50).map((item, index) => {
+      const rawId = cleanText(item?.id, 60).toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+      const id = rawId || `area-${index + 1}`;
+      if (seenAreaIds.has(id)) return null;
+      seenAreaIds.add(id);
+      return { id, name: cleanText(item?.name, 120) || id, enabled: item?.enabled !== false,
+        centerLat: boundedNumber(item?.centerLat, 0, -90, 90), centerLng: boundedNumber(item?.centerLng, 0, -180, 180),
+        radiusKm: boundedNumber(item?.radiusKm, 10, 1, 250) };
+    }).filter((item) => item && !(item.centerLat === 0 && item.centerLng === 0));
   const mediaServices = source.media?.services && typeof source.media.services === "object" ? source.media.services : {};
   const heroSlides = source.media?.hero?.slides && typeof source.media.hero.slides === "object" ? source.media.hero.slides : {};
   output.media = {

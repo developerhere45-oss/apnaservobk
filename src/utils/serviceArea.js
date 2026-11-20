@@ -1,48 +1,4 @@
-const DEFAULT_CENTER_LAT = 26.1445;
-const DEFAULT_CENTER_LNG = 91.7362;
-const DEFAULT_RADIUS_KM = 35;
-const NORTH_GUWAHATI_MIN_LAT = 26.17;
-const NORTH_GUWAHATI_CENTER_LAT = 26.20;
-const NORTH_GUWAHATI_CENTER_LNG = 91.70;
-const NORTH_GUWAHATI_RADIUS_KM = 16;
-
-function finiteEnv(name, fallback) {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) ? value : fallback;
-}
-
-function configuredPincodes() {
-  return new Set(String(process.env.NORTH_GUWAHATI_BLOCKED_PINCODES || "781030,781031")
-    .split(",")
-    .map((value) => value.replace(/\D/g, ""))
-    .filter((value) => /^\d{6}$/.test(value)));
-}
-
-function pincodeFromAddress(value) {
-  return String(value || "").match(/\b(\d{6})\b/)?.[1] || "";
-}
-
-function serviceAreaConfig() {
-  return {
-    id: "guwahati",
-    name: "Guwahati, Assam",
-    enabled: String(process.env.GUWAHATI_SERVICE_AREA_ENABLED || "true").toLowerCase() !== "false",
-    centerLat: finiteEnv("GUWAHATI_SERVICE_AREA_CENTER_LAT", DEFAULT_CENTER_LAT),
-    centerLng: finiteEnv("GUWAHATI_SERVICE_AREA_CENTER_LNG", DEFAULT_CENTER_LNG),
-    radiusKm: Math.max(1, finiteEnv("GUWAHATI_SERVICE_AREA_RADIUS_KM", DEFAULT_RADIUS_KM)),
-    // North Guwahati is deliberately unavailable until operations enable it.
-    // The latitude guard prevents this local exclusion from affecting central
-    // or south Guwahati even though the two areas are geographically close.
-    northGuwahati: {
-      enabled: String(process.env.NORTH_GUWAHATI_SERVICE_ENABLED || "false").toLowerCase() === "true",
-      minLat: finiteEnv("NORTH_GUWAHATI_MIN_LAT", NORTH_GUWAHATI_MIN_LAT),
-      centerLat: finiteEnv("NORTH_GUWAHATI_CENTER_LAT", NORTH_GUWAHATI_CENTER_LAT),
-      centerLng: finiteEnv("NORTH_GUWAHATI_CENTER_LNG", NORTH_GUWAHATI_CENTER_LNG),
-      radiusKm: Math.max(1, finiteEnv("NORTH_GUWAHATI_RADIUS_KM", NORTH_GUWAHATI_RADIUS_KM)),
-      blockedPincodes: [...configuredPincodes()]
-    }
-  };
-}
+const { getPublishedConfig } = require("./appControl");
 
 function distanceKm(lat1, lng1, lat2, lng2) {
   const radians = (degrees) => degrees * Math.PI / 180;
@@ -54,33 +10,35 @@ function distanceKm(lat1, lng1, lat2, lng2) {
   return earthKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function validateServiceArea(lat, lng, context = {}) {
-  const latitude = Number(lat);
-  const longitude = Number(lng);
-  const config = serviceAreaConfig();
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
-      || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180
-      || (latitude === 0 && longitude === 0)) {
-    return { allowed: false, code: "SERVICE_AREA_LOCATION_REQUIRED", reason: "invalid_coordinates", config };
-  }
-  if (!config.enabled) return { allowed: false, code: "SERVICE_AREA_UNAVAILABLE", reason: "area_disabled", config };
-  const north = config.northGuwahati;
-  const pincode = pincodeFromAddress(context.pincode || context.pinCode || context.address);
-  if (!north.enabled && pincode && north.blockedPincodes.includes(pincode)) {
-    return { allowed: false, code: "NORTH_GUWAHATI_UNAVAILABLE", reason: "north_guwahati_pincode_unavailable", pincode, config };
-  }
-  const northDistanceKm = distanceKm(latitude, longitude, north.centerLat, north.centerLng);
-  if (!north.enabled && latitude >= north.minLat && northDistanceKm <= north.radiusKm) {
-    return { allowed: false, code: "NORTH_GUWAHATI_UNAVAILABLE", reason: "north_guwahati_unavailable", distanceKm: northDistanceKm, config };
-  }
-  const distance = distanceKm(latitude, longitude, config.centerLat, config.centerLng);
-  return {
-    allowed: distance <= config.radiusKm,
-    code: distance <= config.radiusKm ? "SERVICE_AREA_AVAILABLE" : "SERVICE_AREA_UNAVAILABLE",
-    reason: distance <= config.radiusKm ? "inside_boundary" : "outside_boundary",
-    distanceKm: distance,
-    config
-  };
+function pincodeFromAddress(value) {
+  return String(value || "").match(/\b(\d{6})\b/)?.[1] || "";
 }
 
-module.exports = { serviceAreaConfig, validateServiceArea, distanceKm, pincodeFromAddress };
+function validCoordinates(latitude, longitude) {
+  return Number.isFinite(latitude) && Number.isFinite(longitude)
+    && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180
+    && !(latitude === 0 && longitude === 0);
+}
+
+async function activeServiceAreas() {
+  const { config } = await getPublishedConfig({ app: "customer", platform: "android" });
+  return (config.serviceAreas || []).filter((area) => area.enabled);
+}
+
+function validateAgainstAreas(lat, lng, areas) {
+  const latitude = Number(lat);
+  const longitude = Number(lng);
+  if (!validCoordinates(latitude, longitude)) {
+    return { allowed: false, code: "SERVICE_AREA_LOCATION_REQUIRED", reason: "invalid_coordinates" };
+  }
+  const candidates = (areas || []).map((area) => ({ area, distanceKm: distanceKm(latitude, longitude, area.centerLat, area.centerLng) }));
+  const match = candidates.find((entry) => entry.distanceKm <= entry.area.radiusKm);
+  if (match) return { allowed: true, code: "SERVICE_AREA_AVAILABLE", reason: "inside_boundary", distanceKm: match.distanceKm, area: match.area };
+  return { allowed: false, code: "SERVICE_AREA_UNAVAILABLE", reason: "outside_boundary", nearestArea: candidates.sort((a, b) => a.distanceKm - b.distanceKm)[0]?.area || null };
+}
+
+async function validateServiceArea(lat, lng) {
+  return validateAgainstAreas(lat, lng, await activeServiceAreas());
+}
+
+module.exports = { activeServiceAreas, validateServiceArea, validateAgainstAreas, distanceKm, pincodeFromAddress };

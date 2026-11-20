@@ -1,10 +1,10 @@
 const Partner = require("../models/Partner");
 const { normalizeServiceCategory, serviceCategoryVariants, partnerCanServeService } = require("./serviceCategory");
-const { validateServiceArea } = require("./serviceArea");
+const { activeServiceAreas, validateAgainstAreas } = require("./serviceArea");
 
 const EARTH_RADIUS_M = 6378137;
 const DEFAULT_RADIUS_STEPS_KM = [5, 8];
-const GUWAHATI_FALLBACK_RADIUS_KM = 35;
+const SERVICE_AREA_FALLBACK_RADIUS_KM = 250;
 
 function safeNumber(value, fallback = 0) {
   const parsed = Number(value);
@@ -133,10 +133,9 @@ async function findNearbyPartnersWithMeta({ serviceCategory, city, lat, lng, rad
         };
       }
     }
-    // Android partners can be online and approved but farther than the fast
-    // 5/8 km rings. Keep nearby partners first, then fan out the request to
-    // eligible same-service partners inside the supported Guwahati area so a
-    // valid customer booking never disappears without reaching the app.
+    // Partners may be farther than the fast 5/8 km rings. Fan out only to
+    // partners inside one of the currently published service areas.
+    const areas = await activeServiceAreas();
     const cityCandidates = partnersForRequestedService(
       await Partner.find(filter).limit(250),
       category
@@ -146,18 +145,18 @@ async function findNearbyPartnersWithMeta({ serviceCategory, city, lat, lng, rad
       .filter((entry) => {
         const coordinates = entry.partner?.location?.coordinates;
         return Array.isArray(coordinates)
-          && validateServiceArea(coordinates[1], coordinates[0]).allowed;
+          && validateAgainstAreas(coordinates[1], coordinates[0], areas).allowed;
       })
       .sort((left, right) => left.distanceMeters - right.distanceMeters);
     if (cityMatches.length) {
       return {
         partners: cityMatches.map((entry) => entry.partner),
-        radiusKm: GUWAHATI_FALLBACK_RADIUS_KM,
-        mode: "guwahati_service_area_fallback",
+        radiusKm: SERVICE_AREA_FALLBACK_RADIUS_KM,
+        mode: "service_area_fallback",
         distancesMeters: Object.fromEntries(cityMatches.map((entry) => [String(entry.partner._id), Math.round(entry.distanceMeters)]))
       };
     }
-    return { partners: [], radiusKm: GUWAHATI_FALLBACK_RADIUS_KM, mode: "customer_location", distancesMeters: {} };
+    return { partners: [], radiusKm: SERVICE_AREA_FALLBACK_RADIUS_KM, mode: "customer_location", distancesMeters: {} };
   }
 
   return { partners: [], radiusKm: 10, mode: "location_required", distancesMeters: {} };

@@ -10,6 +10,7 @@ const { admin, initFirebase } = require("../config/firebase");
 const { nextPublicId } = require("../utils/publicIds");
 const { supportBotReply } = require("../utils/supportBot");
 const { isPlaceholderCustomerName, firstRealCustomerName } = require("../utils/customerIdentity");
+const { dispatchAssistanceCall } = require("../services/omnidimService");
 
 const profileSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
@@ -65,8 +66,24 @@ const userActivitySchema = z.object({
   category: z.string().trim().max(120).optional().default("")
 });
 
+const assistanceCallSchema = z.object({
+  event: z.literal("five_minute_service_exploration"),
+  platform: z.enum(["android", "ios"]),
+  foregroundEngagementMs: z.coerce.number().int().min(5 * 60 * 1000).max(8 * 60 * 60 * 1000),
+  uniqueServiceCount: z.coerce.number().int().min(0).max(100),
+  serviceIds: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+  consent: z.literal(true)
+});
+
+const ASSISTANCE_CALL_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+
 function normalizePhone(value) {
   return String(value || "").replace(/\D/g, "").slice(-10);
+}
+
+function indianE164(value) {
+  const digits = normalizePhone(value);
+  return /^[6-9]\d{9}$/.test(digits) ? `+91${digits}` : "";
 }
 
 function normalizeEmail(value) {
@@ -247,6 +264,75 @@ async function me(req, res, next) {
   try {
     const user = await User.findOne({ firebaseUid: req.auth.uid });
     return res.json({ user });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function requestEngagementAssistanceCall(req, res, next) {
+  try {
+    const body = assistanceCallSchema.parse(req.body || {});
+    const user = await User.findOne({ firebaseUid: req.auth.uid })
+      .select("_id name phone phoneVerified aiAssistanceCallLastRequestedAt")
+      .exec();
+    if (!user) return res.status(404).json({ message: "Customer profile not found" });
+
+    // Never use a client-supplied destination. A Firebase phone claim must
+    // agree with the encrypted profile number and the profile must be verified.
+    const destination = indianE164(user.phone);
+    if (!user.phoneVerified || !destination || !tokenPhoneVerified(req, user.phone)) {
+      return res.status(403).json({ message: "A verified mobile number is required for assistance calls" });
+    }
+
+    const now = new Date();
+    const cooldownStart = new Date(now.getTime() - ASSISTANCE_CALL_COOLDOWN_MS);
+    if (user.aiAssistanceCallLastRequestedAt && user.aiAssistanceCallLastRequestedAt >= cooldownStart) {
+      return res.status(200).json({ ok: true, status: "already_requested" });
+    }
+
+    // Claim the seven-day window before contacting the provider. This atomic
+    // update makes concurrent requests from multiple devices idempotent.
+    const claimed = await User.findOneAndUpdate(
+      {
+        _id: user._id,
+        $or: [
+          { aiAssistanceCallLastRequestedAt: null },
+          { aiAssistanceCallLastRequestedAt: { $lt: cooldownStart } }
+        ]
+      },
+      {
+        $set: {
+          aiAssistanceCallOptedInAt: now,
+          aiAssistanceCallLastRequestedAt: now,
+          aiAssistanceCallProviderRequestId: ""
+        }
+      },
+      { new: true }
+    );
+    if (!claimed) return res.status(200).json({ ok: true, status: "already_requested" });
+
+    try {
+      const provider = await dispatchAssistanceCall({
+        toNumber: destination,
+        userName: user.name,
+        serviceIds: body.serviceIds,
+        userId: user._id,
+        idempotencyKey: `assistance:${user._id}:${now.getTime()}`
+      });
+      await User.updateOne(
+        { _id: user._id, aiAssistanceCallLastRequestedAt: now },
+        { $set: { aiAssistanceCallProviderRequestId: String(provider.requestId || "") } }
+      );
+      return res.status(202).json({ ok: true, status: provider.status || "dispatched", requestId: provider.requestId || null });
+    } catch (dispatchError) {
+      // Provider failure must not spend the customer's cooldown. The equality
+      // guard avoids overwriting a later successful request.
+      await User.updateOne(
+        { _id: user._id, aiAssistanceCallLastRequestedAt: now },
+        { $set: { aiAssistanceCallLastRequestedAt: user.aiAssistanceCallLastRequestedAt || null } }
+      );
+      throw dispatchError;
+    }
   } catch (error) {
     return next(error);
   }
@@ -620,6 +706,7 @@ async function deleteAccount(req, res, next) {
 module.exports = {
   upsertProfile,
   me,
+  requestEngagementAssistanceCall,
   saveFcmToken,
   recordUserActivity,
   syncSupportTicket,

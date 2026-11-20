@@ -88,6 +88,11 @@ const userSchema = new mongoose.Schema(
     location: { type: pointSchema, default: () => ({ type: "Point", coordinates: [0, 0] }) },
     phoneVerified: { type: Boolean, default: false, index: true },
     phoneVerifiedAt: { type: Date, default: null },
+    // Consent and request state for the optional OmniDimension help call. The
+    // destination phone remains the encrypted primary phone field above.
+    aiAssistanceCallOptedInAt: { type: Date, default: null },
+    aiAssistanceCallLastRequestedAt: { type: Date, default: null, index: true },
+    aiAssistanceCallProviderRequestId: { type: String, trim: true, default: "" },
     bookingRiskStatus: { type: String, enum: ["unknown", "trusted", "otp_required", "review"], default: "unknown", index: true },
     fakeBookingWarningCount: { type: Number, default: 0 },
     lastBookingAt: { type: Date, default: null },
@@ -113,6 +118,7 @@ userSchema.index({ city: 1, createdAt: -1 });
 userSchema.index({ bookingRiskStatus: 1, lastBookingAt: -1 });
 userSchema.index({ accountStatus: 1, deletionRequestedAt: -1 });
 userSchema.index({ lastLoginAt: -1 });
+userSchema.index({ aiAssistanceCallLastRequestedAt: -1 });
 userSchema.index({ "deviceTokens.tokenHash": 1, "deviceTokens.isActive": 1 });
 userSchema.plugin(publicIdPlugin, { kind: "user" });
 userSchema.pre("validate", async function assignDevicePublicIds() {

@@ -219,7 +219,7 @@ const bookingSchema = new mongoose.Schema(
     dispatchRadiusKm: { type: Number, default: 0 },
     dispatchMode: {
       type: String,
-      enum: ["", "customer_location", "city_fallback", "guwahati_service_area_fallback", "location_required"],
+      enum: ["", "customer_location", "city_fallback", "guwahati_service_area_fallback", "service_area_fallback", "location_required"],
       default: ""
     },
     dispatchAttempt: { type: Number, default: 0 },

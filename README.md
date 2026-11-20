@@ -47,6 +47,10 @@ CLOUDINARY_API_KEY=
 CLOUDINARY_API_SECRET=
 RAZORPAY_KEY_ID=
 RAZORPAY_KEY_SECRET=
+OMNIDIM_API_KEY=
+OMNIDIM_AGENT_ID=
+# Optional: uses the OmniDimension workspace default when omitted.
+OMNIDIM_FROM_NUMBER_ID=
 ```
 
 Do not use `FIREBASE_SERVICE_ACCOUNT_PATH` in cloud hosting because the cloud server cannot read files from your laptop.
@@ -113,3 +117,37 @@ Do not leave production APKs pointing to `127.0.0.1`, `192.168.x.x`, or `192.168
 - Partner app accepts via `POST /api/bookings/:bookingId/accept`.
 - Backend atomically locks the booking for the first accepted partner.
 - User app receives `booking:accepted` and later `booking:status_update`.
+
+## Optional AI assistance calls (OmniDimension)
+
+The User app can request an optional help call after an opted-in customer spends
+five foreground minutes exploring services. The backend accepts this at
+`POST /api/users/engagement/assistance-call`, verifies the Firebase phone claim
+against the stored verified profile, enforces an atomic seven-day cooldown, then
+dispatches with OmniDimension. No OmniDimension key is shipped in either app.
+
+Set `OMNIDIM_API_KEY` and `OMNIDIM_AGENT_ID` in Render/Railway environment
+variables, then publish the configured outgoing OmniDimension agent. Configure a
+post-call webhook in OmniDimension separately if call outcomes should update the
+admin dashboard. Do not add provider keys to Git, an APK, or client-side config.
+
+## Launching in new cities
+
+Service availability is published from the Admin Control Center, not hardcoded
+to Guwahati. As a Super Admin, save a `serviceAreas` draft and then publish it:
+
+```json
+{
+  "section": "serviceAreas",
+  "value": [
+    { "id": "guwahati", "name": "Guwahati, Assam", "enabled": true, "centerLat": 26.1445, "centerLng": 91.7362, "radiusKm": 35 },
+    { "id": "tezpur", "name": "Tezpur, Assam", "enabled": true, "centerLat": 26.6338, "centerLng": 92.8000, "radiusKm": 18 }
+  ]
+}
+```
+
+Send the body to `PATCH /api/admin/control-center/draft?app=customer&platform=android`,
+then publish it with `POST /api/admin/control-center/publish?app=customer&platform=android`.
+The user app refreshes the published zones automatically. Each enabled zone is a
+circle: choose its center coordinates and a radius from 1 to 250 km. Disable a
+zone rather than deleting it when pausing a city launch.

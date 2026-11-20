@@ -1019,15 +1019,13 @@ async function createBooking(req, res, next) {
         message: "We couldn't verify the exact service location. Please select the service address again."
       });
     }
-    const serviceArea = validateServiceArea(body.lat, body.lng, { address: body.address });
+    const serviceArea = await validateServiceArea(body.lat, body.lng, { address: body.address });
     if (!serviceArea.allowed) {
       return res.status(422).json({
         code: serviceArea.code,
         message: serviceArea.code === "SERVICE_AREA_LOCATION_REQUIRED"
           ? "We couldn't verify the service location. Please select the location again."
-          : serviceArea.code === "NORTH_GUWAHATI_UNAVAILABLE"
-            ? "ApnaServo is not available in North Guwahati yet. We'll be available in your area soon."
-            : "ApnaServo is currently available only in Guwahati. We'll be available in your area soon."
+          : "ApnaServo is not available at this location yet. We'll be available in your area soon."
       });
     }
     const submittedPrimaryPhone = normalizeCustomerPhone(body.primaryPhone || body.userPhone);
@@ -2356,15 +2354,13 @@ async function updateBookingContacts(req, res, next) {
 async function updateBookingLocation(req, res, next) {
   try {
     const body = bookingLocationSchema.parse(req.body || {});
-    const serviceArea = validateServiceArea(body.lat, body.lng, { address: body.address });
+    const serviceArea = await validateServiceArea(body.lat, body.lng, { address: body.address });
     if (!serviceArea.allowed) {
       return res.status(422).json({
         code: serviceArea.code,
         message: serviceArea.code === "SERVICE_AREA_LOCATION_REQUIRED"
           ? "We couldn't verify the service location. Please select the location again."
-          : serviceArea.code === "NORTH_GUWAHATI_UNAVAILABLE"
-            ? "ApnaServo is not available in North Guwahati yet. We'll be available in your area soon."
-            : "ApnaServo is currently available only in Guwahati. We'll be available in your area soon."
+          : "ApnaServo is not available at this location yet. We'll be available in your area soon."
       });
     }
     const user = await User.findOne({ firebaseUid: req.auth.uid });
