@@ -15,7 +15,7 @@ const RevisitRequest = require("../models/RevisitRequest");
 const Payment = require("../models/Payment");
 const { ensurePaidInvoice } = require("../services/invoiceService");
 const { cloudinary } = require("../config/cloudinary");
-const { normalizeServiceCategory, serviceCategoryVariants, serviceLabel, companySingleServiceCategory } = require("../utils/serviceCategory");
+const { normalizeServiceCategory, serviceCategoryVariants, serviceLabel, companySingleServiceCategory, partnerCanServeService } = require("../utils/serviceCategory");
 const { validatePartnerLocation, partnerLocationUpdate } = require("../utils/locationValidation");
 const { recordFraudSignal } = require("../utils/fraudDetection");
 const {
@@ -733,13 +733,23 @@ async function recordPartnerRequestDeliveryResults(bookingId, requests, results 
 async function dispatchBookingToPartners(booking, category, lat, lng) {
   let match = { partners: [], radiusKm: 0, mode: "" };
   try {
-    match = await findNearbyPartners.withMetadata({
-      serviceCategory: category,
-      city: booking.city,
-      lat,
-      lng,
-      excludePartnerIds: booking.rejectedPartners || []
-    });
+    const preferredCode = String(booking.requestedPartnerPublicId || "").trim();
+    const preferred = preferredCode ? await Partner.findOne({ partnerCode: preferredCode }) : null;
+    const preferredEligible = preferred
+      && preferred.isOnline && preferred.accountStatus === "active" && preferred.isVerified
+      && preferred.kycStatus === "verified" && preferred.trustStatus === "trusted"
+      && preferred.locationTrustStatus !== "suspicious" && partnerCanServeService(preferred, category);
+    if (preferredEligible) {
+      match = { partners: [preferred], radiusKm: 0, mode: "requested_partner" };
+    } else {
+      match = await findNearbyPartners.withMetadata({
+        serviceCategory: category,
+        city: booking.city,
+        lat,
+        lng,
+        excludePartnerIds: booking.rejectedPartners || []
+      });
+    }
   } catch (error) {
     console.error("Partner matching failed", {
       bookingId: String(booking._id),
