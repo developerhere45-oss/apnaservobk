@@ -79,6 +79,10 @@ const createBookingSchema = z.object({
   emergencyNotes: z.string().trim().max(500).optional(),
   formAnswers: z.record(z.string().max(500)).optional().default({}),
   formConfigVersion: z.union([z.string().max(40), z.number()]).optional(),
+  bookingType: z.enum(["instant", "scheduled"]).optional().default("instant"),
+  scheduledDate: z.string().trim().max(40).optional().default(""),
+  scheduledSlot: z.string().trim().max(120).optional().default(""),
+  requestedPartnerId: z.string().trim().max(80).optional().default(""),
   commercial: z.boolean().optional().default(false)
 });
 
@@ -1170,6 +1174,10 @@ async function createBooking(req, res, next) {
           updatedBy: "user"
         },
         price: body.price || 0,
+        bookingType: body.bookingType,
+        scheduledDate: body.bookingType === "scheduled" ? body.scheduledDate : "",
+        scheduledSlot: body.bookingType === "scheduled" ? body.scheduledSlot : "",
+        requestedPartnerPublicId: body.requestedPartnerId || "",
         // Reaching this write means authentication, payload, service-area,
         // availability and customer verification have all succeeded. Persist
         // confirmation before any partner-side request is allowed to exist.

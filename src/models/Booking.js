@@ -128,6 +128,10 @@ const bookingSchema = new mongoose.Schema(
       requestedAt: { type: Date, default: null }
     },
     price: { type: Number, default: 0 },
+    bookingType: { type: String, enum: ["instant", "scheduled"], default: "instant", index: true },
+    scheduledDate: { type: String, trim: true, default: "" },
+    scheduledSlot: { type: String, trim: true, default: "" },
+    requestedPartnerPublicId: { type: String, trim: true, default: "", index: true },
     finalAmount: { type: Number, default: 0 },
     grossAmount: { type: Number, default: 0 },
     discount: {
