@@ -91,6 +91,7 @@ function msg91Headers(extraHeaders = {}) {
 async function requestJson(url, payload, extraHeaders = {}) {
   const response = await fetch(url, {
     method: "POST",
+    signal: AbortSignal.timeout(8000),
     headers: msg91Headers(extraHeaders),
     body: JSON.stringify(payload)
   });
@@ -166,10 +167,8 @@ async function sendProviderOtp(phone) {
   });
   const reason = providerRejectReason(errors);
   const error = new Error(reason);
-  const credentialName = usingWidgetToken ? "MSG91_TOKEN_AUTH" : "MSG91_AUTHKEY";
-  error.publicMessage = `MSG91 rejected ${credentialName} for this OTP Widget: ${reason}. ApnaServo sends OTP through its Render backend, so disable Mobile Integration and Captcha for this widget, save the widget, and retry. Keep MSG91_AUTHKEY and MSG91_WIDGET_ID configured on Render.`;
-  error.statusCode = 400;
-  error.details = { provider: "msg91", errors };
+  error.publicMessage = "Unable to send OTP right now. Please try again later.";
+  error.statusCode = 503;
   throw error;
 }
 
@@ -249,6 +248,7 @@ async function sendOtp(input = {}) {
   } else if (!localFallbackAllowed()) {
     const error = new Error("OTP provider is not configured");
     error.statusCode = 503;
+    error.publicMessage = "Unable to send OTP right now. Please try again later.";
     throw error;
   }
 

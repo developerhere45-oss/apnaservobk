@@ -286,6 +286,13 @@ async function requestEngagementAssistanceCall(req, res, next) {
 
     const now = new Date();
     const cooldownStart = new Date(now.getTime() - ASSISTANCE_CALL_COOLDOWN_MS);
+    if (body.serviceIds.length === 0 || body.uniqueServiceCount === 0) {
+      return res.status(200).json({ ok: true, status: "skipped_no_exploration" });
+    }
+    const explorationStart = new Date(now.getTime() - body.foregroundEngagementMs);
+    if (await Booking.exists({ userId: user._id, createdAt: { $gte: explorationStart } })) {
+      return res.status(200).json({ ok: true, status: "skipped_booking_created" });
+    }
     if (user.aiAssistanceCallLastRequestedAt && user.aiAssistanceCallLastRequestedAt >= cooldownStart) {
       return res.status(200).json({ ok: true, status: "already_requested" });
     }
